@@ -2,9 +2,9 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use DiscoveryUkraine\SagaLaraFlow\Commands\SagaLaraFlowCommand;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
-use DiscoveryUkraine\SagaLaraFlow\Commands\SagaLaraFlowCommand;
 
 class SagaLaraFlowServiceProvider extends PackageServiceProvider
 {

@@ -2,9 +2,9 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Tests;
 
+use DiscoveryUkraine\SagaLaraFlow\SagaLaraFlowServiceProvider;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Orchestra\Testbench\TestCase as Orchestra;
-use DiscoveryUkraine\SagaLaraFlow\SagaLaraFlowServiceProvider;
 
 class TestCase extends Orchestra
 {
