@@ -1,12 +1,12 @@
 <?php
 
-namespace VendorName\Skeleton;
+namespace DiscoveryUkraine\SagaLaraFlow;
 
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
-use VendorName\Skeleton\Commands\SkeletonCommand;
+use DiscoveryUkraine\SagaLaraFlow\Commands\SagaLaraFlowCommand;
 
-class SkeletonServiceProvider extends PackageServiceProvider
+class SagaLaraFlowServiceProvider extends PackageServiceProvider
 {
     public function configurePackage(Package $package): void
     {
@@ -16,10 +16,9 @@ class SkeletonServiceProvider extends PackageServiceProvider
          * More info: https://github.com/spatie/laravel-package-tools
          */
         $package
-            ->name('skeleton')
+            ->name('saga-lara-flow')
             ->hasConfigFile()
-            ->hasViews()
-            ->hasMigration('create_migration_table_name_table')
-            ->hasCommand(SkeletonCommand::class);
+            ->hasMigration('create_saga_lara_flow_table')
+            ->hasCommand(SagaLaraFlowCommand::class);
     }
 }

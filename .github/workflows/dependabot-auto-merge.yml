@@ -9,7 +9,7 @@ jobs:
   dependabot:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == ':vendor_slug/:package_slug' }}
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'discovery-ukraine/saga-lara-flow' }}
     steps:
 
       - name: Dependabot metadata
