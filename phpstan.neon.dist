@@ -8,3 +8,9 @@ parameters:
         - config
         - database
     tmpDir: build/phpstan
+    ignoreErrors:
+        # env() in the published config file is the intended Laravel pattern.
+        # Larastan cannot resolve the framework config directory in a package context.
+        -
+            identifier: larastan.noEnvCallsOutsideOfConfig
+            path: config/saga-lara-flow.php

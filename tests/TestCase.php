@@ -3,20 +3,10 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Tests;
 
 use DiscoveryUkraine\SagaLaraFlow\SagaLaraFlowServiceProvider;
-use Illuminate\Database\Eloquent\Factories\Factory;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 class TestCase extends Orchestra
 {
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        Factory::guessFactoryNamesUsing(
-            fn (string $modelName) => 'DiscoveryUkraine\\SagaLaraFlow\\Database\\Factories\\'.class_basename($modelName).'Factory'
-        );
-    }
-
     protected function getPackageProviders($app): array
     {
         return [
@@ -24,14 +14,19 @@ class TestCase extends Orchestra
         ];
     }
 
-    public function getEnvironmentSetUp($app): void
+    protected function defineEnvironment($app): void
     {
-        config()->set('database.default', 'testing');
+        $app['config']->set('database.default', 'testing');
+        $app['config']->set('database.connections.testing', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+        ]);
+    }
 
-        /*
-         foreach (\Illuminate\Support\Facades\File::allFiles(__DIR__ . '/../database/migrations') as $migration) {
-            (include $migration->getRealPath())->up();
-         }
-         */
+    protected function defineDatabaseMigrations(): void
+    {
+        $migration = include __DIR__.'/../database/migrations/create_saga_lara_flow_tables.php.stub';
+        $migration->up();
     }
 }

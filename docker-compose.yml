@@ -1,0 +1,18 @@
+# Dev toolchain for saga-lara-flow. Run composer/pest/pint/phpstan under PHP 8.5:
+#   docker compose build
+#   docker compose run --rm app composer update
+#   docker compose run --rm app composer test
+#   docker compose run --rm app composer lint
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: saga-lara-flow-dev
+    working_dir: /app
+    volumes:
+      - .:/app
+      - composer-cache:/root/.composer
+
+volumes:
+  composer-cache:
