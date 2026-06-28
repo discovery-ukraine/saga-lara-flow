@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Facade;
 /**
  * @method static CreateWorkflowBuilder create(string $workflowClass)
  * @method static FlowRun|null findRun(string $id)
- * @method static FlowHandle run(string $id)
+ * @method static FlowHandle loadFlow(string $id)
  * @method static Builder query()
  *
  * @see FlowManager

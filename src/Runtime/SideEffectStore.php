@@ -3,7 +3,6 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
 use Closure;
-use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 
@@ -20,8 +19,8 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 readonly class SideEffectStore
 {
     public function __construct(
-        private FlowRepository $repository,
-        private StepRecorder $recorder,
+        private HistoryContractGuard $guard,
+        private SideEffectRecorder $recorder,
         private Serializer $serializer,
     ) {}
 
@@ -36,19 +35,7 @@ readonly class SideEffectStore
         $flowRun = $runtime->run();
         $sequence = $runtime->nextSequence();
 
-        // History contract: an action is recorded where a side effect is requested.
-        $actionRun = $this->repository->findActionStep($flowRun->id, $sequence);
-
-        if ($actionRun !== null) {
-            throw HistoryContractMismatchException::forOperationType(
-                $sequence,
-                "action {$actionRun->action_class}",
-                "side effect '{$key}'",
-                $flowRun->id,
-            );
-        }
-
-        $existing = $this->repository->findSideEffect($flowRun->id, $sequence);
+        $existing = $this->guard->expectSideEffect($flowRun->id, $sequence, $key);
 
         if ($existing !== null) {
             $this->recorder->sideEffectReused($flowRun, $existing);

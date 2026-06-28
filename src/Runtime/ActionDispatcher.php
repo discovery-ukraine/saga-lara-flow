@@ -20,7 +20,7 @@ class ActionDispatcher
     use ResolvesMethodDependencies;
 
     public function __construct(
-        private readonly StepRecorder $recorder,
+        private readonly ActionRecorder $recorder,
         private readonly Serializer $serializer,
     ) {}
 

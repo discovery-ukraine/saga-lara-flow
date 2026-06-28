@@ -2,10 +2,16 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
+use DiscoveryUkraine\SagaLaraFlow\Contracts\SideEffectRepository;
+use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
+use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentFlowRepository;
+use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSideEffectRepository;
+use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Serialization\LaravelSerializer;
@@ -34,6 +40,9 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
 
         $this->app->bind(StateMachine::class, FlowStateMachine::class);
         $this->app->bind(FlowRepository::class, EloquentFlowRepository::class);
+        $this->app->bind(ActionRunRepository::class, EloquentActionRunRepository::class);
+        $this->app->bind(SideEffectRepository::class, EloquentSideEffectRepository::class);
+        $this->app->bind(SignalRepository::class, EloquentSignalRepository::class);
         $this->app->bind(Serializer::class, LaravelSerializer::class);
     }
 

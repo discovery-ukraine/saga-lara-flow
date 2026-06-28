@@ -29,7 +29,7 @@ class FlowExecutor
 
     public function __construct(
         private readonly StateMachine $stateMachine,
-        private readonly StepRecorder $recorder,
+        private readonly FlowLifecycleRecorder $recorder,
         private readonly FlowRuntime $runtime,
         private readonly TenancyManager $tenancy,
         private readonly Serializer $serializer,

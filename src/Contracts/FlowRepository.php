@@ -3,9 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Contracts;
 
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
-use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
-use DiscoveryUkraine\SagaLaraFlow\Models\SideEffect;
 
 interface FlowRepository
 {
@@ -23,8 +21,4 @@ interface FlowRepository
      * @throws FlowNotFoundException
      */
     public function findOrFail(string $id): FlowRun;
-
-    public function findActionStep(string $flowRunId, int $sequence): ?ActionRun;
-
-    public function findSideEffect(string $flowRunId, int $sequence): ?SideEffect;
 }

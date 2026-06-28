@@ -4,8 +4,10 @@ namespace DiscoveryUkraine\SagaLaraFlow;
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\History;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalDispatcher;
 use Illuminate\Database\Eloquent\Collection;
 
 /**
@@ -51,6 +53,38 @@ readonly class FlowHandle
     public function tags(): Collection
     {
         return $this->flowRun->tags;
+    }
+
+    /**
+     * Deliver an external signal to this run and wake it. Throws on a terminal run.
+     *
+     * @param  array<int|string, mixed>  $payload
+     *
+     * @throws CannotSignalTerminalFlowException
+     */
+    public function signal(string $name, array $payload = []): FlowRun
+    {
+        app(SignalDispatcher::class)->deliver($this->flowRun, $name, $payload);
+
+        return $this->flowRun;
+    }
+
+    /**
+     * Safe variant of signal(): swallows the terminal-run rejection and reports
+     * whether the signal was delivered. (A missing run cannot reach here — loadFlow()
+     * throws FlowNotFoundException before a handle is created.)
+     *
+     * @param  array<int|string, mixed>  $payload
+     */
+    public function signalIfRunning(string $name, array $payload = []): bool
+    {
+        try {
+            $this->signal($name, $payload);
+
+            return true;
+        } catch (CannotSignalTerminalFlowException) {
+            return false;
+        }
     }
 
     public function cancel(?string $reason = null): FlowRun

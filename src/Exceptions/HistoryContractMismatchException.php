@@ -35,8 +35,28 @@ class HistoryContractMismatchException extends FlowException
     }
 
     /**
-     * A different kind of operation (action vs side effect) is recorded at this
-     * sequence than the one the workflow requested.
+     * The recorded signal name at this sequence differs from the requested one.
+     */
+    public static function forSignalName(
+        int $sequence,
+        string $recordedName,
+        string $requestedName,
+        string $runId,
+    ): self {
+        return new self(sprintf(
+            "Sequence %d expected signal '%s', but workflow requested signal '%s'. ".
+            'The workflow code likely changed while run %s is still active. '.
+            'Version long-running workflows via separate classes/directories.',
+            $sequence,
+            $recordedName,
+            $requestedName,
+            $runId,
+        ));
+    }
+
+    /**
+     * A different kind of operation (action vs side effect vs signal) is recorded
+     * at this sequence than the one the workflow requested.
      */
     public static function forOperationType(
         int $sequence,

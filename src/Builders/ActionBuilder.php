@@ -2,7 +2,6 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
-use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
@@ -12,6 +11,8 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowSuspender;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\HistoryContractGuard;
 use Throwable;
 
 /**
@@ -29,7 +30,6 @@ readonly class ActionBuilder
      */
     public function __construct(
         private FlowRuntime $runtime,
-        private ActionDispatcher $dispatcher,
         private string $actionClass,
         private array $arguments,
     ) {}
@@ -37,7 +37,6 @@ readonly class ActionBuilder
     /**
      * Resolve this step against stored history, or schedule/run it and suspend.
      *
-     * @throws FlowSuspended
      * @throws HistoryContractMismatchException
      * @throws Throwable
      */
@@ -46,43 +45,23 @@ readonly class ActionBuilder
         $flowRun = $this->runtime->run();
         $sequence = $this->runtime->nextSequence();
 
-        $repository = app(FlowRepository::class);
-
-        $existingStep = $repository->findActionStep($flowRun->id, $sequence);
+        $existingStep = app(HistoryContractGuard::class)
+            ->expectAction($flowRun->id, $sequence, $this->actionClass);
 
         if ($existingStep !== null) {
-            // History contract: the same sequence was recorded for another action.
-            if ($existingStep->action_class !== $this->actionClass) {
-                throw HistoryContractMismatchException::forActionClass(
-                    $sequence,
-                    $existingStep->action_class,
-                    $this->actionClass,
-                    $flowRun->id,
-                );
-            }
-
             return $this->resolve($existingStep, $sequence);
         }
 
-        // History contract: a side effect is recorded where an action is requested.
-        if ($repository->findSideEffect($flowRun->id, $sequence) !== null) {
-            throw HistoryContractMismatchException::forOperationType(
-                $sequence,
-                'side effect',
-                "action {$this->actionClass}",
-                $flowRun->id,
-            );
-        }
+        $dispatcher = app(ActionDispatcher::class);
+        $suspender = app(FlowSuspender::class);
 
         if ($this->runtime->mode() === RunMode::Sync) {
-            $this->dispatcher->runInline($flowRun, $sequence, $this->actionClass, $this->arguments);
-
-            throw new FlowSuspended('action', $sequence, inlineResolved: true);
+            $dispatcher->runInline($flowRun, $sequence, $this->actionClass, $this->arguments);
+            $suspender->suspendInline('action', $sequence);
         }
 
-        $this->dispatcher->dispatch($flowRun, $sequence, $this->actionClass, $this->arguments);
-
-        throw new FlowSuspended('action', $sequence);
+        $dispatcher->dispatch($flowRun, $sequence, $this->actionClass, $this->arguments);
+        $suspender->suspend('action', $sequence);
     }
 
     /**
@@ -98,7 +77,7 @@ readonly class ActionBuilder
                 $this->failureMessage($step),
             ),
             // Still in flight (queued job not finished): suspend until resumed.
-            default => throw new FlowSuspended('action', $sequence),
+            default => app(FlowSuspender::class)->suspend('action', $sequence),
         };
     }
 

@@ -3,12 +3,15 @@
 namespace DiscoveryUkraine\SagaLaraFlow;
 
 use Closure;
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ActionBuilder;
+use DiscoveryUkraine\SagaLaraFlow\Builders\SignalWaitBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
-use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SideEffectStore;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalWaiter;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Container\CircularDependencyException;
 use Illuminate\Support\Traits\Macroable;
@@ -38,7 +41,6 @@ abstract class Workflow
     {
         return new ActionBuilder(
             $this->runtime,
-            app(ActionDispatcher::class),
             $actionClass,
             array_values($arguments),
         );
@@ -57,6 +59,31 @@ abstract class Workflow
     public function sideEffect(string $key, Closure $factory): mixed
     {
         return app(SideEffectStore::class)->resolve($this->runtime, $key, $factory);
+    }
+
+    /**
+     * Wait for an external signal, identified by the operation's (flow_run_id,
+     * sequence) ordinal. Returns the signal payload once delivered: if a matching
+     * signal already arrived it resolves inline, otherwise the flow suspends and
+     * resumes when the signal is delivered. Replays return the same payload.
+     *
+     * $timeout is accepted for API stability (§4) but is a no-op until Phase 8
+     * (monitor); it is neither persisted nor enforced yet.
+     *
+     * @throws HistoryContractMismatchException
+     * @throws FlowSuspended
+     */
+    public function awaitSignal(string $name, ?DateTimeInterface $timeout = null): mixed
+    {
+        return app(SignalWaiter::class)->await($this->runtime, $name);
+    }
+
+    /**
+     * Fluent form of awaitSignal: $this->signal('name')->timeoutAfter($when)->wait().
+     */
+    public function signal(string $name): SignalWaitBuilder
+    {
+        return new SignalWaitBuilder($this->runtime, $name);
     }
 
     /**
