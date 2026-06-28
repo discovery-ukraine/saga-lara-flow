@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\History;
 use Illuminate\Database\Eloquent\Collection;
 
 /**
@@ -14,51 +15,51 @@ use Illuminate\Database\Eloquent\Collection;
 readonly class FlowHandle
 {
     public function __construct(
-        private FlowRun $run,
+        private FlowRun $flowRun,
     ) {}
 
     public function id(): string
     {
-        return $this->run->id;
+        return $this->flowRun->id;
     }
 
     public function run(): FlowRun
     {
-        return $this->run;
+        return $this->flowRun;
     }
 
     public function status(): FlowStatus
     {
-        return $this->run->status;
+        return $this->flowRun->status;
     }
 
     public function history(): Collection
     {
-        return $this->run->events;
+        return new History($this->flowRun)->events();
     }
 
     public function actions(): Collection
     {
-        return $this->run->actions;
+        return new History($this->flowRun)->actions();
     }
 
     public function signals(): Collection
     {
-        return $this->run->signals;
+        return $this->flowRun->signals;
     }
 
     public function tags(): Collection
     {
-        return $this->run->tags;
+        return $this->flowRun->tags;
     }
 
     public function cancel(?string $reason = null): FlowRun
     {
-        if ($this->run->isTerminal()) {
-            throw CannotCancelTerminalFlowException::for($this->run);
+        if ($this->flowRun->isTerminal()) {
+            throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
 
         // Phase 1: direct cancellation. Compensation-aware cancel arrives with sagas.
-        return $this->run->markCancelled();
+        return $this->flowRun->markCancelled();
     }
 }

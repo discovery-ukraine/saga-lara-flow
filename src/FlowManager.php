@@ -5,17 +5,19 @@ namespace DiscoveryUkraine\SagaLaraFlow;
 use DiscoveryUkraine\SagaLaraFlow\Builders\CreateWorkflowBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use Illuminate\Database\Eloquent\Builder;
 
 readonly class FlowManager
 {
     public function __construct(
         private FlowRepository $repository,
+        private FlowExecutor $executor,
     ) {}
 
     public function create(string $workflowClass): CreateWorkflowBuilder
     {
-        return new CreateWorkflowBuilder($workflowClass, $this->repository);
+        return new CreateWorkflowBuilder($workflowClass, $this->repository, $this->executor);
     }
 
     public function findRun(string $id): ?FlowRun
@@ -23,7 +25,7 @@ readonly class FlowManager
         return $this->repository->find($id);
     }
 
-    public function run(string $id): FlowHandle
+    public function loadFlow(string $id): FlowHandle
     {
         return new FlowHandle($this->repository->findOrFail($id));
     }

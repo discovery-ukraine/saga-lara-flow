@@ -2,11 +2,12 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures;
 
+use DiscoveryUkraine\SagaLaraFlow\Workflow;
+
 /**
- * Minimal workflow used by Phase 1 foundation tests. The base Workflow class
- * and real execution are introduced in Phase 2.
+ * Minimal workflow with no steps: it completes immediately when driven.
  */
-final class TestWorkflow
+final class TestWorkflow extends Workflow
 {
     public function handle(string $orderId = ''): void {}
 }

@@ -5,8 +5,11 @@ namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\WorkflowClassMissingException;
+use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 
 class CreateWorkflowBuilder
 {
@@ -27,6 +30,7 @@ class CreateWorkflowBuilder
     public function __construct(
         private readonly string $workflowClass,
         private readonly FlowRepository $repository,
+        private readonly FlowExecutor $executor,
     ) {
         if (! class_exists($this->workflowClass)) {
             throw WorkflowClassMissingException::for($this->workflowClass);
@@ -79,23 +83,38 @@ class CreateWorkflowBuilder
     }
 
     /**
-     * Dispatch the workflow onto the queue.
-     *
-     * Phase 1 persists the run; queued execution is wired in a later phase.
+     * Persist the run and dispatch it onto the queue. Returns the run as it
+     * stands after dispatch (Pending on a real queue; further along when the
+     * sync queue driver runs it inline).
      */
     public function run(): FlowRun
     {
-        return $this->persist();
+        $run = $this->persist();
+
+        $job = RunWorkflowJob::dispatch($run->id);
+
+        if ($run->connection !== null) {
+            $job->onConnection($run->connection);
+        }
+
+        if ($run->queue !== null) {
+            $job->onQueue($run->queue);
+        }
+
+        if (config('saga-lara-flow.queue.after_commit')) {
+            $job->afterCommit();
+        }
+
+        return $run->refresh();
     }
 
     /**
-     * Execute the workflow synchronously.
-     *
-     * Phase 1 persists the run; inline execution is wired in a later phase.
+     * Persist the run and execute it synchronously via the drive loop. Returns
+     * the run in its resulting state (Completed/Failed/Waiting).
      */
     public function runSync(): FlowRun
     {
-        return $this->persist();
+        return $this->executor->drive($this->persist(), RunMode::Sync);
     }
 
     private function persist(): FlowRun

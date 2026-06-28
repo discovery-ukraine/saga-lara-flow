@@ -1,15 +1,30 @@
 <?php
 
+use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\WorkflowClassMissingException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
+use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TestWorkflow;
+use Illuminate\Support\Facades\Queue;
 
-it('creates a flow run via runSync', function () {
+/**
+ * Persist a Pending run without driving it, for state-machine/handle tests.
+ */
+function persistPendingRun(array $overrides = []): FlowRun
+{
+    return app(FlowRepository::class)->create(array_merge([
+        'workflow_class' => TestWorkflow::class,
+        'status' => FlowStatus::Pending,
+        'arguments' => [],
+    ], $overrides));
+}
+
+it('creates and completes a flow run via runSync', function () {
     $run = SagaFlow::create(TestWorkflow::class)
         ->withArguments('order-1')
         ->version('v1')
@@ -20,18 +35,22 @@ it('creates a flow run via runSync', function () {
         ->and($run->exists)->toBeTrue()
         ->and($run->workflow_class)->toBe(TestWorkflow::class)
         ->and($run->workflow_version)->toBe('v1')
-        ->and($run->status)->toBe(FlowStatus::Pending)
+        ->and($run->status)->toBe(FlowStatus::Completed)
         ->and($run->arguments)->toBe(['order-1']);
 
     expect($run->tags()->pluck('value', 'key')->all())
         ->toEqualCanonicalizing(['tenant' => 't1', 'order' => 'order-1']);
 });
 
-it('creates a flow run via queued run()', function () {
+it('dispatches a workflow job on queued run()', function () {
+    Queue::fake();
+
     $run = SagaFlow::create(TestWorkflow::class)->withArguments('x')->run();
 
     expect($run->exists)->toBeTrue()
         ->and($run->status)->toBe(FlowStatus::Pending);
+
+    Queue::assertPushed(RunWorkflowJob::class);
 });
 
 it('finds an existing run and returns null for a missing one', function () {
@@ -42,7 +61,7 @@ it('finds an existing run and returns null for a missing one', function () {
 });
 
 it('throws when resolving a missing flow handle', function () {
-    SagaFlow::run('01JMISSINGMISSINGMISSING');
+    SagaFlow::loadFlow('01JMISSINGMISSINGMISSING');
 })->throws(FlowNotFoundException::class);
 
 it('throws when creating with a missing workflow class', function () {
@@ -50,22 +69,22 @@ it('throws when creating with a missing workflow class', function () {
 })->throws(WorkflowClassMissingException::class);
 
 it('cancels a non-terminal run through the handle', function () {
-    $run = SagaFlow::create(TestWorkflow::class)->runSync();
+    $run = persistPendingRun();
 
-    SagaFlow::run($run->id)->cancel('user requested');
+    SagaFlow::loadFlow($run->id)->cancel('user requested');
 
     expect($run->fresh()->status)->toBe(FlowStatus::Cancelled);
 });
 
 it('rejects cancelling a terminal run', function () {
-    $run = SagaFlow::create(TestWorkflow::class)->runSync();
+    $run = persistPendingRun();
     $run->markCancelled();
 
-    SagaFlow::run($run->id)->cancel();
+    SagaFlow::loadFlow($run->id)->cancel();
 })->throws(CannotCancelTerminalFlowException::class);
 
 it('records timestamps along a valid lifecycle', function () {
-    $run = SagaFlow::create(TestWorkflow::class)->runSync();
+    $run = persistPendingRun();
 
     $run->markRunning();
     expect($run->status)->toBe(FlowStatus::Running)
@@ -78,7 +97,7 @@ it('records timestamps along a valid lifecycle', function () {
 });
 
 it('throws on an invalid lifecycle transition', function () {
-    $run = SagaFlow::create(TestWorkflow::class)->runSync();
+    $run = persistPendingRun();
     $run->markRunning();
     $run->markCompleted();
 

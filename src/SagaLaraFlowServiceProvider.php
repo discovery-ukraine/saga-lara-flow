@@ -3,8 +3,12 @@
 namespace DiscoveryUkraine\SagaLaraFlow;
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
+use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentFlowRepository;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
+use DiscoveryUkraine\SagaLaraFlow\Serialization\LaravelSerializer;
 use DiscoveryUkraine\SagaLaraFlow\States\FlowStateMachine;
 use Laravel\SerializableClosure\SerializableClosure;
 use Spatie\LaravelPackageTools\Package;
@@ -25,8 +29,12 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         $this->app->singleton(FlowManager::class);
         $this->app->alias(FlowManager::class, 'saga-flow');
 
+        $this->app->scoped(FlowRuntime::class);
+        $this->app->singleton(FlowExecutor::class);
+
         $this->app->bind(StateMachine::class, FlowStateMachine::class);
         $this->app->bind(FlowRepository::class, EloquentFlowRepository::class);
+        $this->app->bind(Serializer::class, LaravelSerializer::class);
     }
 
     public function packageBooted(): void
