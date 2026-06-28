@@ -7,6 +7,14 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * @property string $id
+ * @property string $flow_run_id
+ * @property int $sequence
+ * @property ?string $key
+ * @property mixed $value
+ * @property-read FlowRun $flowRun
+ */
 class SideEffect extends Model
 {
     use HasUlids;

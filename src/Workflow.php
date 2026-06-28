@@ -2,10 +2,15 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use Closure;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ActionBuilder;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\SideEffectStore;
+use Illuminate\Contracts\Container\BindingResolutionException;
+use Illuminate\Contracts\Container\CircularDependencyException;
 use Illuminate\Support\Traits\Macroable;
 use Throwable;
 
@@ -37,6 +42,21 @@ abstract class Workflow
             $actionClass,
             array_values($arguments),
         );
+    }
+
+    /**
+     * Capture a nondeterministic value (now(), a uuid, randomness) exactly once.
+     * The factory runs on the first pass; every later replay returns the stored
+     * value by its (flow_run_id, sequence) identity without re-running it. Wrap
+     * any nondeterminism you branch on in here to keep handle() deterministic.
+     *
+     * @throws HistoryContractMismatchException
+     * @throws BindingResolutionException
+     * @throws CircularDependencyException
+     */
+    public function sideEffect(string $key, Closure $factory): mixed
+    {
+        return app(SideEffectStore::class)->resolve($this->runtime, $key, $factory);
     }
 
     /**

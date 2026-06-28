@@ -119,6 +119,14 @@ return [
         'store_payloads' => true,
         'store_exceptions' => true,
         'max_payload_preview_length' => 2000,
+
+        // Side effects are recorded once and then resolved from storage on every
+        // replay. By default, a reuse only dispatches the SideEffectReused event
+        // (no flow_events row), so the event log stays bounded — a single run
+        // replays each side effect once per later step. Enable this to also
+        // persist a side_effect.reused flow_events row on every reuse when you
+        // need a full audit trail (note: this grows with the number of replays).
+        'record_side_effect_reuse' => env('SAGA_LARA_FLOW_RECORD_SIDE_EFFECT_REUSE', false),
     ],
 
     /*

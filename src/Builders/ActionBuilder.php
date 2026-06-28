@@ -2,14 +2,17 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
+use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
+use Throwable;
 
 /**
  * Fluent builder for a single action step. run() is the replay seam: it
@@ -35,16 +38,40 @@ readonly class ActionBuilder
      * Resolve this step against stored history, or schedule/run it and suspend.
      *
      * @throws FlowSuspended
+     * @throws HistoryContractMismatchException
+     * @throws Throwable
      */
     public function run(): mixed
     {
         $flowRun = $this->runtime->run();
         $sequence = $this->runtime->nextSequence();
 
-        $existingStep = $this->findStep($flowRun->id, $sequence);
+        $repository = app(FlowRepository::class);
+
+        $existingStep = $repository->findActionStep($flowRun->id, $sequence);
 
         if ($existingStep !== null) {
+            // History contract: the same sequence was recorded for another action.
+            if ($existingStep->action_class !== $this->actionClass) {
+                throw HistoryContractMismatchException::forActionClass(
+                    $sequence,
+                    $existingStep->action_class,
+                    $this->actionClass,
+                    $flowRun->id,
+                );
+            }
+
             return $this->resolve($existingStep, $sequence);
+        }
+
+        // History contract: a side effect is recorded where an action is requested.
+        if ($repository->findSideEffect($flowRun->id, $sequence) !== null) {
+            throw HistoryContractMismatchException::forOperationType(
+                $sequence,
+                'side effect',
+                "action {$this->actionClass}",
+                $flowRun->id,
+            );
         }
 
         if ($this->runtime->mode() === RunMode::Sync) {
@@ -73,17 +100,6 @@ readonly class ActionBuilder
             // Still in flight (queued job not finished): suspend until resumed.
             default => throw new FlowSuspended('action', $sequence),
         };
-    }
-
-    private function findStep(string $flowRunId, int $sequence): ?ActionRun
-    {
-        /** @var class-string<ActionRun> $model */
-        $model = config('saga-lara-flow.models.action_run');
-
-        return $model::query()
-            ->where('flow_run_id', $flowRunId)
-            ->where('sequence', $sequence)
-            ->first();
     }
 
     private function failureMessage(ActionRun $step): string
