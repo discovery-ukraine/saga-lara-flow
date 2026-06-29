@@ -2,13 +2,18 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\History;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\SagaRunner;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalDispatcher;
 use Illuminate\Database\Eloquent\Collection;
+use Throwable;
 
 /**
  * Operations over a single flow run. Read methods are available now;
@@ -93,7 +98,37 @@ readonly class FlowHandle
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
 
-        // Phase 1: direct cancellation. Compensation-aware cancel arrives with sagas.
+        // Phase 1: direct cancellation. Compensation-aware cancel is compensate().
         return $this->flowRun->markCancelled();
+    }
+
+    /**
+     * Manually roll back this run's completed compensatable steps and cancel it.
+     * The compensation stack is reconstructed by a compensation-only replay (no
+     * business logic re-runs); the rollback executes synchronously (sync mode) and
+     * the run lands in Cancelled. Only valid for a non-terminal run.
+     *
+     * @throws CannotCancelTerminalFlowException
+     * @throws Throwable
+     */
+    public function compensate(): FlowRun
+    {
+        if ($this->flowRun->isTerminal()) {
+            throw CannotCancelTerminalFlowException::for($this->flowRun);
+        }
+
+        $entries = app(FlowExecutor::class)->collectCompensations($this->flowRun);
+
+        app(StateMachine::class)->transition($this->flowRun, FlowStatus::Cancelling);
+
+        app(SagaRunner::class)->rollback(
+            $this->flowRun,
+            $entries,
+            null,
+            RunMode::Sync,
+            FlowStatus::Cancelled
+        );
+
+        return $this->flowRun;
     }
 }

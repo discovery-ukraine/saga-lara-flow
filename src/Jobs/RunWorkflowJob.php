@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Middleware\LockMiddlewareFactory;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Throwable;
 
 /**
  * Entry point for a queued workflow run: drives the flow until it suspends,
@@ -21,6 +22,9 @@ class RunWorkflowJob implements ShouldQueue
         public string $flowRunId,
     ) {}
 
+    /**
+     * @throws Throwable
+     */
     public function handle(FlowExecutor $executor, FlowRepository $repository): void
     {
         $flowRun = $repository->find($this->flowRunId);

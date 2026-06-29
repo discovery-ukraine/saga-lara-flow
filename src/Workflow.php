@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow;
 use Closure;
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ActionBuilder;
+use DiscoveryUkraine\SagaLaraFlow\Builders\SagaBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SignalWaitBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
@@ -47,6 +48,16 @@ abstract class Workflow
     }
 
     /**
+     * Begin an explicit saga group: a transactional block of steps with shared
+     * compensation policies (onCompensationFailure, compensateInParallel). Equivalent
+     * in power to action-level compensation; use it for larger transactional blocks.
+     */
+    public function saga(): SagaBuilder
+    {
+        return new SagaBuilder($this->runtime);
+    }
+
+    /**
      * Capture a nondeterministic value (now(), a uuid, randomness) exactly once.
      * The factory runs on the first pass; every later replay returns the stored
      * value by its (flow_run_id, sequence) identity without re-running it. Wrap
@@ -55,6 +66,7 @@ abstract class Workflow
      * @throws HistoryContractMismatchException
      * @throws BindingResolutionException
      * @throws CircularDependencyException
+     * @throws FlowSuspended
      */
     public function sideEffect(string $key, Closure $factory): mixed
     {

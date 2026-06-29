@@ -21,8 +21,13 @@ final class FlowRuntime
 
     private RunMode $mode = RunMode::Queued;
 
+    private int $sagaGroup = 0;
+
+    private bool $collecting = false;
+
     public function __construct(
         private readonly StepSequence $sequence = new StepSequence,
+        private readonly SagaStack $sagaStack = new SagaStack,
     ) {}
 
     public function bind(FlowRun $flowRun, RunMode $mode): void
@@ -49,16 +54,60 @@ final class FlowRuntime
     }
 
     /**
-     * Start a replay pass: rewind the sequence counter to 0. Saga stack and
-     * pending parallel state will be rewound here too in later phases.
+     * The compensation stack for this execution. Rebuilt deterministically each
+     * pass: reset() empties it, ActionBuilder pushes a step's compensation (every
+     * completed step, plus an opt-in failed one), and SagaRunner reads it (LIFO)
+     * when a failure triggers rollback.
+     */
+    public function sagaStack(): SagaStack
+    {
+        return $this->sagaStack;
+    }
+
+    /**
+     * Deterministic id for the next saga() group in this pass, used to mark its
+     * steps as one parallel rollback level.
+     */
+    public function nextSagaGroupId(): int
+    {
+        return $this->sagaGroup++;
+    }
+
+    /**
+     * Enter "compensation-only" planning: seams resolve completed steps (to rebuild
+     * the saga stack) but never start new work — they suspend at the live frontier.
+     */
+    public function beginCollecting(): void
+    {
+        $this->collecting = true;
+    }
+
+    public function endCollecting(): void
+    {
+        $this->collecting = false;
+    }
+
+    public function isCollecting(): bool
+    {
+        return $this->collecting;
+    }
+
+    /**
+     * Start a replay pass: rewind the sequence counter and the saga stack/group
+     * counter so the pass rebuilds them deterministically from stored history.
      */
     public function reset(): void
     {
         $this->sequence->reset();
+        $this->sagaStack->reset();
+        $this->sagaGroup = 0;
+        $this->collecting = false;
     }
 
     /**
-     * Fully detach the run after a drive() pass completes (executor finally).
+     * Detach the run after a drive() pass completes (executor finally). The saga
+     * stack is intentionally left intact so failAndCompensate() can read the
+     * compensations gathered by the failing pass after this clear() runs.
      */
     public function clear(): void
     {

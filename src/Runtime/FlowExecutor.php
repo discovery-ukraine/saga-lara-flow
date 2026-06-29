@@ -2,11 +2,13 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Concerns\ResolvesMethodDependencies;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
@@ -25,6 +27,7 @@ use Throwable;
  */
 class FlowExecutor
 {
+    use NormalizesExceptions;
     use ResolvesMethodDependencies;
 
     public function __construct(
@@ -33,8 +36,13 @@ class FlowExecutor
         private readonly FlowRuntime $runtime,
         private readonly TenancyManager $tenancy,
         private readonly Serializer $serializer,
+        private readonly CompensationRecorder $compensationRecorder,
+        private readonly SagaRunner $sagaRunner,
     ) {}
 
+    /**
+     * @throws Throwable
+     */
     public function drive(FlowRun $flowRun, RunMode $mode): FlowRun
     {
         $this->tenancy->restore($flowRun);
@@ -69,11 +77,54 @@ class FlowExecutor
             } catch (InternalFlowControl) {
                 return $this->suspend($flowRun);
             } catch (Throwable $exception) {
-                return $this->failFlow($flowRun, $exception);
+                return $this->failAndCompensate($flowRun, $exception, $mode);
             }
 
             return $this->completeFlow($flowRun, $result);
         }
+    }
+
+    /**
+     * Rebuild the compensation stack for a run without executing any business
+     * logic: replay handle() in collecting mode so completed steps register their
+     * compensations and the replay stops at the live frontier. Used by the manual
+     * FlowHandle::compensate() path.
+     *
+     * @return list<CompensationEntry>
+     *
+     * @throws HistoryContractMismatchException
+     */
+    public function collectCompensations(FlowRun $flowRun): array
+    {
+        $this->tenancy->restore($flowRun);
+
+        $this->runtime->bind($flowRun, RunMode::Queued);
+        $this->runtime->reset();
+        $this->runtime->beginCollecting();
+
+        try {
+            $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
+
+            /** @var array<int, mixed> $arguments */
+            $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
+
+            $this->callWithDependencies($workflow, 'handle', $arguments);
+        } catch (HistoryContractMismatchException $mismatch) {
+            $this->runtime->endCollecting();
+            $this->runtime->clear();
+
+            throw $mismatch;
+        } catch (Throwable) {
+            // FlowSuspended at the frontier, or a recorded business failure replaying
+            // as a throw — either way the stack is complete up to this point.
+        }
+
+        $entries = $this->runtime->sagaStack()->entries();
+
+        $this->runtime->endCollecting();
+        $this->runtime->clear();
+
+        return $entries;
     }
 
     private function suspend(FlowRun $flowRun): FlowRun
@@ -92,6 +143,40 @@ class FlowExecutor
         $flowRun->markCompleted();
 
         $this->recorder->flowCompleted($flowRun);
+
+        return $flowRun;
+    }
+
+    /**
+     * Business failure: roll back the compensation stack gathered by the failing
+     * pass (LIFO), then land in Failed. An empty stack — or a history-contract
+     * mismatch, which must bypass compensation — fails directly.
+     *
+     * @throws Throwable
+     */
+    private function failAndCompensate(FlowRun $flowRun, Throwable $exception, RunMode $mode): FlowRun
+    {
+        if ($exception instanceof HistoryContractMismatchException) {
+            return $this->failFlow($flowRun, $exception);
+        }
+
+        $entries = $this->runtime->sagaStack()->entries();
+
+        if ($entries === []) {
+            return $this->failFlow($flowRun, $exception);
+        }
+
+        $this->stateMachine->transition($flowRun, FlowStatus::Cancelling);
+
+        $this->compensationRecorder->started($flowRun);
+
+        $this->sagaRunner->rollback(
+            $flowRun,
+            $entries,
+            $this->exceptionToArray($exception),
+            $mode,
+            FlowStatus::Failed
+        );
 
         return $flowRun;
     }

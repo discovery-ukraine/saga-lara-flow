@@ -29,9 +29,14 @@ class ActionDispatcher
      *
      * @param  array<int, mixed>  $arguments
      */
-    public function dispatch(FlowRun $flowRun, int $sequence, string $actionClass, array $arguments): ActionRun
-    {
-        $actionRun = $this->recorder->scheduleAction($flowRun, $sequence, $actionClass, $arguments);
+    public function dispatch(
+        FlowRun $flowRun,
+        int $sequence,
+        string $actionClass,
+        array $arguments,
+        bool $hasCompensation = false
+    ): ActionRun {
+        $actionRun = $this->recorder->scheduleAction($flowRun, $sequence, $actionClass, $arguments, $hasCompensation);
 
         $job = RunActionJob::dispatch($actionRun->id, $actionClass);
 
@@ -57,9 +62,14 @@ class ActionDispatcher
      *
      * @throws Throwable
      */
-    public function runInline(FlowRun $run, int $sequence, string $actionClass, array $arguments): ActionRun
-    {
-        $actionRun = $this->recorder->scheduleAction($run, $sequence, $actionClass, $arguments);
+    public function runInline(
+        FlowRun $run,
+        int $sequence,
+        string $actionClass,
+        array $arguments,
+        bool $hasCompensation = false
+    ): ActionRun {
+        $actionRun = $this->recorder->scheduleAction($run, $sequence, $actionClass, $arguments, $hasCompensation);
 
         $this->execute($actionRun);
 

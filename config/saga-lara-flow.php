@@ -108,6 +108,13 @@ return [
     'sagas' => [
         'default_compensation_failure_policy' => CompensationFailurePolicy::Stop,
         'parallel_compensation' => false,
+
+        // By default only successfully completed steps are compensated on failure
+        // (classic saga). Enable this to also compensate a step that FAILED — useful
+        // for non-atomic actions that may leave partial effects. Such compensations
+        // must be idempotent and safe when the step actually did nothing. Override
+        // per action/group via compensateStepOnSelfFailure() (precedence action > group > config).
+        'compensate_failed_step' => false,
     ],
 
     /*

@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Middleware\LockMiddlewareFactory;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Throwable;
 
 /**
  * Re-drives a suspended workflow after an awaited step (an action, and later a
@@ -22,6 +23,9 @@ class ResumeWorkflowJob implements ShouldQueue
         public string $flowRunId,
     ) {}
 
+    /**
+     * @throws Throwable
+     */
     public function handle(FlowExecutor $executor, FlowRepository $repository): void
     {
         $flowRun = $repository->find($this->flowRunId);

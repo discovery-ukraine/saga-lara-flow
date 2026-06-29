@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\WorkflowClassMissingException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use Throwable;
 
 class CreateWorkflowBuilder
 {
@@ -111,6 +112,8 @@ class CreateWorkflowBuilder
     /**
      * Persist the run and execute it synchronously via the drive loop. Returns
      * the run in its resulting state (Completed/Failed/Waiting).
+     *
+     * @throws Throwable
      */
     public function runSync(): FlowRun
     {

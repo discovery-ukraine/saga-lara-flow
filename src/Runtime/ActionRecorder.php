@@ -34,8 +34,13 @@ final readonly class ActionRecorder
      *
      * @param  array<int, mixed>  $arguments
      */
-    public function scheduleAction(FlowRun $flowRun, int $sequence, string $actionClass, array $arguments): ActionRun
-    {
+    public function scheduleAction(
+        FlowRun $flowRun,
+        int $sequence,
+        string $actionClass,
+        array $arguments,
+        bool $hasCompensation = false
+    ): ActionRun {
         /** @var class-string<ActionRun> $model */
         $model = config('saga-lara-flow.models.action_run');
 
@@ -46,6 +51,7 @@ final readonly class ActionRecorder
             'sequence' => $sequence,
             'action_class' => $actionClass,
             'status' => ActionStatus::Pending,
+            'has_compensation' => $hasCompensation,
             'arguments' => $this->serializer->serialize($arguments),
             'attempts' => 0,
         ]);

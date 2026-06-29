@@ -44,6 +44,16 @@ readonly class SignalWaiter
 
         $signal = $this->guard->expectSignal($flowRun->id, $sequence, $name);
 
+        // Compensation-only planning: replay a consumed signal, otherwise stop here
+        // (a not-yet-consumed signal is the live frontier).
+        if ($runtime->isCollecting()) {
+            if ($signal !== null && $signal->status === SignalStatus::Consumed) {
+                return $this->serializer->deserialize($signal->payload);
+            }
+
+            $this->suspender->suspend('signal', $sequence);
+        }
+
         if ($signal !== null) {
             return match ($signal->status) {
                 // Already resolved on an earlier pass: replay its payload verbatim.

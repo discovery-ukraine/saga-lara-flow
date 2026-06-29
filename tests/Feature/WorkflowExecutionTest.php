@@ -31,6 +31,13 @@ function useDatabaseQueue(): void
     ]);
     config()->set('saga-lara-flow.queue.after_commit', false);
     config()->set('saga-lara-flow.locks.enabled', false);
+    config()->set('queue.failed.driver', 'null');
+    config()->set('queue.batching', [
+        'driver' => 'database',
+        'connection' => 'testing',
+        'database' => 'testing',
+        'table' => 'job_batches',
+    ]);
 
     if (! Schema::connection('testing')->hasTable('jobs')) {
         Schema::connection('testing')->create('jobs', function (Blueprint $table) {
@@ -41,6 +48,21 @@ function useDatabaseQueue(): void
             $table->unsignedInteger('reserved_at')->nullable();
             $table->unsignedInteger('available_at');
             $table->unsignedInteger('created_at');
+        });
+    }
+
+    if (! Schema::connection('testing')->hasTable('job_batches')) {
+        Schema::connection('testing')->create('job_batches', function (Blueprint $table) {
+            $table->string('id')->primary();
+            $table->string('name');
+            $table->integer('total_jobs');
+            $table->integer('pending_jobs');
+            $table->integer('failed_jobs');
+            $table->longText('failed_job_ids');
+            $table->mediumText('options')->nullable();
+            $table->integer('cancelled_at')->nullable();
+            $table->integer('created_at');
+            $table->integer('finished_at')->nullable();
         });
     }
 }
