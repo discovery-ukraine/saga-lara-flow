@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow;
 use Closure;
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ActionBuilder;
+use DiscoveryUkraine\SagaLaraFlow\Builders\ChildWorkflowBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SagaBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SignalWaitBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
@@ -55,6 +56,17 @@ abstract class Workflow
     public function saga(): SagaBuilder
     {
         return new SagaBuilder($this->runtime);
+    }
+
+    /**
+     * Begin a child workflow step. The returned builder starts the child and awaits
+     * its completion, resolving by the operation's (flow_run_id, sequence) identity.
+     *
+     * @param  array<int, mixed>  $arguments
+     */
+    public function child(string $workflowClass, array $arguments = []): ChildWorkflowBuilder
+    {
+        return new ChildWorkflowBuilder($this->runtime, $workflowClass, array_values($arguments));
     }
 
     /**

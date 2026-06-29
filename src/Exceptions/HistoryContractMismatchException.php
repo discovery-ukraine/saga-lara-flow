@@ -55,6 +55,26 @@ class HistoryContractMismatchException extends FlowException
     }
 
     /**
+     * The recorded child workflow class at this sequence differs from the requested one.
+     */
+    public static function forChildWorkflowClass(
+        int $sequence,
+        string $recordedClass,
+        string $requestedClass,
+        string $runId,
+    ): self {
+        return new self(sprintf(
+            'Sequence %d expected child workflow %s, but workflow requested child %s. '.
+            'The workflow code likely changed while run %s is still active. '.
+            'Version long-running workflows via separate classes/directories.',
+            $sequence,
+            $recordedClass,
+            $requestedClass,
+            $runId,
+        ));
+    }
+
+    /**
      * A different kind of operation (action vs side effect vs signal) is recorded
      * at this sequence than the one the workflow requested.
      */

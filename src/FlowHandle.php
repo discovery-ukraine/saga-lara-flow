@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\History;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SagaRunner;
@@ -98,8 +99,12 @@ readonly class FlowHandle
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
 
-        // Phase 1: direct cancellation. Compensation-aware cancel is compensate().
-        return $this->flowRun->markCancelled();
+        // Direct cancellation (no compensation). Compensation-aware cancel is compensate().
+        $this->flowRun->markCancelled();
+
+        app(ChildWorkflowManager::class)->onFlowFinalized($this->flowRun, false);
+
+        return $this->flowRun;
     }
 
     /**

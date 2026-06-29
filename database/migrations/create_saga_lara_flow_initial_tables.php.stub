@@ -130,10 +130,13 @@ return new class extends Migration
             $table->ulid('parent_flow_run_id')->index();
             $table->ulid('child_flow_run_id')->index();
             $table->unsignedInteger('sequence');
+            $table->string('child_workflow_class');
             $table->string('close_policy');
+            $table->boolean('continue_parent_on_failure')->default(false);
             $table->string('status')->index();
             $table->timestamps();
 
+            $table->unique(['parent_flow_run_id', 'sequence']);
             $table->unique(['parent_flow_run_id', 'child_flow_run_id']);
         });
     }

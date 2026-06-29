@@ -144,6 +144,8 @@ class FlowExecutor
 
         $this->recorder->flowCompleted($flowRun);
 
+        app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
+
         return $flowRun;
     }
 
@@ -190,6 +192,8 @@ class FlowExecutor
         ]);
 
         $this->recorder->flowFailed($flowRun, $exception);
+
+        app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
 
         return $flowRun;
     }

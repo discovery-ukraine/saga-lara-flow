@@ -56,6 +56,7 @@ class FlowStateMachine implements StateMachine
         return match ($from) {
             FlowStatus::Pending => [
                 FlowStatus::Running,
+                FlowStatus::Cancelling,
                 FlowStatus::Cancelled,
                 FlowStatus::Expired,
             ],

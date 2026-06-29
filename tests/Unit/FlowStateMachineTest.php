@@ -7,6 +7,7 @@ it('allows valid transitions', function (FlowStatus $from, FlowStatus $to) {
     expect((new FlowStateMachine)->canTransition($from, $to))->toBeTrue();
 })->with([
     'pending -> running' => [FlowStatus::Pending, FlowStatus::Running],
+    'pending -> cancelling' => [FlowStatus::Pending, FlowStatus::Cancelling],
     'pending -> cancelled' => [FlowStatus::Pending, FlowStatus::Cancelled],
     'pending -> expired' => [FlowStatus::Pending, FlowStatus::Expired],
     'running -> waiting' => [FlowStatus::Running, FlowStatus::Waiting],

@@ -173,6 +173,8 @@ class SagaRunner
 
             $this->lifecycle->flowCancelled($flowRun);
 
+            app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
+
             return;
         }
 
@@ -188,6 +190,8 @@ class SagaRunner
         $flowRun->markFailed($exception === [] ? null : $exception);
 
         $this->lifecycle->flowFailedFromArray($flowRun, $primary);
+
+        app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
     }
 
     /**

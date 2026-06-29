@@ -3,10 +3,12 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
+use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SideEffectRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Models\SideEffect;
 
@@ -24,6 +26,7 @@ final readonly class HistoryContractGuard
         private ActionRunRepository $actionRepository,
         private SideEffectRepository $sideEffectRepository,
         private SignalRepository $signalRepository,
+        private FlowChildRepository $childRepository,
     ) {}
 
     /**
@@ -50,6 +53,36 @@ final readonly class HistoryContractGuard
 
         $this->rejectSideEffect($flowRunId, $sequence, $requested);
         $this->rejectSignal($flowRunId, $sequence, $requested);
+        $this->rejectChild($flowRunId, $sequence, $requested);
+
+        return null;
+    }
+
+    /**
+     * @throws HistoryContractMismatchException
+     */
+    public function expectChild(string $flowRunId, int $sequence, string $workflowClass): ?FlowChild
+    {
+        $link = $this->childRepository->find($flowRunId, $sequence);
+
+        if ($link !== null) {
+            if ($link->child_workflow_class !== $workflowClass) {
+                throw HistoryContractMismatchException::forChildWorkflowClass(
+                    $sequence,
+                    $link->child_workflow_class,
+                    $workflowClass,
+                    $flowRunId,
+                );
+            }
+
+            return $link;
+        }
+
+        $requested = "child workflow {$workflowClass}";
+
+        $this->rejectAction($flowRunId, $sequence, $requested);
+        $this->rejectSideEffect($flowRunId, $sequence, $requested);
+        $this->rejectSignal($flowRunId, $sequence, $requested);
 
         return null;
     }
@@ -63,6 +96,7 @@ final readonly class HistoryContractGuard
 
         $this->rejectAction($flowRunId, $sequence, $requested);
         $this->rejectSignal($flowRunId, $sequence, $requested);
+        $this->rejectChild($flowRunId, $sequence, $requested);
 
         return $this->sideEffectRepository->find($flowRunId, $sequence);
     }
@@ -91,6 +125,7 @@ final readonly class HistoryContractGuard
 
         $this->rejectAction($flowRunId, $sequence, $requested);
         $this->rejectSideEffect($flowRunId, $sequence, $requested);
+        $this->rejectChild($flowRunId, $sequence, $requested);
 
         return null;
     }
@@ -140,6 +175,23 @@ final readonly class HistoryContractGuard
             throw HistoryContractMismatchException::forOperationType(
                 $sequence,
                 "signal '{$signal->name}'",
+                $requested,
+                $flowRunId,
+            );
+        }
+    }
+
+    /**
+     * @throws HistoryContractMismatchException
+     */
+    private function rejectChild(string $flowRunId, int $sequence, string $requested): void
+    {
+        $link = $this->childRepository->find($flowRunId, $sequence);
+
+        if ($link !== null) {
+            throw HistoryContractMismatchException::forOperationType(
+                $sequence,
+                "child workflow {$link->child_workflow_class}",
                 $requested,
                 $flowRunId,
             );
