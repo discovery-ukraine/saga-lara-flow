@@ -19,7 +19,8 @@ final readonly class SignalRecorder
 {
     public function __construct(
         private EventLog $events,
-    ) {}
+    ) {
+    }
 
     /**
      * Park the flow on an unmatched awaitSignal: persist a Waiting wait-signal at
@@ -43,12 +44,23 @@ final readonly class SignalRecorder
             'name' => $name,
             'status' => SignalStatus::Waiting,
             'wait_sequence' => $sequence,
-            'timeout_at' => $timeoutAt,
+            'timeout_at' => $timeoutAt ?? $this->defaultTimeout(),
         ]);
 
         $signal->save();
 
         return $signal;
+    }
+
+    /**
+     * Fall back to the configured default signal timeout (seconds from now) when none
+     * was set explicitly via awaitSignal(timeout:)/timeoutAfter(). null config off.
+     */
+    private function defaultTimeout(): ?DateTimeInterface
+    {
+        $seconds = config('saga-lara-flow.monitor.expiration.defaults.signal');
+
+        return $seconds === null ? null : Carbon::now()->addSeconds((int) $seconds);
     }
 
     /**

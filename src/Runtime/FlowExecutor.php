@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
@@ -38,7 +39,8 @@ class FlowExecutor
         private readonly Serializer $serializer,
         private readonly CompensationRecorder $compensationRecorder,
         private readonly SagaRunner $sagaRunner,
-    ) {}
+    ) {
+    }
 
     /**
      * @throws Throwable
@@ -46,6 +48,10 @@ class FlowExecutor
     public function drive(FlowRun $flowRun, RunMode $mode): FlowRun
     {
         $this->tenancy->restore($flowRun);
+
+        if ($this->isExpired($flowRun)) {
+            return $this->expireRun($flowRun);
+        }
 
         $resuming = $flowRun->status !== FlowStatus::Pending;
 
@@ -196,6 +202,49 @@ class FlowExecutor
         app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
 
         return $flowRun;
+    }
+
+    /**
+     * Expire an overdue run. Mirrors FlowHandle::compensate() but lands in Expired:
+     * rebuild the compensation stack by a compensation-only replay, then roll it back
+     * (queued) and finalize as Expired — or, with nothing to undo, expire directly.
+     * Shared by the monitor's sweep (FlowMonitor::expireRun) and the lazy drive check.
+     *
+     * @throws Throwable
+     */
+    public function expireRun(FlowRun $flowRun): FlowRun
+    {
+        $primary = $this->exceptionToArray(FlowExpiredException::forFlowRun($flowRun));
+
+        $entries = $this->collectCompensations($flowRun);
+
+        if ($entries === []) {
+            $flowRun->exception = $primary;
+
+            $flowRun->markExpired();
+
+            $this->recorder->flowExpired($flowRun);
+
+            app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, false);
+
+            return $flowRun;
+        }
+
+        $this->stateMachine->transition($flowRun, FlowStatus::Cancelling);
+
+        $this->sagaRunner->rollback($flowRun, $entries, $primary, RunMode::Queued, FlowStatus::Expired);
+
+        return $flowRun;
+    }
+
+    /**
+     * A run is overdue when expiration is enabled and its deadline has passed.
+     */
+    private function isExpired(FlowRun $flowRun): bool
+    {
+        return (bool) config('saga-lara-flow.monitor.expiration.enabled')
+            && $flowRun->expires_at !== null
+            && $flowRun->expires_at->lessThanOrEqualTo(now());
     }
 
     /**

@@ -79,7 +79,16 @@ return [
     */
     'monitor' => [
         'enabled' => true,
-        'expiration' => ['enabled' => true, 'batch_size' => 100],
+        'expiration' => [
+            'enabled' => true,
+            'batch_size' => 100,
+
+            // Default deadlines (in seconds) applied at write time when none is set
+            // explicitly: 'run' on create, 'action' on schedule, 'signal' on await.
+            // null = off (no implicit deadline). There is no per-entity opt-out flag;
+            // to bypass a default for one entity pass an explicit (far-future) deadline.
+            'defaults' => ['run' => null, 'action' => null, 'signal' => null],
+        ],
         'queue_looping' => ['enabled' => false, 'throttle_seconds' => 30],
     ],
 

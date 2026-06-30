@@ -33,7 +33,7 @@ class CreateWorkflowBuilder
         private readonly FlowRepository $repository,
         private readonly FlowExecutor $executor,
     ) {
-        if (! class_exists($this->workflowClass)) {
+        if (!class_exists($this->workflowClass)) {
             throw WorkflowClassMissingException::for($this->workflowClass);
         }
     }
@@ -129,8 +129,15 @@ class CreateWorkflowBuilder
             'arguments' => $this->arguments,
             'connection' => $this->connection ?? config('saga-lara-flow.queue.connection'),
             'queue' => $this->queue ?? config('saga-lara-flow.queue.queue'),
-            'expires_at' => $this->expiresAt,
+            'expires_at' => $this->expiresAt ?? $this->defaultExpiry(),
         ], $this->normalizedTags());
+    }
+
+    private function defaultExpiry(): ?DateTimeInterface
+    {
+        $seconds = config('saga-lara-flow.monitor.expiration.defaults.run');
+
+        return $seconds === null ? null : now()->addSeconds((int) $seconds);
     }
 
     /**

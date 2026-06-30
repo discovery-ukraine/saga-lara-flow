@@ -6,9 +6,7 @@ use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
-use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
-use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -37,12 +35,9 @@ final readonly class FlowMonitor
         private FlowRepository $flows,
         private ActionRunRepository $actions,
         private SignalRepository $signals,
-        private StateMachine $stateMachine,
         private FlowExecutor $executor,
-        private SagaRunner $sagaRunner,
         private SignalRecorder $signalRecorder,
         private ActionRecorder $actionRecorder,
-        private FlowLifecycleRecorder $lifecycle,
     ) {}
 
     /**
@@ -107,33 +102,15 @@ final readonly class FlowMonitor
     }
 
     /**
-     * Mirror FlowHandle::compensate(), but land in Expired: rebuild the run's
-     * compensation stack by a compensation-only replay, then roll it back (queued)
-     * and finalize as Expired — or, with nothing to undo, expire directly.
+     * Expire an overdue run. The mechanism (rebuild the compensation stack, roll it
+     * back queued, finalize as Expired) lives on FlowExecutor — the owner of every
+     * run-terminal transition — and is shared with the lazy drive() deadline check.
      *
      * @throws Throwable
      */
     private function expireRun(FlowRun $run): void
     {
-        $primary = $this->exceptionToArray(FlowExpiredException::forFlowRun($run));
-
-        $entries = $this->executor->collectCompensations($run);
-
-        if ($entries === []) {
-            $run->exception = $primary;
-
-            $run->markExpired();
-
-            $this->lifecycle->flowExpired($run);
-
-            app(ChildWorkflowManager::class)->onFlowFinalized($run, false);
-
-            return;
-        }
-
-        $this->stateMachine->transition($run, FlowStatus::Cancelling);
-
-        $this->sagaRunner->rollback($run, $entries, $primary, RunMode::Queued, FlowStatus::Expired);
+        $this->executor->expireRun($run);
     }
 
     private function timeoutSignals(int $limit): int

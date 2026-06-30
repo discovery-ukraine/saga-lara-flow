@@ -27,7 +27,8 @@ final readonly class ActionRecorder
     public function __construct(
         private EventLog $events,
         private Serializer $serializer,
-    ) {}
+    ) {
+    }
 
     /**
      * Create the pending ActionRun for a scheduled step. The arguments are
@@ -59,7 +60,7 @@ final readonly class ActionRecorder
             'has_compensation' => $hasCompensation,
             'continue_on_failure' => $continueOnFailure,
             'parallel_group' => $parallelGroup,
-            'expires_at' => $expiresAt,
+            'expires_at' => $expiresAt ?? $this->defaultExpiry(),
             'arguments' => $this->serializer->serialize($arguments),
             'attempts' => 0,
         ]);
@@ -71,6 +72,13 @@ final readonly class ActionRecorder
         ]);
 
         return $actionRun;
+    }
+
+    private function defaultExpiry(): ?DateTimeInterface
+    {
+        $seconds = config('saga-lara-flow.monitor.expiration.defaults.action');
+
+        return $seconds === null ? null : Carbon::now()->addSeconds((int) $seconds);
     }
 
     public function startAction(ActionRun $actionRun): void
