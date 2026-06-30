@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionCompleted;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionStarted;
+use DiscoveryUkraine\SagaLaraFlow\Events\OptionalActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Support\Carbon;
@@ -39,7 +40,9 @@ final readonly class ActionRecorder
         int $sequence,
         string $actionClass,
         array $arguments,
-        bool $hasCompensation = false
+        bool $hasCompensation = false,
+        bool $continueOnFailure = false,
+        ?int $parallelGroup = null,
     ): ActionRun {
         /** @var class-string<ActionRun> $model */
         $model = config('saga-lara-flow.models.action_run');
@@ -52,6 +55,8 @@ final readonly class ActionRecorder
             'action_class' => $actionClass,
             'status' => ActionStatus::Pending,
             'has_compensation' => $hasCompensation,
+            'continue_on_failure' => $continueOnFailure,
+            'parallel_group' => $parallelGroup,
             'arguments' => $this->serializer->serialize($arguments),
             'attempts' => 0,
         ]);
@@ -119,5 +124,28 @@ final readonly class ActionRecorder
         );
 
         event(new ActionFailed($actionRun, $exception));
+    }
+
+    /**
+     * Mark a failed optional (continueOnFailure) step as OptionalFailed once its
+     * retries are exhausted. The flow is not failed; the recorded exception is
+     * preserved and an optional_failed event/Laravel event is appended so the
+     * give-up is visible in history.
+     */
+    public function optionalFail(ActionRun $actionRun): void
+    {
+        $actionRun->status = ActionStatus::OptionalFailed;
+        $actionRun->finished_at = Carbon::now();
+        $actionRun->save();
+
+        $this->events->record(
+            $actionRun->flowRun,
+            FlowEventType::ActionOptionalFailed,
+            $actionRun->sequence,
+            $actionRun,
+            $actionRun->exception !== null ? ['exception' => $actionRun->exception] : []
+        );
+
+        event(new OptionalActionFailed($actionRun));
     }
 }

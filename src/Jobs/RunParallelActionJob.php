@@ -3,22 +3,28 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Jobs;
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ParallelFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Middleware\LockMiddlewareFactory;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
+use Illuminate\Bus\Batchable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
 /**
- * Executes a single scheduled action step, then resumes its workflow so the
- * drive loop can replay and move on. Carries the action's native $tries/$timeout
- * so Laravel's queue retry semantics apply. On final failure it still resumes
- * the workflow, so the failure surfaces as a business error on replay.
+ * Executes one step of a parallel() block as part of a Bus::batch. Unlike
+ * RunActionJob it does NOT resume the workflow itself — the batch's finally
+ * callback (ResumeParallelBlock) drives the single join after every step settles.
+ *
+ * On final failure: an optional step is recorded OptionalFailed (it never fails the
+ * flow); a hard failure under the FailFast policy cancels the batch so pending
+ * siblings never start (in-flight ones still finish — they cannot be force-killed).
  */
-class RunActionJob implements ShouldQueue
+class RunParallelActionJob implements ShouldQueue
 {
+    use Batchable;
     use Queueable;
 
     public int $tries;
@@ -28,6 +34,7 @@ class RunActionJob implements ShouldQueue
     public function __construct(
         public string $actionRunId,
         public string $actionClass,
+        public ParallelFailurePolicy $policy,
     ) {
         $defaults = get_class_vars($this->actionClass);
 
@@ -40,6 +47,11 @@ class RunActionJob implements ShouldQueue
      */
     public function handle(ActionDispatcher $dispatcher): void
     {
+        // A sibling's FailFast cancellation: skip starting this step.
+        if ($this->batch()?->cancelled()) {
+            return;
+        }
+
         $action = $this->resolveAction();
 
         if ($action === null) {
@@ -49,8 +61,6 @@ class RunActionJob implements ShouldQueue
         if ($action->status !== ActionStatus::Completed) {
             $dispatcher->execute($action);
         }
-
-        $this->resumeWorkflow($action);
     }
 
     public function failed(Throwable $exception): void
@@ -61,13 +71,18 @@ class RunActionJob implements ShouldQueue
             return;
         }
 
-        // Optional step exhausted its retries: record it as OptionalFailed so the
-        // workflow resolves the fallback instead of failing on replay.
+        // Optional step exhausted its retries: record OptionalFailed, do not fail
+        // the block (and never cancel the batch).
         if ($action->continue_on_failure && $action->status === ActionStatus::Failed) {
             app(ActionRecorder::class)->optionalFail($action);
+
+            return;
         }
 
-        $this->resumeWorkflow($action);
+        // Hard failure under FailFast: cancel so pending siblings never start.
+        if ($this->policy === ParallelFailurePolicy::FailFast) {
+            $this->batch()?->cancel();
+        }
     }
 
     /**
@@ -76,25 +91,6 @@ class RunActionJob implements ShouldQueue
     public function middleware(): array
     {
         return app(LockMiddlewareFactory::class)->actionMiddleware($this->actionRunId);
-    }
-
-    private function resumeWorkflow(ActionRun $action): void
-    {
-        $flowRun = $action->flowRun;
-
-        $job = ResumeWorkflowJob::dispatch($action->flow_run_id);
-
-        if ($flowRun->connection !== null) {
-            $job->onConnection($flowRun->connection);
-        }
-
-        if ($flowRun->queue !== null) {
-            $job->onQueue($flowRun->queue);
-        }
-
-        if (config('saga-lara-flow.queue.after_commit')) {
-            $job->afterCommit();
-        }
     }
 
     private function resolveAction(): ?ActionRun

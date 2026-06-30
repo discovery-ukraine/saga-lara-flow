@@ -34,9 +34,17 @@ class ActionDispatcher
         int $sequence,
         string $actionClass,
         array $arguments,
-        bool $hasCompensation = false
+        bool $hasCompensation = false,
+        bool $continueOnFailure = false,
     ): ActionRun {
-        $actionRun = $this->recorder->scheduleAction($flowRun, $sequence, $actionClass, $arguments, $hasCompensation);
+        $actionRun = $this->recorder->scheduleAction(
+            $flowRun,
+            $sequence,
+            $actionClass,
+            $arguments,
+            $hasCompensation,
+            $continueOnFailure,
+        );
 
         $job = RunActionJob::dispatch($actionRun->id, $actionClass);
 
@@ -67,9 +75,19 @@ class ActionDispatcher
         int $sequence,
         string $actionClass,
         array $arguments,
-        bool $hasCompensation = false
+        bool $hasCompensation = false,
+        bool $continueOnFailure = false,
+        ?int $parallelGroup = null,
     ): ActionRun {
-        $actionRun = $this->recorder->scheduleAction($run, $sequence, $actionClass, $arguments, $hasCompensation);
+        $actionRun = $this->recorder->scheduleAction(
+            $run,
+            $sequence,
+            $actionClass,
+            $arguments,
+            $hasCompensation,
+            $continueOnFailure,
+            $parallelGroup,
+        );
 
         $this->execute($actionRun);
 

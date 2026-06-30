@@ -6,6 +6,7 @@ use Closure;
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ActionBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ChildWorkflowBuilder;
+use DiscoveryUkraine\SagaLaraFlow\Builders\ParallelBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SagaBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SignalWaitBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
@@ -56,6 +57,27 @@ abstract class Workflow
     public function saga(): SagaBuilder
     {
         return new SagaBuilder($this->runtime);
+    }
+
+    /**
+     * Begin a parallel block: its steps are dispatched together and the flow
+     * continues only once they all finish, returning their results in declaration
+     * order. Choose failFast() (fail on the first failure) or waitAllThenFail()
+     * (let every step settle first); steps may carry their own compensations.
+     */
+    public function parallel(): ParallelBuilder
+    {
+        return new ParallelBuilder($this->runtime);
+    }
+
+    /**
+     * Convenience alias for action(...)->continueOnFailure(): a best-effort step
+     * whose failure does not fail the flow (it lands OptionalFailed and run()
+     * returns the fallback). Call ->fallbackValueOnFail() on the returned builder to set it.
+     */
+    public function optionalAction(string $actionClass, mixed ...$arguments): ActionBuilder
+    {
+        return $this->action($actionClass, ...$arguments)->continueOnFailure();
     }
 
     /**

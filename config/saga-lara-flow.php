@@ -3,6 +3,7 @@
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\DispatchMode;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ParallelFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Models;
 
 return [
@@ -98,6 +99,19 @@ return [
     */
     'children' => [
         'default_close_policy' => ChildClosePolicy::Abandon,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Parallel actions
+    |--------------------------------------------------------------------------
+    | Default policy for a parallel() block when a step fails. FailFast cancels
+    | the block on the first hard failure (pending siblings never start);
+    | WaitAllThenFail lets every step settle before failing. Override per block
+    | via ->failFast() / ->waitAllThenFail().
+    */
+    'parallel' => [
+        'default_failure_policy' => ParallelFailurePolicy::FailFast,
     ],
 
     /*

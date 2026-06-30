@@ -14,6 +14,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\CompensationEntry;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowSuspender;
@@ -49,6 +50,10 @@ class ActionBuilder
 
     private ?bool $groupCompensateOnSelfFailure = null;
 
+    private bool $continueOnFailure = false;
+
+    private mixed $fallbackValueOnFail = null;
+
     /**
      * @param  array<int, mixed>  $arguments
      */
@@ -75,6 +80,28 @@ class ActionBuilder
     public function onCompensationFailure(CompensationFailurePolicy $policy): static
     {
         $this->actionCompensationFailurePolicy = $policy;
+
+        return $this;
+    }
+
+    /**
+     * Make this an optional step: its failure does not fail the flow. The action
+     * still respects its $tries; once retries are exhausted, it lands OptionalFailed
+     * (an action.optional_failed event is recorded) and run() returns the fallback.
+     */
+    public function continueOnFailure(bool $continue = true): static
+    {
+        $this->continueOnFailure = $continue;
+
+        return $this;
+    }
+
+    /**
+     * Value returned by run() when an optional step gives up (defaults to null).
+     */
+    public function fallbackValueOnFail(mixed $value): static
+    {
+        $this->fallbackValueOnFail = $value;
 
         return $this;
     }
@@ -139,8 +166,23 @@ class ActionBuilder
 
         if ($this->runtime->mode() === RunMode::Sync) {
             try {
-                $dispatcher->runInline($flowRun, $sequence, $this->actionClass, $this->arguments, $hasCompensation);
+                $dispatcher->runInline(
+                    $flowRun,
+                    $sequence,
+                    $this->actionClass,
+                    $this->arguments,
+                    $hasCompensation,
+                    $this->continueOnFailure,
+                );
             } catch (Throwable $exception) {
+                // Optional step: no retries inline, so give up now — mark it
+                // OptionalFailed and replay so the seam resolves the fallback.
+                if ($this->continueOnFailure) {
+                    $this->markOptionalFailed($flowRun->id, $sequence);
+
+                    $suspender->suspendInline('action', $sequence);
+                }
+
                 $this->registerFailedStepCompensation($flowRun->id, $sequence);
 
                 throw $exception;
@@ -149,7 +191,14 @@ class ActionBuilder
             $suspender->suspendInline('action', $sequence);
         }
 
-        $dispatcher->dispatch($flowRun, $sequence, $this->actionClass, $this->arguments, $hasCompensation);
+        $dispatcher->dispatch(
+            $flowRun,
+            $sequence,
+            $this->actionClass,
+            $this->arguments,
+            $hasCompensation,
+            $this->continueOnFailure,
+        );
 
         $suspender->suspend('action', $sequence);
     }
@@ -162,7 +211,15 @@ class ActionBuilder
         switch ($step->status) {
             case ActionStatus::Completed:
                 return $this->resolveCompleted($step, $sequence);
+            case ActionStatus::OptionalFailed:
+                return $this->resolveOptionalFailed($step, $sequence);
             case ActionStatus::Failed:
+                // An optional step still has retries left: it is not yet
+                // OptionalFailed, so wait rather than surface a business error.
+                if ($this->continueOnFailure) {
+                    app(FlowSuspender::class)->suspend('action', $sequence);
+                }
+
                 $this->resolveFailed($step, $sequence);
                 // Still in flight (queued job not finished): suspend until resumed.
             default:
@@ -192,6 +249,34 @@ class ActionBuilder
         }
 
         throw ActionFailedException::forAction($this->actionClass, $sequence, $this->failureMessage($step));
+    }
+
+    /**
+     * Replay an optional step that gave up: register its compensation if opted in
+     * (the step may have left partial effects), then return the fallback so the
+     * workflow carries on as if the step had not happened.
+     */
+    private function resolveOptionalFailed(ActionRun $step, int $sequence): mixed
+    {
+        if ($this->shouldCompensateFailedStep()) {
+            $this->pushCompensation($step->id, $sequence);
+        }
+
+        return $this->fallbackValueOnFail;
+    }
+
+    /**
+     * Sync path: an optional inline action threw. Mark its just-persisted Failed row
+     * (looked up by its (flow_run_id, sequence) identity) as OptionalFailed so the
+     * replay resolves the fallback instead of a business error.
+     */
+    private function markOptionalFailed(string $flowRunId, int $sequence): void
+    {
+        $step = app(ActionRunRepository::class)->find($flowRunId, $sequence);
+
+        if ($step !== null) {
+            app(ActionRecorder::class)->optionalFail($step);
+        }
     }
 
     /**
