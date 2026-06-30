@@ -46,7 +46,9 @@ class RunActionJob implements ShouldQueue
             return;
         }
 
-        if ($action->status !== ActionStatus::Completed) {
+        // Skip a step already settled out of band: Completed on an earlier attempt,
+        // or Expired by the monitor (a late job must not resurrect an expired step).
+        if (! in_array($action->status, [ActionStatus::Completed, ActionStatus::Expired], true)) {
             $dispatcher->execute($action);
         }
 

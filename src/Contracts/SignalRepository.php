@@ -23,4 +23,12 @@ interface SignalRepository
      * delivery to fulfil a parked awaitSignal.
      */
     public function earliestWaiting(string $flowRunId, string $name): ?FlowSignal;
+
+    /**
+     * Open wait-markers (status Waiting) whose timeout_at deadline has passed,
+     * oldest first, capped at $limit. Used by the monitor to time signal waits out.
+     *
+     * @return iterable<int, FlowSignal>
+     */
+    public function dueForTimeout(int $limit): iterable;
 }

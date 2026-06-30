@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Repositories;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
+use Illuminate\Support\Carbon;
 
 class EloquentSignalRepository implements SignalRepository
 {
@@ -36,6 +37,17 @@ class EloquentSignalRepository implements SignalRepository
             ->whereNotNull('wait_sequence')
             ->orderBy('id')
             ->first();
+    }
+
+    public function dueForTimeout(int $limit): iterable
+    {
+        return $this->model()::query()
+            ->where('status', SignalStatus::Waiting)
+            ->whereNotNull('timeout_at')
+            ->where('timeout_at', '<=', Carbon::now())
+            ->orderBy('timeout_at')
+            ->limit($limit)
+            ->get();
     }
 
     /**

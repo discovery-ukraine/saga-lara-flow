@@ -187,6 +187,20 @@ class SagaRunner
                 + ['cause' => $failed->exception];
         }
 
+        // A monitor-enforced expiration that rolled back lands in Expired, not Failed:
+        // same exception bookkeeping, but the run's own terminal status and event differ.
+        if ($finalState === FlowStatus::Expired) {
+            $flowRun->exception = $exception === [] ? null : $exception;
+
+            $flowRun->markExpired();
+
+            $this->lifecycle->flowExpired($flowRun);
+
+            app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
+
+            return;
+        }
+
         $flowRun->markFailed($exception === [] ? null : $exception);
 
         $this->lifecycle->flowFailedFromArray($flowRun, $primary);

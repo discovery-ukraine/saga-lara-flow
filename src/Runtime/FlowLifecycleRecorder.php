@@ -6,6 +6,7 @@ use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowCancelled;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowCompleted;
+use DiscoveryUkraine\SagaLaraFlow\Events\FlowExpired;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowFailed;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowResumed;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowStarted;
@@ -92,5 +93,22 @@ final readonly class FlowLifecycleRecorder
         $this->events->record($flowRun, FlowEventType::FlowCancelled, null, $flowRun);
 
         event(new FlowCancelled($flowRun));
+    }
+
+    /**
+     * Record a monitor-enforced expiration: the run's exception payload (already set
+     * by the time this is called) explains why it expired.
+     */
+    public function flowExpired(FlowRun $flowRun): void
+    {
+        $this->events->record(
+            $flowRun,
+            FlowEventType::FlowExpired,
+            null,
+            $flowRun,
+            $flowRun->exception !== null ? ['exception' => $flowRun->exception] : []
+        );
+
+        event(new FlowExpired($flowRun));
     }
 }

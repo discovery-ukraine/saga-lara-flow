@@ -3,6 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
 use Closure;
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Data\CompensationDefinition;
@@ -10,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -53,6 +55,8 @@ class ActionBuilder
     private bool $continueOnFailure = false;
 
     private mixed $fallbackValueOnFail = null;
+
+    private ?DateTimeInterface $expiresAt = null;
 
     /**
      * @param  array<int, mixed>  $arguments
@@ -102,6 +106,18 @@ class ActionBuilder
     public function fallbackValueOnFail(mixed $value): static
     {
         $this->fallbackValueOnFail = $value;
+
+        return $this;
+    }
+
+    /**
+     * Set a wall-clock deadline for this step. If the monitor finds it still
+     * pending/running past this instant it marks it Expired (§15); on replay an
+     * expired non-optional step fails the flow, an optional one returns its fallback.
+     */
+    public function expiresAt(?DateTimeInterface $expiresAt): static
+    {
+        $this->expiresAt = $expiresAt;
 
         return $this;
     }
@@ -173,6 +189,7 @@ class ActionBuilder
                     $this->arguments,
                     $hasCompensation,
                     $this->continueOnFailure,
+                    expiresAt: $this->expiresAt,
                 );
             } catch (Throwable $exception) {
                 // Optional step: no retries inline, so give up now — mark it
@@ -198,6 +215,7 @@ class ActionBuilder
             $this->arguments,
             $hasCompensation,
             $this->continueOnFailure,
+            $this->expiresAt,
         );
 
         $suspender->suspend('action', $sequence);
@@ -213,6 +231,15 @@ class ActionBuilder
                 return $this->resolveCompleted($step, $sequence);
             case ActionStatus::OptionalFailed:
                 return $this->resolveOptionalFailed($step, $sequence);
+            case ActionStatus::Expired:
+                // Monitor-enforced expiry. An optional step gives up gracefully
+                // (fallback); a required one surfaces the expiry as a business error.
+                if ($this->continueOnFailure) {
+                    return $this->resolveOptionalFailed($step, $sequence);
+                }
+
+                $this->resolveExpired($step, $sequence);
+                // no break — resolveExpired never returns.
             case ActionStatus::Failed:
                 // An optional step still has retries left: it is not yet
                 // OptionalFailed, so wait rather than surface a business error.
@@ -249,6 +276,20 @@ class ActionBuilder
         }
 
         throw ActionFailedException::forAction($this->actionClass, $sequence, $this->failureMessage($step));
+    }
+
+    /**
+     * Replay a required step the monitor expired: optionally register its
+     * compensation (opt-in, for non-atomic steps) then surface the expiry as a
+     * business error so the flow fails and rolls back.
+     */
+    private function resolveExpired(ActionRun $step, int $sequence): never
+    {
+        if ($this->shouldCompensateFailedStep()) {
+            $this->pushCompensation($step->id, $sequence);
+        }
+
+        throw FlowExpiredException::forAction($this->actionClass, $sequence);
     }
 
     /**

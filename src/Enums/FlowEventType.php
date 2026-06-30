@@ -18,6 +18,7 @@ enum FlowEventType: string
     case ActionCompleted = 'action.completed';
     case ActionFailed = 'action.failed';
     case ActionOptionalFailed = 'action.optional_failed';
+    case ActionExpired = 'action.expired';
 
     case SignalReceived = 'signal.received';
     case SignalConsumed = 'signal.consumed';

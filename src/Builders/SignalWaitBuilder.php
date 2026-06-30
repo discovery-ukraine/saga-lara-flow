@@ -11,22 +11,26 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalWaiter;
  * Fluent form of awaitSignal: $this->signal('name')->timeoutAfter($when)->wait().
  * Equivalent to $this->awaitSignal('name', timeout: $when).
  *
- * timeoutAfter() is accepted for API stability (§4) but is a no-op until the
- * monitor lands in Phase 8; it neither persists timeout_at nor expires the wait.
+ * timeoutAfter() persists a deadline on the wait-marker; the monitor times the wait
+ * out after it passes and wait() then throws AwaitSignalTimeoutException on replay (§15).
  */
-final readonly class SignalWaitBuilder
+final class SignalWaitBuilder
 {
+    private ?DateTimeInterface $timeout = null;
+
     public function __construct(
-        private FlowRuntime $runtime,
-        private string $name,
+        private readonly FlowRuntime $runtime,
+        private readonly string $name,
     ) {}
 
     /**
-     * Set a wait deadline. No-op placeholder until Phase 8 (monitor): the value is
-     * accepted for API stability (§4) but not yet persisted or enforced.
+     * Set a wait deadline. The monitor flips the wait-marker to TimedOut once it
+     * passes, and wait() surfaces AwaitSignalTimeoutException on the next replay.
      */
     public function timeoutAfter(?DateTimeInterface $timeout): SignalWaitBuilder
     {
+        $this->timeout = $timeout;
+
         return $this;
     }
 
@@ -35,6 +39,6 @@ final readonly class SignalWaitBuilder
      */
     public function wait(): mixed
     {
-        return app(SignalWaiter::class)->await($this->runtime, $this->name);
+        return app(SignalWaiter::class)->await($this->runtime, $this->name, $this->timeout);
     }
 }

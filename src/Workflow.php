@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Builders\ChildWorkflowBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\ParallelBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SagaBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Builders\SignalWaitBuilder;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
@@ -113,15 +114,17 @@ abstract class Workflow
      * signal already arrived it resolves inline, otherwise the flow suspends and
      * resumes when the signal is delivered. Replays return the same payload.
      *
-     * $timeout is accepted for API stability (§4) but is a no-op until Phase 8
-     * (monitor); it is neither persisted nor enforced yet.
+     * Passing $timeout persists a deadline on the wait-marker: once it passes the
+     * monitor times the wait out and this throws AwaitSignalTimeoutException on the
+     * next replay (catch it to react, or let it fail and roll back the flow) (§15).
      *
      * @throws HistoryContractMismatchException
+     * @throws AwaitSignalTimeoutException
      * @throws FlowSuspended
      */
     public function awaitSignal(string $name, ?DateTimeInterface $timeout = null): mixed
     {
-        return app(SignalWaiter::class)->await($this->runtime, $name);
+        return app(SignalWaiter::class)->await($this->runtime, $name, $timeout);
     }
 
     /**

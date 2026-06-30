@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
@@ -43,6 +44,7 @@ final readonly class ActionRecorder
         bool $hasCompensation = false,
         bool $continueOnFailure = false,
         ?int $parallelGroup = null,
+        ?DateTimeInterface $expiresAt = null,
     ): ActionRun {
         /** @var class-string<ActionRun> $model */
         $model = config('saga-lara-flow.models.action_run');
@@ -57,6 +59,7 @@ final readonly class ActionRecorder
             'has_compensation' => $hasCompensation,
             'continue_on_failure' => $continueOnFailure,
             'parallel_group' => $parallelGroup,
+            'expires_at' => $expiresAt,
             'arguments' => $this->serializer->serialize($arguments),
             'attempts' => 0,
         ]);
@@ -147,5 +150,29 @@ final readonly class ActionRecorder
         );
 
         event(new OptionalActionFailed($actionRun));
+    }
+
+    /**
+     * Mark a still-pending/running step Expired once its expires_at deadline passes
+     * (monitor, §15): record the expiry cause and append an action.expired event. On
+     * replay the seam treats Expired as a failure (or, for an optional step, as a
+     * give-up returning its fallback).
+     *
+     * @param  array<string, mixed>  $exception
+     */
+    public function expireAction(ActionRun $actionRun, array $exception): void
+    {
+        $actionRun->status = ActionStatus::Expired;
+        $actionRun->exception = $exception;
+        $actionRun->finished_at = Carbon::now();
+        $actionRun->save();
+
+        $this->events->record(
+            $actionRun->flowRun,
+            FlowEventType::ActionExpired,
+            $actionRun->sequence,
+            $actionRun,
+            ['exception' => $exception],
+        );
     }
 }

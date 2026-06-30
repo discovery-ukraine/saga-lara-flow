@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Concerns\ResolvesMethodDependencies;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
@@ -36,6 +37,7 @@ class ActionDispatcher
         array $arguments,
         bool $hasCompensation = false,
         bool $continueOnFailure = false,
+        ?DateTimeInterface $expiresAt = null,
     ): ActionRun {
         $actionRun = $this->recorder->scheduleAction(
             $flowRun,
@@ -44,6 +46,8 @@ class ActionDispatcher
             $arguments,
             $hasCompensation,
             $continueOnFailure,
+            null,
+            $expiresAt,
         );
 
         $job = RunActionJob::dispatch($actionRun->id, $actionClass);
@@ -78,6 +82,7 @@ class ActionDispatcher
         bool $hasCompensation = false,
         bool $continueOnFailure = false,
         ?int $parallelGroup = null,
+        ?DateTimeInterface $expiresAt = null,
     ): ActionRun {
         $actionRun = $this->recorder->scheduleAction(
             $run,
@@ -87,6 +92,7 @@ class ActionDispatcher
             $hasCompensation,
             $continueOnFailure,
             $parallelGroup,
+            $expiresAt,
         );
 
         $this->execute($actionRun);

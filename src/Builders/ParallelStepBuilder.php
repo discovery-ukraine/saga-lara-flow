@@ -3,6 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
 use Closure;
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Data\CompensationDefinition;
 use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
 use Throwable;
@@ -26,6 +27,8 @@ final class ParallelStepBuilder
     private bool $optional = false;
 
     private mixed $fallbackValueOnFail = null;
+
+    private ?DateTimeInterface $expiresAt = null;
 
     /**
      * @param  array<int, mixed>  $arguments
@@ -69,6 +72,16 @@ final class ParallelStepBuilder
     public function fallbackValueOnFail(mixed $value): self
     {
         $this->fallbackValueOnFail = $value;
+
+        return $this;
+    }
+
+    /**
+     * Set a wall-clock deadline for this step (see ActionBuilder::expiresAt()).
+     */
+    public function expiresAt(?DateTimeInterface $expiresAt): self
+    {
+        $this->expiresAt = $expiresAt;
 
         return $this;
     }
@@ -124,6 +137,11 @@ final class ParallelStepBuilder
     public function fallbackResult(): mixed
     {
         return $this->fallbackValueOnFail;
+    }
+
+    public function expiry(): ?DateTimeInterface
+    {
+        return $this->expiresAt;
     }
 
     public function compensation(): ?CompensationDefinition

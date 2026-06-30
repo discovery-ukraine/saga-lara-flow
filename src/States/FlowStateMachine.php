@@ -79,6 +79,7 @@ class FlowStateMachine implements StateMachine
             FlowStatus::Cancelling => [
                 FlowStatus::Cancelled,
                 FlowStatus::Failed,
+                FlowStatus::Expired,
             ],
             FlowStatus::Completed,
             FlowStatus::Failed,

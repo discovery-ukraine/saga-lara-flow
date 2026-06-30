@@ -2,9 +2,11 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
@@ -18,7 +20,9 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
  *
  * Signals are the special identity case (§6): a delivered signal carries no
  * sequence; an awaitSignal at ordinal S creates a wait-signal with wait_sequence
- * = S. Timeout is a no-op in this phase and arrives with the monitor (Phase 8).
+ * = S. A timeout deadline (awaitSignal(timeout:) / timeoutAfter()) is persisted on
+ * the wait-marker; the monitor flips it to TimedOut after the deadline, and the
+ * parked awaitSignal then resolves it by throwing AwaitSignalTimeoutException (§15).
  */
 readonly class SignalWaiter
 {
@@ -35,20 +39,26 @@ readonly class SignalWaiter
      * park and suspend.
      *
      * @throws HistoryContractMismatchException
+     * @throws AwaitSignalTimeoutException
      * @throws FlowSuspended
      */
-    public function await(FlowRuntime $runtime, string $name): mixed
+    public function await(FlowRuntime $runtime, string $name, ?DateTimeInterface $timeout = null): mixed
     {
         $flowRun = $runtime->run();
         $sequence = $runtime->nextSequence();
 
         $signal = $this->guard->expectSignal($flowRun->id, $sequence, $name);
 
-        // Compensation-only planning: replay a consumed signal, otherwise stop here
-        // (a not-yet-consumed signal is the live frontier).
+        // Compensation-only planning: replay a consumed signal, surface a timed-out
+        // one (so a catch-and-continue workflow still collects later steps), otherwise
+        // stop here (a not-yet-resolved signal is the live frontier).
         if ($runtime->isCollecting()) {
             if ($signal !== null && $signal->status === SignalStatus::Consumed) {
                 return $this->serializer->deserialize($signal->payload);
+            }
+
+            if ($signal !== null && $signal->status === SignalStatus::TimedOut) {
+                throw AwaitSignalTimeoutException::for($signal, $sequence);
             }
 
             $this->suspender->suspend('signal', $sequence);
@@ -60,7 +70,10 @@ readonly class SignalWaiter
                 SignalStatus::Consumed => $this->serializer->deserialize($signal->payload),
                 // Delivered into the signal since we parked: consume and move on.
                 SignalStatus::Received => $this->consume($flowRun, $signal, $sequence),
-                // Still parked (Waiting/TimedOut — timeout handling lands in Phase 8).
+                // The monitor timed the wait-marker out: surface a business error the
+                // workflow may catch, otherwise it fails the flow and rolls back.
+                SignalStatus::TimedOut => throw AwaitSignalTimeoutException::for($signal, $sequence),
+                // Still parked (Waiting): keep waiting.
                 default => $this->suspender->suspend('signal', $sequence),
             };
         }
@@ -72,8 +85,9 @@ readonly class SignalWaiter
             return $this->consume($flowRun, $pending, $sequence);
         }
 
-        // Nothing to resolve: park a wait-signal and suspend until a signal arrives.
-        $this->recorder->recordSignalWaiting($flowRun, $name, $sequence);
+        // Nothing to resolve: park a wait-signal (with its timeout deadline, if any)
+        // and suspend until a signal arrives or the monitor times it out.
+        $this->recorder->recordSignalWaiting($flowRun, $name, $sequence, $timeout);
 
         $this->suspender->suspend('signal', $sequence);
     }

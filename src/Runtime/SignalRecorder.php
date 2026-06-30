@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowSignalConsumed;
@@ -25,9 +26,16 @@ final readonly class SignalRecorder
      * its (flow_run_id, wait_sequence) ordinal. No flow_events row is written here
      * (there is no signal.waiting type); the flow-level FlowWaiting event records
      * the suspension and the signal row itself is visible via FlowRun::signals().
+     *
+     * A non-null $timeoutAt persists the awaitSignal(timeout:) / timeoutAfter()
+     * deadline so the monitor can later time the wait-marker out (§15).
      */
-    public function recordSignalWaiting(FlowRun $flowRun, string $name, int $sequence): FlowSignal
-    {
+    public function recordSignalWaiting(
+        FlowRun $flowRun,
+        string $name,
+        int $sequence,
+        ?DateTimeInterface $timeoutAt = null,
+    ): FlowSignal {
         $signal = $this->newSignal();
 
         $signal->fill([
@@ -35,6 +43,7 @@ final readonly class SignalRecorder
             'name' => $name,
             'status' => SignalStatus::Waiting,
             'wait_sequence' => $sequence,
+            'timeout_at' => $timeoutAt,
         ]);
 
         $signal->save();
@@ -105,6 +114,25 @@ final readonly class SignalRecorder
         event(new FlowSignalConsumed($signal));
 
         return $signal;
+    }
+
+    /**
+     * Time out a still-Waiting wait-marker (monitor, §15): flip it to TimedOut and
+     * append a signal.timed_out event. On replay the parked awaitSignal resolves it
+     * by throwing AwaitSignalTimeoutException. No Laravel event is dispatched (§11.3).
+     */
+    public function timeoutSignal(FlowSignal $signal): void
+    {
+        $signal->status = SignalStatus::TimedOut;
+        $signal->save();
+
+        $this->events->record(
+            $signal->flowRun,
+            FlowEventType::SignalTimedOut,
+            $signal->wait_sequence,
+            $signal,
+            ['name' => $signal->name],
+        );
     }
 
     private function emitSignalReceived(FlowRun $flowRun, FlowSignal $signal): void

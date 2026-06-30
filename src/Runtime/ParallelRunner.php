@@ -103,6 +103,7 @@ final readonly class ParallelRunner
                     $step->compensation() !== null,
                     $step->isOptional(),
                     $groupId,
+                    $step->expiry(),
                 );
             } catch (Throwable $exception) {
                 // Optional inline failure (no retries inline): give up now and keep going.
@@ -149,6 +150,7 @@ final readonly class ParallelRunner
                 $step->compensation() !== null,
                 $step->isOptional(),
                 $groupId,
+                $step->expiry(),
             );
 
             $jobs[] = new RunParallelActionJob($actionRun->id, $step->actionClass(), $policy);
@@ -219,8 +221,17 @@ final readonly class ParallelRunner
 
                     break;
                 case ActionStatus::Failed:
+                case ActionStatus::Expired:
                     if ($this->shouldCompensateFailedStep($step)) {
                         $this->pushCompensation($runtime, $step, $row, $sequence, $groupId);
+                    }
+
+                    // An expired (or failed) optional step gives up gracefully with its
+                    // fallback; a required one becomes the block's hard failure.
+                    if ($row->status === ActionStatus::Expired && $step->isOptional()) {
+                        $results[$index] = $step->fallbackResult();
+
+                        break;
                     }
 
                     $hardFailed ??= [

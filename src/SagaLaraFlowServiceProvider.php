@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowMonitorCommand;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
@@ -15,9 +16,12 @@ use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentFlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSideEffectRepository;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Serialization\LaravelSerializer;
 use DiscoveryUkraine\SagaLaraFlow\States\FlowStateMachine;
+use Illuminate\Queue\Events\Looping;
+use Illuminate\Support\Facades\Event;
 use Laravel\SerializableClosure\SerializableClosure;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
@@ -29,7 +33,8 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         $package
             ->name('saga-lara-flow')
             ->hasConfigFile()
-            ->hasMigration('create_saga_lara_flow_initial_tables');
+            ->hasMigration('create_saga_lara_flow_initial_tables')
+            ->hasCommand(FlowMonitorCommand::class);
     }
 
     public function packageRegistered(): void
@@ -39,6 +44,7 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
 
         $this->app->scoped(FlowRuntime::class);
         $this->app->singleton(FlowExecutor::class);
+        $this->app->singleton(FlowMonitor::class);
 
         $this->app->bind(StateMachine::class, FlowStateMachine::class);
         $this->app->bind(FlowRepository::class, EloquentFlowRepository::class);
@@ -53,6 +59,12 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
     {
         if (is_string($key = config('app.key')) && $key !== '') {
             SerializableClosure::setSecretKey($key);
+        }
+
+        // Opt-in: drive the monitor off the queue worker's idle loop, throttled in
+        // FlowMonitor. Off by default — prefer Schedule::command('saga-flow:monitor').
+        if (config('saga-lara-flow.monitor.queue_looping.enabled')) {
+            Event::listen(Looping::class, [FlowMonitor::class, 'onQueueLooping']);
         }
     }
 }
