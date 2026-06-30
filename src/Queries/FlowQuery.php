@@ -26,8 +26,7 @@ readonly class FlowQuery
      */
     public function __construct(
         private Builder $builder,
-    ) {
-    }
+    ) {}
 
     public function whereTag(string $key, ?string $value = null): static
     {
@@ -46,7 +45,7 @@ readonly class FlowQuery
     {
         $this->builder->whereIn(
             'status',
-            array_map(static fn(FlowStatus $status): string => $status->value, $statuses),
+            array_map(static fn (FlowStatus $status): string => $status->value, $statuses),
         );
 
         return $this;
@@ -123,7 +122,7 @@ readonly class FlowQuery
      */
     public function handles(): SupportCollection
     {
-        return $this->get()->map(static fn(FlowRun $run): FlowHandle => new FlowHandle($run));
+        return $this->get()->map(static fn (FlowRun $run): FlowHandle => new FlowHandle($run));
     }
 
     /**

@@ -35,7 +35,7 @@ class FlowSignalCommand extends Command
         if (is_string($raw = $this->option('payload')) && $raw !== '') {
             $decoded = json_decode($raw, true);
 
-            if (!is_array($decoded)) {
+            if (! is_array($decoded)) {
                 $this->error('Payload must be a JSON object or array.');
 
                 return self::FAILURE;

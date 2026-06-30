@@ -61,7 +61,7 @@ class FlowListCommand extends Command
 
         $this->table(
             ['ID', 'Workflow', 'Status', 'Created', 'Tags'],
-            $runs->map(fn(FlowRun $run): array => [
+            $runs->map(fn (FlowRun $run): array => [
                 $run->id,
                 class_basename($run->workflow_class),
                 $run->status->value,
