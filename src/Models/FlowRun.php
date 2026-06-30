@@ -32,6 +32,8 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $cancelled_at
  * @property int $repair_attempts
  * @property ?Carbon $repair_available_at
+ * @property ?Carbon $created_at
+ * @property ?Carbon $updated_at
  */
 class FlowRun extends Model
 {

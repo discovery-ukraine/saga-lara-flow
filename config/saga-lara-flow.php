@@ -126,6 +126,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Prune (saga-flow:prune)
+    |--------------------------------------------------------------------------
+    | Default retention window (in days) for old terminal runs. saga-flow:prune
+    | deletes runs created before now() minus this many days, together with all
+    | of their related rows. Override per invocation with --days / --before.
+    */
+    'prune' => [
+        'retention_days' => 90,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Signals
     |--------------------------------------------------------------------------
     */

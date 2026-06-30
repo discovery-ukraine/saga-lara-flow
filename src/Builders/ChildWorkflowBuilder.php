@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
+use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
 use Throwable;
 
 /**
@@ -33,7 +34,10 @@ class ChildWorkflowBuilder
         private readonly string $workflowClass,
         private readonly array $arguments,
     ) {
-        $this->closePolicy = config('saga-lara-flow.children.default_close_policy');
+        // Precedence: an explicit ->closePolicy() (below) wins; otherwise the
+        // child's #[ChildPolicy] attribute, then the configured default.
+        $this->closePolicy = app(AttributeReader::class)->childPolicy($workflowClass)
+            ?? config('saga-lara-flow.children.default_close_policy');
     }
 
     public function closePolicy(ChildClosePolicy $policy): static

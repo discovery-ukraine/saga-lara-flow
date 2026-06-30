@@ -1,0 +1,17 @@
+<?php
+
+namespace {{ namespace }};
+
+use DiscoveryUkraine\SagaLaraFlow\Workflow;
+
+class {{ class }} extends Workflow
+{
+    /**
+     * Author the deterministic workflow here. Wrap any nondeterminism in
+     * $this->sideEffect(); drive steps with $this->action(...)->run().
+     */
+    public function handle(): void
+    {
+        // $this->action(\App\Actions\ExampleAction::class)->run();
+    }
+}

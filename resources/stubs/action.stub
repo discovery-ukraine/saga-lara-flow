@@ -1,0 +1,17 @@
+<?php
+
+namespace {{ namespace }};
+
+use DiscoveryUkraine\SagaLaraFlow\Action;
+
+class {{ class }} extends Action
+{
+    /**
+     * Perform the action's work and return a serializable result. Dependencies
+     * may be type-hinted on the constructor or on handle().
+     */
+    public function handle(): mixed
+    {
+        return null;
+    }
+}

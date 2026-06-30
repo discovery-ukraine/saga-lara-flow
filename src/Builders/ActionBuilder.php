@@ -21,6 +21,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\CompensationEntry;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowSuspender;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\HistoryContractGuard;
+use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
 use Throwable;
 
 /**
@@ -52,7 +53,7 @@ class ActionBuilder
 
     private ?bool $groupCompensateOnSelfFailure = null;
 
-    private bool $continueOnFailure = false;
+    private ?bool $continueOnFailure = null;
 
     private mixed $fallbackValueOnFail = null;
 
@@ -179,6 +180,9 @@ class ActionBuilder
         $dispatcher = app(ActionDispatcher::class);
 
         $hasCompensation = $this->compensation !== null;
+        $continueOnFailure = $this->resolvedContinueOnFailure();
+        $expiresAt = $this->resolvedExpiresAt();
+        $actionName = $this->resolvedActionName();
 
         if ($this->runtime->mode() === RunMode::Sync) {
             try {
@@ -188,13 +192,14 @@ class ActionBuilder
                     $this->actionClass,
                     $this->arguments,
                     $hasCompensation,
-                    $this->continueOnFailure,
-                    expiresAt: $this->expiresAt,
+                    $continueOnFailure,
+                    expiresAt: $expiresAt,
+                    actionName: $actionName,
                 );
             } catch (Throwable $exception) {
                 // Optional step: no retries inline, so give up now — mark it
                 // OptionalFailed and replay so the seam resolves the fallback.
-                if ($this->continueOnFailure) {
+                if ($continueOnFailure) {
                     $this->markOptionalFailed($flowRun->id, $sequence);
 
                     $suspender->suspendInline('action', $sequence);
@@ -214,8 +219,9 @@ class ActionBuilder
             $this->actionClass,
             $this->arguments,
             $hasCompensation,
-            $this->continueOnFailure,
-            $this->expiresAt,
+            $continueOnFailure,
+            $expiresAt,
+            $actionName,
         );
 
         $suspender->suspend('action', $sequence);
@@ -234,7 +240,7 @@ class ActionBuilder
             case ActionStatus::Expired:
                 // Monitor-enforced expiry. An optional step gives up gracefully
                 // (fallback); a required one surfaces the expiry as a business error.
-                if ($this->continueOnFailure) {
+                if ($this->resolvedContinueOnFailure()) {
                     return $this->resolveOptionalFailed($step, $sequence);
                 }
 
@@ -243,7 +249,7 @@ class ActionBuilder
             case ActionStatus::Failed:
                 // An optional step still has retries left: it is not yet
                 // OptionalFailed, so wait rather than surface a business error.
-                if ($this->continueOnFailure) {
+                if ($this->resolvedContinueOnFailure()) {
                     app(FlowSuspender::class)->suspend('action', $sequence);
                 }
 
@@ -358,6 +364,44 @@ class ActionBuilder
         return $this->compensateOnSelfFailure
             ?? $this->groupCompensateOnSelfFailure
             ?? (bool) config('saga-lara-flow.sagas.compensate_failed_step');
+    }
+
+    /**
+     * Resolve whether this is an optional step: an explicit ->continueOnFailure()
+     * wins; otherwise fall back to the action's #[ContinueOnFailure] attribute,
+     * then to required (precedence: explicit call > attribute).
+     */
+    private function resolvedContinueOnFailure(): bool
+    {
+        return $this->continueOnFailure
+            ?? app(AttributeReader::class)->action($this->actionClass)->continueOnFailure
+            ?? false;
+    }
+
+    /**
+     * Resolve the step's wall-clock deadline: an explicit ->expiresAt() wins;
+     * otherwise the action's #[ActionTimeout] seconds from now (precedence:
+     * explicit call > attribute). The recorder still applies the config default
+     * when this is null.
+     */
+    private function resolvedExpiresAt(): ?DateTimeInterface
+    {
+        if ($this->expiresAt !== null) {
+            return $this->expiresAt;
+        }
+
+        $seconds = app(AttributeReader::class)->action($this->actionClass)->timeoutSeconds;
+
+        return $seconds === null ? null : now()->addSeconds($seconds);
+    }
+
+    /**
+     * Resolve the step's display name from its #[ActionName] attribute (null when
+     * absent — the row then falls back to the class basename for display).
+     */
+    private function resolvedActionName(): ?string
+    {
+        return app(AttributeReader::class)->action($this->actionClass)->name;
     }
 
     private function failureMessage(ActionRun $step): string

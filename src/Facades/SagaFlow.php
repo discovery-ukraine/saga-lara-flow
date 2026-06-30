@@ -6,14 +6,15 @@ use DiscoveryUkraine\SagaLaraFlow\Builders\CreateWorkflowBuilder;
 use DiscoveryUkraine\SagaLaraFlow\FlowHandle;
 use DiscoveryUkraine\SagaLaraFlow\FlowManager;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
-use Illuminate\Database\Eloquent\Builder;
+use DiscoveryUkraine\SagaLaraFlow\Queries\FlowQuery;
 use Illuminate\Support\Facades\Facade;
 
 /**
  * @method static CreateWorkflowBuilder create(string $workflowClass)
  * @method static FlowRun|null findRun(string $id)
  * @method static FlowHandle loadFlow(string $id)
- * @method static Builder query()
+ * @method static FlowQuery query()
+ * @method static FlowRun kick(string $id)
  *
  * @see FlowManager
  */

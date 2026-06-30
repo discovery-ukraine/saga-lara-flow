@@ -5,16 +5,19 @@ namespace DiscoveryUkraine\SagaLaraFlow;
 use DiscoveryUkraine\SagaLaraFlow\Builders\CreateWorkflowBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Queries\FlowQuery;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
-use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Traits\Macroable;
 
-readonly class FlowManager
+class FlowManager
 {
+    use Macroable;
+
     public function __construct(
-        private FlowRepository $repository,
-        private FlowExecutor $executor,
-        private FlowDoctor $doctor,
+        private readonly FlowRepository $repository,
+        private readonly FlowExecutor $executor,
+        private readonly FlowDoctor $doctor,
     ) {}
 
     public function create(string $workflowClass): CreateWorkflowBuilder
@@ -32,9 +35,12 @@ readonly class FlowManager
         return new FlowHandle($this->repository->findOrFail($id));
     }
 
-    public function query(): Builder
+    public function query(): FlowQuery
     {
-        return config('saga-lara-flow.models.flow_run')::query();
+        /** @var class-string<FlowRun> $model */
+        $model = config('saga-lara-flow.models.flow_run');
+
+        return new FlowQuery($model::query());
     }
 
     /**

@@ -46,6 +46,7 @@ final readonly class ActionRecorder
         bool $continueOnFailure = false,
         ?int $parallelGroup = null,
         ?DateTimeInterface $expiresAt = null,
+        ?string $actionName = null,
     ): ActionRun {
         /** @var class-string<ActionRun> $model */
         $model = config('saga-lara-flow.models.action_run');
@@ -56,6 +57,7 @@ final readonly class ActionRecorder
             'flow_run_id' => $flowRun->id,
             'sequence' => $sequence,
             'action_class' => $actionClass,
+            'action_name' => $actionName,
             'status' => ActionStatus::Pending,
             'has_compensation' => $hasCompensation,
             'continue_on_failure' => $continueOnFailure,

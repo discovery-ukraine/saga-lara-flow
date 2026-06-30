@@ -10,6 +10,8 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\WorkflowClassMissingException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
+use DiscoveryUkraine\SagaLaraFlow\Support\WorkflowAttributes;
 use Throwable;
 
 class CreateWorkflowBuilder
@@ -122,15 +124,25 @@ class CreateWorkflowBuilder
 
     private function persist(): FlowRun
     {
+        $attributes = app(AttributeReader::class)->workflow($this->workflowClass);
+
         return $this->repository->create([
             'workflow_class' => $this->workflowClass,
-            'workflow_version' => $this->version,
+            'workflow_name' => $attributes->name,
+            'workflow_version' => $this->version ?? $attributes->version,
             'status' => FlowStatus::Pending,
             'arguments' => $this->arguments,
-            'connection' => $this->connection ?? config('saga-lara-flow.queue.connection'),
-            'queue' => $this->queue ?? config('saga-lara-flow.queue.queue'),
-            'expires_at' => $this->expiresAt ?? $this->defaultExpiry(),
-        ], $this->normalizedTags());
+            'connection' => $this->connection ?? $attributes->connection ?? config('saga-lara-flow.queue.connection'),
+            'queue' => $this->queue ?? $attributes->queue ?? config('saga-lara-flow.queue.queue'),
+            'expires_at' => $this->expiresAt ?? $this->attributeExpiry($attributes) ?? $this->defaultExpiry(),
+        ], $this->normalizedTags($attributes));
+    }
+
+    private function attributeExpiry(WorkflowAttributes $attributes): ?DateTimeInterface
+    {
+        return $attributes->timeoutSeconds === null
+            ? null
+            : now()->addSeconds($attributes->timeoutSeconds);
     }
 
     private function defaultExpiry(): ?DateTimeInterface
@@ -141,17 +153,27 @@ class CreateWorkflowBuilder
     }
 
     /**
+     * Merge attribute-declared tags with the builder's explicit tags. An explicit
+     * tag with the same key overrides the attribute's value (precedence).
+     *
      * @return array<int, array{key: string, value: ?string}>
      */
-    private function normalizedTags(): array
+    private function normalizedTags(WorkflowAttributes $attributes): array
     {
-        $normalized = [];
+        $merged = [];
+
+        foreach ($attributes->tags as $tag) {
+            $merged[$tag['key']] = $tag['value'];
+        }
 
         foreach ($this->tags as $key => $value) {
-            $normalized[] = [
-                'key' => (string) $key,
-                'value' => $value === null ? null : (string) $value,
-            ];
+            $merged[(string) $key] = $value === null ? null : (string) $value;
+        }
+
+        $normalized = [];
+
+        foreach ($merged as $key => $value) {
+            $normalized[] = ['key' => (string) $key, 'value' => $value];
         }
 
         return $normalized;

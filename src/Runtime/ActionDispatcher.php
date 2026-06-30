@@ -38,6 +38,7 @@ class ActionDispatcher
         bool $hasCompensation = false,
         bool $continueOnFailure = false,
         ?DateTimeInterface $expiresAt = null,
+        ?string $actionName = null,
     ): ActionRun {
         $actionRun = $this->recorder->scheduleAction(
             $flowRun,
@@ -48,6 +49,7 @@ class ActionDispatcher
             $continueOnFailure,
             null,
             $expiresAt,
+            $actionName,
         );
 
         $job = RunActionJob::dispatch($actionRun->id, $actionClass);
@@ -83,6 +85,7 @@ class ActionDispatcher
         bool $continueOnFailure = false,
         ?int $parallelGroup = null,
         ?DateTimeInterface $expiresAt = null,
+        ?string $actionName = null,
     ): ActionRun {
         $actionRun = $this->recorder->scheduleAction(
             $run,
@@ -93,6 +96,7 @@ class ActionDispatcher
             $continueOnFailure,
             $parallelGroup,
             $expiresAt,
+            $actionName,
         );
 
         $this->execute($actionRun);

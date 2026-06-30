@@ -2,9 +2,16 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowCancelCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowKickCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowListCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowMonitorCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowPruneCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowRepairCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowShowCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowSignalCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\MakeActionCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\MakeWorkflowCommand;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
@@ -38,6 +45,13 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
             ->hasConfigFile()
             ->hasMigration('create_saga_lara_flow_initial_tables')
             ->hasCommands([
+                MakeWorkflowCommand::class,
+                MakeActionCommand::class,
+                FlowListCommand::class,
+                FlowShowCommand::class,
+                FlowCancelCommand::class,
+                FlowSignalCommand::class,
+                FlowPruneCommand::class,
                 FlowMonitorCommand::class,
                 FlowRepairCommand::class,
                 FlowKickCommand::class,
