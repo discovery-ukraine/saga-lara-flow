@@ -39,8 +39,7 @@ class FlowExecutor
         private readonly Serializer $serializer,
         private readonly CompensationRecorder $compensationRecorder,
         private readonly SagaRunner $sagaRunner,
-    ) {
-    }
+    ) {}
 
     /**
      * @throws Throwable

@@ -33,7 +33,7 @@ class CreateWorkflowBuilder
         private readonly FlowRepository $repository,
         private readonly FlowExecutor $executor,
     ) {
-        if (!class_exists($this->workflowClass)) {
+        if (! class_exists($this->workflowClass)) {
             throw WorkflowClassMissingException::for($this->workflowClass);
         }
     }

@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Events\FlowCompleted;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowExpired;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowFailed;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowResumed;
+use DiscoveryUkraine\SagaLaraFlow\Events\FlowRewoken;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowStarted;
 use DiscoveryUkraine\SagaLaraFlow\Events\FlowWaiting;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowException;
@@ -86,6 +87,21 @@ final readonly class FlowLifecycleRecorder
         $message = is_string($exception['message'] ?? null) ? $exception['message'] : 'flow failed';
 
         event(new FlowFailed($flowRun, new FlowException($message)));
+    }
+
+    /**
+     * Record the doctor re-waking a flow (§15, Phase 8.2): an automatic re-wake of a
+     * stuck Waiting run (reason "lost_resume") or a manual saga-flow:kick (reason
+     * "manual"). The run is only re-driven, never mutated here, so this is a marker
+     * event that makes the intervention visible in history.
+     */
+    public function flowRewoken(FlowRun $flowRun, string $reason): void
+    {
+        $this->events->record($flowRun, FlowEventType::FlowRewoken, null, $flowRun, [
+            'reason' => $reason,
+        ]);
+
+        event(new FlowRewoken($flowRun, $reason));
     }
 
     public function flowCancelled(FlowRun $flowRun): void

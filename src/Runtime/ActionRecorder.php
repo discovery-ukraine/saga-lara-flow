@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionCompleted;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
+use DiscoveryUkraine\SagaLaraFlow\Events\ActionRedispatched;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionStarted;
 use DiscoveryUkraine\SagaLaraFlow\Events\OptionalActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -27,8 +28,7 @@ final readonly class ActionRecorder
     public function __construct(
         private EventLog $events,
         private Serializer $serializer,
-    ) {
-    }
+    ) {}
 
     /**
      * Create the pending ActionRun for a scheduled step. The arguments are
@@ -79,6 +79,23 @@ final readonly class ActionRecorder
         $seconds = config('saga-lara-flow.monitor.expiration.defaults.action');
 
         return $seconds === null ? null : Carbon::now()->addSeconds((int) $seconds);
+    }
+
+    /**
+     * Record the doctor re-dispatching a stuck Pending action (§15, Phase 8.2). The
+     * action keeps its status/sequence — only a fresh RunActionJob is sent — so an
+     * action.redispatched event is appended for visibility without altering history.
+     */
+    public function actionRedispatched(ActionRun $actionRun): void
+    {
+        $this->events->record(
+            $actionRun->flowRun,
+            FlowEventType::ActionRedispatched,
+            $actionRun->sequence,
+            $actionRun
+        );
+
+        event(new ActionRedispatched($actionRun));
     }
 
     public function startAction(ActionRun $actionRun): void

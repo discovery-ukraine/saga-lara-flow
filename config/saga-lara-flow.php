@@ -94,6 +94,38 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Repair / doctor (recover progress lost to a dropped job)
+    |--------------------------------------------------------------------------
+    | A separate mechanism from the expiration monitor above: it recovers a flow
+    | whose progress was lost to a dropped job (an action that never ran, a resume
+    | that never fired), not one that hit a deadline. Opt-in and configured,
+    | scheduled (saga-flow:repair), and looped independently of the monitor. It
+    | only ever re-dispatches existing jobs or re-wakes flows (replay decides),
+    | never creating duplicate work or mutating a business result.
+    */
+    'repair' => [
+        'enabled' => false,
+
+        // Minimum age (seconds) before an entity is considered stuck — guards
+        // against racing a job that is simply still in flight.
+        'grace_seconds' => 60,
+        'batch_size' => 100,
+
+        // Per-entity cap: after this many repair attempts the doctor leaves the
+        // entity alone (use saga-flow:kick to re-drive it manually).
+        'max_attempts' => 10,
+
+        // Exponential backoff between repair attempts for one entity.
+        'backoff' => ['base_seconds' => 10, 'max_seconds' => 300],
+
+        'redispatch_actions' => true, // R1: re-dispatch stuck sequential Pending actions
+        'wake_waiting' => true,       // R2: re-wake stuck Waiting flows
+
+        'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Signals
     |--------------------------------------------------------------------------
     */

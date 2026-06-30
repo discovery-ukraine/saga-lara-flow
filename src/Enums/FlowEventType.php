@@ -12,6 +12,7 @@ enum FlowEventType: string
     case FlowFailed = 'flow.failed';
     case FlowCancelled = 'flow.cancelled';
     case FlowExpired = 'flow.expired';
+    case FlowRewoken = 'flow.rewoken';
 
     case ActionScheduled = 'action.scheduled';
     case ActionStarted = 'action.started';
@@ -19,6 +20,7 @@ enum FlowEventType: string
     case ActionFailed = 'action.failed';
     case ActionOptionalFailed = 'action.optional_failed';
     case ActionExpired = 'action.expired';
+    case ActionRedispatched = 'action.redispatched';
 
     case SignalReceived = 'signal.received';
     case SignalConsumed = 'signal.consumed';

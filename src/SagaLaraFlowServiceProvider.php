@@ -2,7 +2,9 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowKickCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowMonitorCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowRepairCommand;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
@@ -15,6 +17,7 @@ use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentFlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentFlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSideEffectRepository;
 use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSignalRepository;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
@@ -34,7 +37,11 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
             ->name('saga-lara-flow')
             ->hasConfigFile()
             ->hasMigration('create_saga_lara_flow_initial_tables')
-            ->hasCommand(FlowMonitorCommand::class);
+            ->hasCommands([
+                FlowMonitorCommand::class,
+                FlowRepairCommand::class,
+                FlowKickCommand::class,
+            ]);
     }
 
     public function packageRegistered(): void
@@ -45,6 +52,7 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         $this->app->scoped(FlowRuntime::class);
         $this->app->singleton(FlowExecutor::class);
         $this->app->singleton(FlowMonitor::class);
+        $this->app->singleton(FlowDoctor::class);
 
         $this->app->bind(StateMachine::class, FlowStateMachine::class);
         $this->app->bind(FlowRepository::class, EloquentFlowRepository::class);
@@ -65,6 +73,13 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         // FlowMonitor. Off by default — prefer Schedule::command('saga-flow:monitor').
         if (config('saga-lara-flow.monitor.queue_looping.enabled')) {
             Event::listen(Looping::class, [FlowMonitor::class, 'onQueueLooping']);
+        }
+
+        // Opt-in: drive the doctor's repair pass off the queue worker's idle loop,
+        // throttled independently of the expiration sweep. Off by default — prefer
+        // Schedule::command('saga-flow:repair').
+        if (config('saga-lara-flow.repair.queue_looping.enabled')) {
+            Event::listen(Looping::class, [FlowDoctor::class, 'onQueueLooping']);
         }
     }
 }

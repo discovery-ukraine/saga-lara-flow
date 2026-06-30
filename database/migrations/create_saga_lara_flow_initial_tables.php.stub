@@ -31,9 +31,12 @@ return new class extends Migration
             $table->timestamp('finished_at')->nullable();
             $table->timestamp('expires_at')->nullable();
             $table->timestamp('cancelled_at')->nullable();
+            $table->unsignedInteger('repair_attempts')->default(0);
+            $table->timestamp('repair_available_at')->nullable();
             $table->timestamps();
 
             $table->index(['status', 'expires_at']);
+            $table->index(['status', 'repair_available_at']);
             $table->index(['workflow_class', 'status']);
         });
 
@@ -54,6 +57,8 @@ return new class extends Migration
             $table->timestamp('started_at')->nullable();
             $table->timestamp('finished_at')->nullable();
             $table->timestamp('expires_at')->nullable();
+            $table->unsignedInteger('repair_attempts')->default(0);
+            $table->timestamp('repair_available_at')->nullable();
             $table->timestamps();
 
             $table->unique(['flow_run_id', 'sequence']);

@@ -30,6 +30,8 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $finished_at
  * @property ?Carbon $expires_at
  * @property ?Carbon $cancelled_at
+ * @property int $repair_attempts
+ * @property ?Carbon $repair_available_at
  */
 class FlowRun extends Model
 {
@@ -53,6 +55,8 @@ class FlowRun extends Model
             'finished_at' => 'datetime',
             'expires_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'repair_attempts' => 'integer',
+            'repair_available_at' => 'datetime',
         ];
     }
 

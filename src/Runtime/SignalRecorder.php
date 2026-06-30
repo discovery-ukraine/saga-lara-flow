@@ -19,8 +19,7 @@ final readonly class SignalRecorder
 {
     public function __construct(
         private EventLog $events,
-    ) {
-    }
+    ) {}
 
     /**
      * Park the flow on an unmatched awaitSignal: persist a Waiting wait-signal at

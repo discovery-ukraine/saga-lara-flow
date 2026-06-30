@@ -28,6 +28,25 @@ class EloquentActionRunRepository implements ActionRunRepository
             ->get();
     }
 
+    public function dueForRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable
+    {
+        $now = Carbon::now();
+
+        return $this->model()::query()
+            ->where('status', ActionStatus::Pending)
+            ->whereNull('parallel_group')
+            ->where('created_at', '<=', $now->copy()->subSeconds($graceSeconds))
+            ->where('repair_attempts', '<', $maxAttempts)
+            ->where(function ($query) use ($now): void {
+                $query
+                    ->whereNull('repair_available_at')
+                    ->orWhere('repair_available_at', '<=', $now);
+            })
+            ->orderBy('created_at')
+            ->limit($limit)
+            ->get();
+    }
+
     /**
      * @return class-string<ActionRun>
      */

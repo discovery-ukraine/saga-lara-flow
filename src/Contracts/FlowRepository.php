@@ -29,4 +29,14 @@ interface FlowRepository
      * @return iterable<int, FlowRun>
      */
     public function dueForExpiration(int $limit): iterable;
+
+    /**
+     * Waiting runs older than the grace window with no in-flight blocker (no
+     * Pending/Running action and no Waiting signal) whose repair window is open and
+     * attempts are not exhausted, oldest first, capped at $limit. Used by the doctor
+     * to re-wake a flow whose resume was lost — replay then decides.
+     *
+     * @return iterable<int, FlowRun>
+     */
+    public function dueForRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
 }
