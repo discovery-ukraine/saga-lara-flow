@@ -28,9 +28,14 @@ _ide_helper_models.php
 phpunit.xml
 phpstan.neon
 testbench.yaml
-/docs
 /coverage
 
-# Documentation
+# Documentation site (Docusaurus lives in /docs; only the working notes + build output are ignored)
+docs/NOTES.md
+docs/node_modules
+docs/build
+docs/.docusaurus
+
+# Private working docs (not shipped)
 CLAUDE.md
 IMPLEMENTATION_PLAN.md
