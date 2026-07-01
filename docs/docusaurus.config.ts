@@ -60,21 +60,6 @@ const config: Config = {
     ],
   ],
 
-  themes: [
-    [
-      // Offline/local search that works on a static GitHub Pages host — no server.
-      // Swap to Algolia DocSearch (see the commented themeConfig.algolia block below)
-      // once the DocSearch application is approved for sagalaraflow.dev.
-      require.resolve('@easyops-cn/docusaurus-search-local'),
-      {
-        hashed: true,
-        indexBlog: false,
-        docsRouteBasePath: '/',
-        highlightSearchTermsOnTargetPage: true,
-      },
-    ],
-  ],
-
   themeConfig: {
     colorMode: {
       respectPrefersColorScheme: true,
@@ -136,13 +121,14 @@ const config: Config = {
       darkTheme: prismThemes.dracula,
       additionalLanguages: ['php', 'bash', 'json'],
     },
-    // Enable after Algolia DocSearch approval, then remove the local-search theme above.
-    // algolia: {
-    //   appId: 'YOUR_APP_ID',
-    //   apiKey: 'YOUR_SEARCH_API_KEY',
-    //   indexName: 'sagalaraflow',
-    //   contextualSearch: true,
-    // },
+    // Algolia DocSearch. The theme ships with @docusaurus/preset-classic; these
+    // search-only credentials are public and safe to commit.
+    algolia: {
+      appId: '2YEHAVUPG4',
+      apiKey: '1e59466ea36b1021b5921b302a794504',
+      indexName: 'Saga Lara Flow Docs (GH)',
+      contextualSearch: true,
+    },
   } satisfies Preset.ThemeConfig,
 };
 

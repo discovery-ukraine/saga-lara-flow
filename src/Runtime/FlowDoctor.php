@@ -64,13 +64,13 @@ final readonly class FlowDoctor
         $rewokenFlows = 0;
         $skipped = 0;
 
-        if (config('saga-lara-flow.repair.redispatch_actions')) {
+        if (config('saga-lara-flow.repair.redispatch_lost_actions')) {
             foreach ($this->actionRunRepository->dueForRepair($limit, $grace, $maxAttempts) as $action) {
                 $this->redispatchAction($action, $maxAttempts) ? $redispatchedActions++ : $skipped++;
             }
         }
 
-        if (config('saga-lara-flow.repair.wake_waiting')) {
+        if (config('saga-lara-flow.repair.wake_stuck_flows')) {
             foreach ($this->flowRepository->dueForRepair($limit, $grace, $maxAttempts) as $run) {
                 $this->wakeWaiting($run, $maxAttempts) ? $rewokenFlows++ : $skipped++;
             }

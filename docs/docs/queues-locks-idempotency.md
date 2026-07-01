@@ -16,10 +16,26 @@ suspension point (a signal wait, a queued action). Each operation is identified 
 
 ## Idempotency
 
-Because every operation is keyed by `sequence` and side effects are recorded once, **re-driving a run
-reproduces the same final state**. A job delivered twice, a worker that restarts mid-flight, a
-manual `kick` — none of them double-charge a card or double-ship an order, because the already-run
-step is reused from history rather than executed again.
+The engine guarantees one thing precisely: a step that has **completed and recorded its result** is
+never executed again. On any re-drive — a job delivered twice, a worker that restarts mid-flight, a
+manual `kick` — that step's stored result is reused from history instead of being re-run, keyed by
+`(flow_run_id, sequence)`. In that sense, re-driving a run converges to the same final state.
+
+:::caution This is not automatic end-to-end idempotency
+The guarantee covers **recorded** steps only — it does **not** make the work *inside* an action
+idempotent. If a job hangs, is retried by the queue, or dies *after* performing its external effect
+(charging a card, calling an API) but *before* recording its result and waking the flow, that effect
+can happen more than once. The engine will happily reuse a step once it is recorded, but it cannot
+un-charge a card that was charged by a job that never got to write its result.
+
+So end-to-end idempotency depends on **your action code**. Make each action safe to retry:
+
+- Use an idempotency key (many payment/HTTP APIs accept one) so the provider deduplicates.
+- Prefer upserts / conditional writes over blind inserts.
+- Check whether the effect already happened before repeating it.
+
+The `(flow_run_id, sequence)` pair is a natural, stable idempotency key to hand to downstream systems.
+:::
 
 ## Locks
 
@@ -35,10 +51,17 @@ Concurrent drives of the *same* run are serialized by Laravel's `WithoutOverlapp
 ],
 ```
 
-This guarantees that two workers can't advance one run at the same time. TTLs bound how long a lock
-is held if a worker dies; `block_seconds` is how long a competing job waits for the lock before
-giving up and letting the queue retry it. Set `store` to a dedicated cache store if you want the
-locks isolated from your app cache.
+This guarantees that two workers can't advance one run at the same time. Each parameter:
+
+- **`enabled`** — turn the `WithoutOverlapping` middleware on or off.
+- **`store`** — cache store backing the locks (`null` = the app default). Point it at a dedicated
+  store to isolate the locks from your app cache.
+- **`workflow_ttl_seconds`** / **`action_ttl_seconds`** — **in seconds**. The maximum time a lock is
+  held before it auto-expires, so a worker that dies mid-drive can't wedge a run forever. Set them
+  comfortably above your longest workflow/action runtime.
+- **`block_seconds`** — **in seconds**. How long a competing job waits to acquire the lock before
+  giving up and letting the queue retry it later.
+- **`prefix`** — string prefix for every lock key (namespacing when the store is shared).
 
 ## Determinism is the contract
 

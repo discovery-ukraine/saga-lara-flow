@@ -118,8 +118,10 @@ return [
         // Exponential backoff between repair attempts for one entity.
         'backoff' => ['base_seconds' => 10, 'max_seconds' => 300],
 
-        'redispatch_actions' => true, // R1: re-dispatch stuck sequential Pending actions
-        'wake_waiting' => true,       // R2: re-wake stuck Waiting flows
+        // R1: re-dispatch stuck sequential Pending actions whose queue job was lost.
+        'redispatch_lost_actions' => true,
+        // R2: re-wake flows stuck in the Waiting status after a resume that never fired.
+        'wake_stuck_flows' => true,
 
         'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],
     ],

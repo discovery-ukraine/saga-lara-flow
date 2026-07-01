@@ -10,8 +10,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/discovery-ukraine/saga-lara-flow.svg?style=flat-square)](https://packagist.org/packages/discovery-ukraine/saga-lara-flow)
 [![Tests](https://img.shields.io/github/actions/workflow/status/discovery-ukraine/saga-lara-flow/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/discovery-ukraine/saga-lara-flow/actions/workflows/run-tests.yml)
 [![PHPStan](https://img.shields.io/github/actions/workflow/status/discovery-ukraine/saga-lara-flow/phpstan.yml?branch=main&label=phpstan&style=flat-square)](https://github.com/discovery-ukraine/saga-lara-flow/actions/workflows/phpstan.yml)
-
-[//]: # ([![Total Downloads]&#40;https://img.shields.io/packagist/dt/discovery-ukraine/saga-lara-flow.svg?style=flat-square&#41;]&#40;https://packagist.org/packages/discovery-ukraine/saga-lara-flow&#41;)
+[![Total Downloads](https://img.shields.io/packagist/dt/discovery-ukraine/saga-lara-flow.svg?style=flat-square)](https://packagist.org/packages/discovery-ukraine/saga-lara-flow)
 
 </div>
 
@@ -124,7 +123,8 @@ Every setting lives in `config/saga-lara-flow.php`. The most common ones:
 - **Queue.** `queue.connection` / `queue.queue` control where workflow and action jobs run;
   `queue.after_commit` dispatches after the surrounding DB transaction commits.
 - **Locks.** `locks.*` configure the `WithoutOverlapping` middleware that serializes concurrent
-  drives of a single run (idempotency guard).
+  drives of a single run. `workflow_ttl_seconds` / `action_ttl_seconds` / `block_seconds` are in
+  seconds. See [Queues, locks & idempotency](#queues-locks--idempotency).
 - **Monitor.** `monitor.expiration.defaults` set implicit deadlines (seconds) for `run` / `action` /
   `signal` — `null` means no default. See [Expiration & monitoring](#expiration--monitoring).
 - **Sagas / parallel / children.** Default compensation, failure, and close policies.
@@ -452,18 +452,27 @@ Schedule::command('saga-flow:monitor')->everyMinute();
 always-on workers.
 
 For runs whose progress was lost to a *dropped job* (rather than a deadline), the **doctor** can
-re-dispatch missing actions and re-wake stuck waits — enable `repair.enabled` and schedule
-`saga-flow:repair`, or kick a single run manually with `saga-flow:kick {run}` /
-`SagaFlow::kick($id)`.
+re-dispatch missing actions (`repair.redispatch_lost_actions`) and re-wake stuck waits
+(`repair.wake_stuck_flows`) — enable `repair.enabled` and either schedule `saga-flow:repair` or loop
+it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
+`saga-flow:kick {run}` / `SagaFlow::kick($id)`. Each config key is documented in
+[Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
 ## Queues, locks & idempotency
 
 Every workflow and action runs as a queued job on the configured connection/queue. A run is driven
 by replaying `handle()` from the recorded history; each operation is identified by a deterministic
-`(flow_run_id, sequence)` pair, so a step that already ran is never repeated — it is reused from
-history. The `WithoutOverlapping` locks (`locks.*`) serialize concurrent drives of the same run so
-two workers can't advance it at once. Because side effects are recorded and actions are keyed by
-sequence, replay is **idempotent**: re-driving a run reproduces the same final state.
+`(flow_run_id, sequence)` pair, so a step that has **completed and recorded its result** is never
+repeated — it is reused from history. The `WithoutOverlapping` locks (`locks.*`, TTLs and waits in
+seconds) serialize concurrent drives of the same run so two workers can't advance it at once.
+
+This is *not* automatic end-to-end idempotency. The reuse guarantee covers **recorded** steps only —
+it does not make the work *inside* an action idempotent. If a job hangs, is retried, or dies after
+performing its external effect (charging a card, calling an API) but before recording its result,
+that effect can happen more than once. End-to-end idempotency depends on your action code: use an
+idempotency key, prefer upserts, or check whether the effect already happened. The
+`(flow_run_id, sequence)` pair makes a stable idempotency key to hand downstream. See
+[Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency).
 
 ## Synchronous execution
 

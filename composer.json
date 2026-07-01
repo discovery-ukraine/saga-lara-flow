@@ -4,7 +4,13 @@
     "keywords": [
         "discovery-ukraine",
         "laravel",
-        "saga-lara-flow"
+        "saga-lara-flow",
+        "workflow",
+        "saga",
+        "queue",
+        "orchestration",
+        "durable",
+        "compensation"
     ],
     "homepage": "https://github.com/discovery-ukraine/saga-lara-flow",
     "license": "MIT",
@@ -90,6 +96,5 @@
             }
         }
     },
-    "minimum-stability": "dev",
     "prefer-stable": true
 }
