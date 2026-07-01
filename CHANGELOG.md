@@ -2,6 +2,24 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.0.2 - 2026-07-02
+
+### Fixed
+
+- **`runsMigrations()` did not actually load the migration in 1.0.1.** The migration shipped as a
+  `.php.stub`, but Laravel's migrator only treats a registered path as a migration file when it ends
+  in `.php` (`Migrator::getMigrationFiles`); a `.php.stub` path was globbed as if it were a directory,
+  matched nothing, and was **silently skipped** — so `php artisan migrate` (and `migrate:status`)
+  never saw the engine's tables. The migration is now a real `.php` file and runs as intended with a
+  plain `php artisan migrate`, no publish step.
+
+### Changed
+
+- Publishing the migration is **no longer supported** as a customization path: because the migration
+  auto-runs from the package, a published (timestamped) copy would run alongside it and collide.
+  Customize the schema through config instead — `database.table_prefix`, `database.connection`, and
+  the swappable `models.*`.
+
 ## v1.0.1 - 2026-07-01
 
 ### Changed

@@ -28,12 +28,14 @@ Optionally publish the config file:
 php artisan vendor:publish --tag="saga-lara-flow-config"
 ```
 
-If you need to customize the schema before it runs, you can publish the migration too — a published
-copy overrides the package's own:
+Customize the schema through config — `database.table_prefix`, `database.connection`, and the
+swappable `models.*` — rather than by editing the migration.
 
-```bash
-php artisan vendor:publish --tag="saga-lara-flow-migrations"
-```
+:::caution Don't publish the migration
+The migration runs automatically from the package. If you also `vendor:publish` it, `migrate` will
+try to run **both** the published copy and the package's own and fail with a duplicate-table error.
+Publishing the migration is not part of the install flow.
+:::
 
 ## Requirements
 

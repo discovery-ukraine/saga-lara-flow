@@ -26,7 +26,7 @@ class TestCase extends Orchestra
 
     protected function defineDatabaseMigrations(): void
     {
-        $migration = include __DIR__.'/../database/migrations/create_saga_lara_flow_initial_tables.php.stub';
+        $migration = include __DIR__.'/../database/migrations/create_saga_lara_flow_initial_tables.php';
         $migration->up();
     }
 }

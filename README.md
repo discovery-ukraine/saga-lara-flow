@@ -10,7 +10,6 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/discovery-ukraine/saga-lara-flow.svg?style=flat-square)](https://packagist.org/packages/discovery-ukraine/saga-lara-flow)
 [![Tests](https://img.shields.io/github/actions/workflow/status/discovery-ukraine/saga-lara-flow/run-tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/discovery-ukraine/saga-lara-flow/actions/workflows/run-tests.yml)
 [![PHPStan](https://img.shields.io/github/actions/workflow/status/discovery-ukraine/saga-lara-flow/phpstan.yml?branch=main&label=phpstan&style=flat-square)](https://github.com/discovery-ukraine/saga-lara-flow/actions/workflows/phpstan.yml)
-[![Total Downloads](https://img.shields.io/packagist/dt/discovery-ukraine/saga-lara-flow.svg?style=flat-square)](https://packagist.org/packages/discovery-ukraine/saga-lara-flow)
 
 </div>
 
@@ -111,9 +110,10 @@ Optionally publish the config file:
 php artisan vendor:publish --tag="saga-lara-flow-config"
 ```
 
-You can also publish the migration if you want to customize the schema before running it
-(`php artisan vendor:publish --tag="saga-lara-flow-migrations"`); a published copy overrides the
-package's own.
+Customize the schema through config — `database.table_prefix`, `database.connection`, and the
+swappable `models.*` — rather than by editing the migration. (The migration runs automatically; do
+not also `vendor:publish` it, or `migrate` would try to run both the published copy and the
+package's own.)
 
 **Requirements:** PHP `^8.5`, Laravel 13 (`illuminate/*: ^13`). The package registers its service
 provider and the `SagaFlow` facade automatically.
