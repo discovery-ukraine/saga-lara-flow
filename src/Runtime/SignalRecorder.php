@@ -28,7 +28,7 @@ final readonly class SignalRecorder
      * the suspension and the signal row itself is visible via FlowRun::signals().
      *
      * A non-null $timeoutAt persists the awaitSignal(timeout:) / timeoutAfter()
-     * deadline so the monitor can later time the wait-marker out (§15).
+     * deadline so the monitor can later time the wait-marker out.
      */
     public function recordSignalWaiting(
         FlowRun $flowRun,
@@ -128,9 +128,9 @@ final readonly class SignalRecorder
     }
 
     /**
-     * Time out a still-Waiting wait-marker (monitor, §15): flip it to TimedOut and
+     * Time out a still-Waiting wait-marker (monitor): flip it to TimedOut and
      * append a signal.timed_out event. On replay the parked awaitSignal resolves it
-     * by throwing AwaitSignalTimeoutException. No Laravel event is dispatched (§11.3).
+     * by throwing AwaitSignalTimeoutException. No Laravel event is dispatched.
      */
     public function timeoutSignal(FlowSignal $signal): void
     {

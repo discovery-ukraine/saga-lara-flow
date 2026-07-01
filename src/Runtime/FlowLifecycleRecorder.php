@@ -90,7 +90,7 @@ final readonly class FlowLifecycleRecorder
     }
 
     /**
-     * Record the doctor re-waking a flow (§15, Phase 8.2): an automatic re-wake of a
+     * Record the doctor re-waking a flow: an automatic re-wake of a
      * stuck Waiting run (reason "lost_resume") or a manual saga-flow:kick (reason
      * "manual"). The run is only re-driven, never mutated here, so this is a marker
      * event that makes the intervention visible in history.
@@ -104,11 +104,17 @@ final readonly class FlowLifecycleRecorder
         event(new FlowRewoken($flowRun, $reason));
     }
 
-    public function flowCancelled(FlowRun $flowRun): void
+    public function flowCancelled(FlowRun $flowRun, ?string $reason = null): void
     {
-        $this->events->record($flowRun, FlowEventType::FlowCancelled, null, $flowRun);
+        $this->events->record(
+            $flowRun,
+            FlowEventType::FlowCancelled,
+            null,
+            $flowRun,
+            $reason !== null ? ['reason' => $reason] : []
+        );
 
-        event(new FlowCancelled($flowRun));
+        event(new FlowCancelled($flowRun, $reason));
     }
 
     /**

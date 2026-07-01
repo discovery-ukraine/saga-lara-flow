@@ -14,7 +14,7 @@ use Illuminate\Support\Collection as SupportCollection;
 /**
  * Fluent, type-safe filter over flow runs. It wraps an Eloquent Builder rather
  * than exposing model query-scopes (Larastan level 5 cannot type a scope on a
- * generic Builder resolved from a config-swappable model) or __call magic (§20).
+ * generic Builder resolved from a config-swappable model) or __call magic.
  * Each where* method narrows the underlying query inline and returns $this;
  * terminals run it and hydrate FlowRun / FlowHandle. Reach the raw Builder via
  * builder() when you need ordering, limits, or Eloquent directly.

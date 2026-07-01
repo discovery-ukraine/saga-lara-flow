@@ -18,11 +18,11 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
  * signal, consumes a delivered one inline, or parks the flow with a wait-signal
  * and suspends — exactly like ActionBuilder does for actions.
  *
- * Signals are the special identity case (§6): a delivered signal carries no
+ * Signals are the special identity case: a delivered signal carries no
  * sequence; an awaitSignal at ordinal S creates a wait-signal with wait_sequence
  * = S. A timeout deadline (awaitSignal(timeout:) / timeoutAfter()) is persisted on
  * the wait-marker; the monitor flips it to TimedOut after the deadline, and the
- * parked awaitSignal then resolves it by throwing AwaitSignalTimeoutException (§15).
+ * parked awaitSignal then resolves it by throwing AwaitSignalTimeoutException.
  */
 readonly class SignalWaiter
 {

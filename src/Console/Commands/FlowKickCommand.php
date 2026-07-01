@@ -7,7 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use Illuminate\Console\Command;
 
 /**
- * Manually re-drive one run (§15, Phase 8.2) — the escape hatch when a flow is
+ * Manually re-drive one run — the escape hatch when a flow is
  * stuck (a crashed Running iteration, an exhausted automatic repair). Unlike the
  * automatic pass this is unthrottled; replay decides what happens once it resumes.
  */

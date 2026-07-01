@@ -18,7 +18,7 @@ use Throwable;
  * Executes the compensation stack in reverse (LIFO). Action-level compensations
  * are singleton levels run sequentially; a saga() group asked to compensate in
  * parallel forms one level rolled back together (Bus::batch in queued mode, still
- * sequential in sync per §9.4). Levels are always processed in reverse order.
+ * sequential in sync). Levels are always processed in reverse order.
  *
  * The Stop/Continue policy is read from each compensation row's continue_on_failure
  * flag after a level finishes: Stop halts the rollback, Continue carries on; either

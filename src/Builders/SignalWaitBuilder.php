@@ -12,7 +12,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalWaiter;
  * Equivalent to $this->awaitSignal('name', timeout: $when).
  *
  * timeoutAfter() persists a deadline on the wait-marker; the monitor times the wait
- * out after it passes and wait() then throws AwaitSignalTimeoutException on replay (§15).
+ * out after it passes and wait() then throws AwaitSignalTimeoutException on replay.
  */
 final class SignalWaitBuilder
 {

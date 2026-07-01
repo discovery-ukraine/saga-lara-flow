@@ -1,15 +1,19 @@
 <?php
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
+use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Events\FlowCancelled;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\WorkflowClassMissingException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowEvent;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TestWorkflow;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 
 /**
@@ -68,12 +72,41 @@ it('throws when creating with a missing workflow class', function () {
     SagaFlow::create('App\\Workflows\\DoesNotExist');
 })->throws(WorkflowClassMissingException::class);
 
-it('cancels a non-terminal run through the handle', function () {
+it('cancels a non-terminal run through the handle and records the reason', function () {
+    Event::fake([FlowCancelled::class]);
+
     $run = persistPendingRun();
 
     SagaFlow::loadFlow($run->id)->cancel('user requested');
 
     expect($run->fresh()->status)->toBe(FlowStatus::Cancelled);
+
+    $event = FlowEvent::query()
+        ->where('flow_run_id', $run->id)
+        ->where('type', FlowEventType::FlowCancelled)
+        ->first();
+
+    expect($event)->not->toBeNull()
+        ->and($event->payload)->toBe(['reason' => 'user requested']);
+
+    Event::assertDispatched(
+        FlowCancelled::class,
+        fn (FlowCancelled $e) => $e->flowRun->is($run) && $e->reason === 'user requested',
+    );
+});
+
+it('records a null reason when cancelled without one', function () {
+    $run = persistPendingRun();
+
+    SagaFlow::loadFlow($run->id)->cancel();
+
+    $event = FlowEvent::query()
+        ->where('flow_run_id', $run->id)
+        ->where('type', FlowEventType::FlowCancelled)
+        ->first();
+
+    expect($event)->not->toBeNull()
+        ->and($event->payload)->toBeNull();
 });
 
 it('rejects cancelling a terminal run', function () {

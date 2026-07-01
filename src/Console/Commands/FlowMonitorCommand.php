@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 use Throwable;
 
 /**
- * Runs one expiration sweep (§15). Schedule it (e.g. everyMinute()) to expire
+ * Runs one expiration sweep. Schedule it (e.g. everyMinute()) to expire
  * overdue runs/actions and time out stuck signal waits without durable timers.
  */
 class FlowMonitorCommand extends Command

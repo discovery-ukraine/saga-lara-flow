@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 /**
- * The opt-in expiration sweep (§15) — the package has no durable timers, so a
+ * The opt-in expiration sweep — the package has no durable timers, so a
  * scheduled command (saga-flow:monitor) or an optional throttled queue-looping
  * listener calls sweep() periodically. One pass expires overdue runs, times out
  * stuck signal waits, and expires overdue action steps, each capped at the

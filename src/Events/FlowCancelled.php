@@ -8,5 +8,6 @@ final readonly class FlowCancelled
 {
     public function __construct(
         public FlowRun $flowRun,
+        public ?string $reason = null,
     ) {}
 }

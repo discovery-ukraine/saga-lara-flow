@@ -6,7 +6,7 @@ use Attribute;
 
 /**
  * Declarative workflow identity: a stable name and an optional version, read at
- * create time. An explicit ->version() on the builder still wins (§20 precedence:
+ * create time. An explicit ->version() on the builder still wins (precedence:
  * explicit call > attribute > config).
  */
 #[Attribute(Attribute::TARGET_CLASS)]

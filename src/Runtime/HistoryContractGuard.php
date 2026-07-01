@@ -13,7 +13,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Models\SideEffect;
 
 /**
- * Enforces the determinism / history contract (§5.5, §6): the operation a replay
+ * Enforces the determinism / history contract: the operation a replay
  * requests at a given (flow_run_id, sequence) ordinal must match the one recorded
  * there. It centralises the cross-type checks the action, side-effect, and signal
  * seams used to duplicate. Each expectX returns the recorded entity (for the seam

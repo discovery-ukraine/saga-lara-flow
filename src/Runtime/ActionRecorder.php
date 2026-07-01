@@ -84,7 +84,7 @@ final readonly class ActionRecorder
     }
 
     /**
-     * Record the doctor re-dispatching a stuck Pending action (§15, Phase 8.2). The
+     * Record the doctor re-dispatching a stuck Pending action. The
      * action keeps its status/sequence — only a fresh RunActionJob is sent — so an
      * action.redispatched event is appended for visibility without altering history.
      */
@@ -181,7 +181,7 @@ final readonly class ActionRecorder
 
     /**
      * Mark a still-pending/running step Expired once its expires_at deadline passes
-     * (monitor, §15): record the expiry cause and append an action.expired event. On
+     * (monitor): record the expiry cause and append an action.expired event. On
      * replay the seam treats Expired as a failure (or, for an optional step, as a
      * give-up returning its fallback).
      *

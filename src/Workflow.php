@@ -2,22 +2,15 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow;
 
-use Closure;
-use DateTimeInterface;
-use DiscoveryUkraine\SagaLaraFlow\Builders\ActionBuilder;
-use DiscoveryUkraine\SagaLaraFlow\Builders\ChildWorkflowBuilder;
-use DiscoveryUkraine\SagaLaraFlow\Builders\ParallelBuilder;
-use DiscoveryUkraine\SagaLaraFlow\Builders\SagaBuilder;
-use DiscoveryUkraine\SagaLaraFlow\Builders\SignalWaitBuilder;
-use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
-use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
-use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\InteractsWithActions;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\InteractsWithChildren;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\InteractsWithParallelism;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\InteractsWithSagas;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\InteractsWithSideEffects;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\InteractsWithSignals;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow\ProvidesFlowMetadata;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
-use DiscoveryUkraine\SagaLaraFlow\Runtime\SideEffectStore;
-use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalWaiter;
-use Illuminate\Contracts\Container\BindingResolutionException;
-use Illuminate\Contracts\Container\CircularDependencyException;
 use Illuminate\Support\Traits\Macroable;
 use Throwable;
 
@@ -25,146 +18,24 @@ use Throwable;
  * Base class for user-defined workflows. Author a deterministic handle() method;
  * the runtime drives it via exception-based suspension and replay.
  *
- * All operations are instance methods — no global helpers, no static state.
- * Sequential actions are available now; signals, child workflows, parallel
- * groups, sagas, and side effects are introduced in later phases.
+ * All operations are instance methods — no global helpers, no static state. The
+ * DSL is grouped into focused concerns (actions, children, parallelism, sagas,
+ * signals, side effects, metadata) that all share the injected runtime.
  */
 abstract class Workflow
 {
+    use InteractsWithActions;
+    use InteractsWithChildren;
+    use InteractsWithParallelism;
+    use InteractsWithSagas;
+    use InteractsWithSideEffects;
+    use InteractsWithSignals;
     use Macroable;
+    use ProvidesFlowMetadata;
 
     public function __construct(
         protected readonly FlowRuntime $runtime,
     ) {}
-
-    /**
-     * Begin a compensatable action step. The returned builder records and
-     * replays the action by its (flow_run_id, sequence) identity.
-     */
-    public function action(string $actionClass, mixed ...$arguments): ActionBuilder
-    {
-        return new ActionBuilder(
-            $this->runtime,
-            $actionClass,
-            array_values($arguments),
-        );
-    }
-
-    /**
-     * Begin an explicit saga group: a transactional block of steps with shared
-     * compensation policies (onCompensationFailure, compensateInParallel). Equivalent
-     * in power to action-level compensation; use it for larger transactional blocks.
-     */
-    public function saga(): SagaBuilder
-    {
-        return new SagaBuilder($this->runtime);
-    }
-
-    /**
-     * Begin a parallel block: its steps are dispatched together and the flow
-     * continues only once they all finish, returning their results in declaration
-     * order. Choose failFast() (fail on the first failure) or waitAllThenFail()
-     * (let every step settle first); steps may carry their own compensations.
-     */
-    public function parallel(): ParallelBuilder
-    {
-        return new ParallelBuilder($this->runtime);
-    }
-
-    /**
-     * Convenience alias for action(...)->continueOnFailure(): a best-effort step
-     * whose failure does not fail the flow (it lands OptionalFailed and run()
-     * returns the fallback). Call ->fallbackValueOnFail() on the returned builder to set it.
-     */
-    public function optionalAction(string $actionClass, mixed ...$arguments): ActionBuilder
-    {
-        return $this->action($actionClass, ...$arguments)->continueOnFailure();
-    }
-
-    /**
-     * Begin a child workflow step. The returned builder starts the child and awaits
-     * its completion, resolving by the operation's (flow_run_id, sequence) identity.
-     *
-     * @param  array<int, mixed>  $arguments
-     */
-    public function child(string $workflowClass, array $arguments = []): ChildWorkflowBuilder
-    {
-        return new ChildWorkflowBuilder($this->runtime, $workflowClass, array_values($arguments));
-    }
-
-    /**
-     * Capture a nondeterministic value (now(), a uuid, randomness) exactly once.
-     * The factory runs on the first pass; every later replay returns the stored
-     * value by its (flow_run_id, sequence) identity without re-running it. Wrap
-     * any nondeterminism you branch on in here to keep handle() deterministic.
-     *
-     * @throws HistoryContractMismatchException
-     * @throws BindingResolutionException
-     * @throws CircularDependencyException
-     * @throws FlowSuspended
-     */
-    public function sideEffect(string $key, Closure $factory): mixed
-    {
-        return app(SideEffectStore::class)->resolve($this->runtime, $key, $factory);
-    }
-
-    /**
-     * Wait for an external signal, identified by the operation's (flow_run_id,
-     * sequence) ordinal. Returns the signal payload once delivered: if a matching
-     * signal already arrived it resolves inline, otherwise the flow suspends and
-     * resumes when the signal is delivered. Replays return the same payload.
-     *
-     * Passing $timeout persists a deadline on the wait-marker: once it passes the
-     * monitor times the wait out and this throws AwaitSignalTimeoutException on the
-     * next replay (catch it to react, or let it fail and roll back the flow) (§15).
-     *
-     * @throws HistoryContractMismatchException
-     * @throws AwaitSignalTimeoutException
-     * @throws FlowSuspended
-     */
-    public function awaitSignal(string $name, ?DateTimeInterface $timeout = null): mixed
-    {
-        return app(SignalWaiter::class)->await($this->runtime, $name, $timeout);
-    }
-
-    /**
-     * Fluent form of awaitSignal: $this->signal('name')->timeoutAfter($when)->wait().
-     */
-    public function signal(string $name): SignalWaitBuilder
-    {
-        return new SignalWaitBuilder($this->runtime, $name);
-    }
-
-    /**
-     * Attach a queryable tag to the current run. Idempotent across replays.
-     */
-    public function tag(string $key, string|int|null $value = null): void
-    {
-        $this->runtime->run()->tags()->updateOrCreate(
-            ['key' => $key],
-            ['value' => $value === null ? null : (string) $value],
-        );
-    }
-
-    public function runId(): string
-    {
-        return $this->runtime->run()->id;
-    }
-
-    public function flowName(): ?string
-    {
-        return $this->runtime->run()->workflow_name;
-    }
-
-    public function version(): ?string
-    {
-        return $this->runtime->run()->workflow_version;
-    }
-
-    public function parentRunId(): ?string
-    {
-        return $this->runtime->run()->parent_id;
-    }
 
     /**
      * True when the throwable is an internal suspension/control signal. Use this

@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowLifecycleRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\History;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SagaRunner;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalDispatcher;
@@ -17,8 +18,8 @@ use Illuminate\Database\Eloquent\Collection;
 use Throwable;
 
 /**
- * Operations over a single flow run. Read methods are available now;
- * signal()/compensate() are introduced in later phases.
+ * Operations over a single flow run: read its state and history, deliver signals,
+ * cancel it, or manually compensate it.
  */
 readonly class FlowHandle
 {
@@ -93,14 +94,22 @@ readonly class FlowHandle
         }
     }
 
+    /**
+     * Cancel this run directly, without compensation (compensation-aware cancel is
+     * compensate()). The optional $reason is recorded on the flow.cancelled event
+     * and carried on the FlowCancelled event. Throws on a terminal run.
+     *
+     * @throws CannotCancelTerminalFlowException
+     */
     public function cancel(?string $reason = null): FlowRun
     {
         if ($this->flowRun->isTerminal()) {
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
 
-        // Direct cancellation (no compensation). Compensation-aware cancel is compensate().
         $this->flowRun->markCancelled();
+
+        app(FlowLifecycleRecorder::class)->flowCancelled($this->flowRun, $reason);
 
         app(ChildWorkflowManager::class)->onFlowFinalized($this->flowRun, false);
 

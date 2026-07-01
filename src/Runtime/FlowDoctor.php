@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
- * The opt-in repair pass (§15, Phase 8.2) — the "doctor". Distinct from the
+ * The opt-in repair pass — the "doctor". Distinct from the
  * expiration monitor (FlowMonitor): it recovers progress lost to a *dropped job*,
  * not a passed deadline. It is configured, scheduled, and looped independently
  * (config repair.*, command saga-flow:repair, its own queue-looping lock).

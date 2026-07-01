@@ -7,7 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Workflow;
 /**
  * A saga() group set to compensate in parallel, then a failing action. The two
  * group compensations form a single rollback level (run together in queued mode
- * via Bus::batch; sequentially in sync mode, §9.4).
+ * via Bus::batch; sequentially in sync mode).
  */
 final class ParallelSagaWorkflow extends Workflow
 {

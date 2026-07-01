@@ -113,7 +113,7 @@ class ActionBuilder
 
     /**
      * Set a wall-clock deadline for this step. If the monitor finds it still
-     * pending/running past this instant it marks it Expired (§15); on replay an
+     * pending/running past this instant it marks it Expired; on replay an
      * expired non-optional step fails the flow, an optional one returns its fallback.
      */
     public function expiresAt(?DateTimeInterface $expiresAt): static

@@ -219,15 +219,4 @@ return [
         'restore' => null, // fn (array $context): void — enter the run's tenant
         'end' => null,     // fn (?array $previous): void — optional explicit revert
     ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | HTTP routes (disabled by default)
-    |--------------------------------------------------------------------------
-    */
-    'routes' => [
-        'enabled' => false,
-        'prefix' => 'saga-flows',
-        'middleware' => ['api'],
-    ],
 ];
