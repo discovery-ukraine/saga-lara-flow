@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static FlowHandle loadFlow(string $id)
  * @method static FlowQuery query()
  * @method static FlowRun kick(string $id)
+ * @method static array<int|string, mixed>|null tenancyContext()
  *
  * @see FlowManager
  */

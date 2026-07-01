@@ -156,6 +156,7 @@ readonly class ChildWorkflowManager
             'parent_close_policy' => $closePolicy->value,
             'connection' => $parent->connection,
             'queue' => $parent->queue,
+            'tenancy_context' => $parent->tenancy_context,
         ]);
     }
 

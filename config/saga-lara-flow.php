@@ -210,8 +210,14 @@ return [
     | Callables resolved from the container or plain closures.
     */
     'tenancy' => [
-        'capture' => null, // fn (): array $context
-        'restore' => null, // fn (array $context): void
+        // Auto capture/restore around workflow & action handle(). Off by default —
+        // opt in globally here, or per class with #[Tenancy(auto: true|false)].
+        // When off, the run's tenant is still captured at creation and readable via
+        // SagaFlow::tenancyContext() so host code can enter/leave tenancy itself.
+        'auto' => false,
+        'capture' => null, // fn (): array $context — snapshot the current tenant
+        'restore' => null, // fn (array $context): void — enter the run's tenant
+        'end' => null,     // fn (?array $previous): void — optional explicit revert
     ],
 
     /*

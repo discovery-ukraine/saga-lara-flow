@@ -11,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
+use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use DiscoveryUkraine\SagaLaraFlow\Support\WorkflowAttributes;
 use Throwable;
 
@@ -135,6 +136,7 @@ class CreateWorkflowBuilder
             'connection' => $this->connection ?? $attributes->connection ?? config('saga-lara-flow.queue.connection'),
             'queue' => $this->queue ?? $attributes->queue ?? config('saga-lara-flow.queue.queue'),
             'expires_at' => $this->expiresAt ?? $this->attributeExpiry($attributes) ?? $this->defaultExpiry(),
+            'tenancy_context' => app(TenancyManager::class)->capture(),
         ], $this->normalizedTags($attributes));
     }
 

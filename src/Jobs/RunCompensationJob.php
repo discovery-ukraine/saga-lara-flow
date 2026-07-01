@@ -52,9 +52,11 @@ class RunCompensationJob implements ShouldQueue
             return;
         }
 
-        $tenancy->restore($flowRun);
-
-        $executor->execute($compensation, $this->definition);
+        $tenancy->for(
+            $flowRun,
+            $flowRun->workflow_class,
+            fn () => $executor->execute($compensation, $this->definition),
+        );
     }
 
     private function resolveCompensation(): ?CompensationRun

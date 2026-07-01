@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Attributes\Flow;
 use DiscoveryUkraine\SagaLaraFlow\Attributes\FlowQueue;
 use DiscoveryUkraine\SagaLaraFlow\Attributes\FlowTimeout;
 use DiscoveryUkraine\SagaLaraFlow\Attributes\Tag;
+use DiscoveryUkraine\SagaLaraFlow\Attributes\Tenancy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use ReflectionClass;
 
@@ -30,6 +31,9 @@ final class AttributeReader
 
     /** @var array<class-string, ?ChildClosePolicy> */
     private static array $childPolicyCache = [];
+
+    /** @var array<class-string, ?bool> */
+    private static array $tenancyAutoCache = [];
 
     /**
      * @param  class-string  $class
@@ -53,6 +57,16 @@ final class AttributeReader
     public function childPolicy(string $class): ?ChildClosePolicy
     {
         return self::$childPolicyCache[$class] ??= $this->readChildPolicy($class);
+    }
+
+    /**
+     * The #[Tenancy(auto:)] override, or null when the attribute is absent (the
+     * caller then falls back to the config default). Accepts a plain string since
+     * callers pass a run's stored workflow_class/action_class.
+     */
+    public function tenancyAuto(string $class): ?bool
+    {
+        return self::$tenancyAutoCache[$class] ??= $this->readTenancyAuto($class);
     }
 
     /**
@@ -119,6 +133,15 @@ final class AttributeReader
         }
 
         return $this->firstAttribute(new ReflectionClass($class), ChildPolicy::class)?->policy;
+    }
+
+    private function readTenancyAuto(string $class): ?bool
+    {
+        if (! class_exists($class)) {
+            return null;
+        }
+
+        return $this->firstAttribute(new ReflectionClass($class), Tenancy::class)?->auto;
     }
 
     /**

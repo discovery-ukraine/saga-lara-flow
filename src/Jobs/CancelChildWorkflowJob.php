@@ -54,37 +54,44 @@ class CancelChildWorkflowJob implements ShouldQueue
             return;
         }
 
-        $tenancy->restore($child);
+        $tenancy->for($child, $child->workflow_class, function () use (
+            $executor,
+            $sagaRunner,
+            $repository,
+            $stateMachine,
+            $lifecycle,
+            $child,
+        ): void {
+            // Take control of the child from any non-terminal state (Pending/Running/
+            // Waiting) — the state machine allows each into Cancelling.
+            $stateMachine->transition($child, FlowStatus::Cancelling);
 
-        // Take control of the child from any non-terminal state (Pending/Running/
-        // Waiting) — the state machine allows each into Cancelling.
-        $stateMachine->transition($child, FlowStatus::Cancelling);
+            $cause = $this->cause($repository, $child);
 
-        $cause = $this->cause($repository, $child);
+            if ($this->withCompensation) {
+                $entries = $executor->collectCompensations($child);
 
-        if ($this->withCompensation) {
-            $entries = $executor->collectCompensations($child);
+                // Roll back inline (Sync), inside THIS job, rather than dispatching another
+                // queued Bus::batch: we are already on a worker, we just collected the stack
+                // synchronously, and a single in-process pass keeps the finalize + the
+                // recursive close of the child's own children deterministic within one job.
+                //
+                // Caveat (at-least-once): the whole child close — collect, every
+                // compensation, finalize, and the recursive grandchild close — runs in one
+                // worker iteration. On managed queues with a hard shutdown/visibility
+                // timeout (e.g. SQS on Laravel Cloud, ~90s) a child with many or slow
+                // compensations can exceed it, be force-terminated, and redelivered. The job
+                // is idempotent (terminal child → early return; each CompensationRun is
+                // resumable), so redelivery is safe — but compensations should be quick and
+                // idempotent. If a close can be genuinely long, raise the timeouts or revisit
+                // a queued (Bus::batch) rollback by threading a RunMode into this job.
+                $sagaRunner->rollback($child, $entries, $cause, RunMode::Sync, $this->finalState);
 
-            // Roll back inline (Sync), inside THIS job, rather than dispatching another
-            // queued Bus::batch: we are already on a worker, we just collected the stack
-            // synchronously, and a single in-process pass keeps the finalize + the
-            // recursive close of the child's own children deterministic within one job.
-            //
-            // Caveat (at-least-once): the whole child close — collect, every
-            // compensation, finalize, and the recursive grandchild close — runs in one
-            // worker iteration. On managed queues with a hard shutdown/visibility
-            // timeout (e.g. SQS on Laravel Cloud, ~90s) a child with many or slow
-            // compensations can exceed it, be force-terminated, and redelivered. The job
-            // is idempotent (terminal child → early return; each CompensationRun is
-            // resumable), so redelivery is safe — but compensations should be quick and
-            // idempotent. If a close can be genuinely long, raise the timeouts or revisit
-            // a queued (Bus::batch) rollback by threading a RunMode into this job.
-            $sagaRunner->rollback($child, $entries, $cause, RunMode::Sync, $this->finalState);
+                return;
+            }
 
-            return;
-        }
-
-        $this->finalizeWithoutCompensation($child, $lifecycle, $cause);
+            $this->finalizeWithoutCompensation($child, $lifecycle, $cause);
+        });
     }
 
     /**

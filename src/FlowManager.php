@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Queries\FlowQuery;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Illuminate\Support\Traits\Macroable;
 
 class FlowManager
@@ -51,5 +52,17 @@ class FlowManager
     public function kick(string $id): FlowRun
     {
         return $this->doctor->kick($this->repository->findOrFail($id));
+    }
+
+    /**
+     * The tenant context of the run currently executing, for host code inside a
+     * workflow/action handle() that manages tenancy itself. Null outside a driven
+     * run, or when no tenant was captured at creation.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    public function tenancyContext(): ?array
+    {
+        return app(TenancyManager::class)->context();
     }
 }

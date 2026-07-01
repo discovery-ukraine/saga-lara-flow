@@ -30,6 +30,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Serialization\LaravelSerializer;
 use DiscoveryUkraine\SagaLaraFlow\States\FlowStateMachine;
+use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Laravel\SerializableClosure\SerializableClosure;
@@ -64,6 +65,7 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         $this->app->alias(FlowManager::class, 'saga-flow');
 
         $this->app->scoped(FlowRuntime::class);
+        $this->app->scoped(TenancyManager::class);
         $this->app->singleton(FlowExecutor::class);
         $this->app->singleton(FlowMonitor::class);
         $this->app->singleton(FlowDoctor::class);

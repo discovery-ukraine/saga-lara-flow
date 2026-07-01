@@ -46,8 +46,18 @@ class FlowExecutor
      */
     public function drive(FlowRun $flowRun, RunMode $mode): FlowRun
     {
-        $this->tenancy->restore($flowRun);
+        return $this->tenancy->for(
+            $flowRun,
+            $flowRun->workflow_class,
+            fn (): FlowRun => $this->driveInner($flowRun, $mode),
+        );
+    }
 
+    /**
+     * @throws Throwable
+     */
+    private function driveInner(FlowRun $flowRun, RunMode $mode): FlowRun
+    {
         if ($this->isExpired($flowRun)) {
             return $this->expireRun($flowRun);
         }
@@ -101,8 +111,20 @@ class FlowExecutor
      */
     public function collectCompensations(FlowRun $flowRun): array
     {
-        $this->tenancy->restore($flowRun);
+        return $this->tenancy->for(
+            $flowRun,
+            $flowRun->workflow_class,
+            fn (): array => $this->collectCompensationsInner($flowRun),
+        );
+    }
 
+    /**
+     * @return list<CompensationEntry>
+     *
+     * @throws HistoryContractMismatchException
+     */
+    private function collectCompensationsInner(FlowRun $flowRun): array
+    {
         $this->runtime->bind($flowRun, RunMode::Queued);
         $this->runtime->reset();
         $this->runtime->beginCollecting();

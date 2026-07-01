@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Throwable;
 
 /**
@@ -113,21 +114,27 @@ class ActionDispatcher
      */
     public function execute(ActionRun $actionRun): void
     {
-        $this->recorder->startAction($actionRun);
+        app(TenancyManager::class)->for(
+            $actionRun->flowRun,
+            $actionRun->action_class,
+            function () use ($actionRun): void {
+                $this->recorder->startAction($actionRun);
 
-        $instance = app()->make($actionRun->action_class);
+                $instance = app()->make($actionRun->action_class);
 
-        /** @var array<int, mixed> $arguments */
-        $arguments = (array) $this->serializer->deserialize($actionRun->arguments ?? []);
+                /** @var array<int, mixed> $arguments */
+                $arguments = (array) $this->serializer->deserialize($actionRun->arguments ?? []);
 
-        try {
-            $result = $this->callWithDependencies($instance, 'handle', $arguments);
-        } catch (Throwable $e) {
-            $this->recorder->failAction($actionRun, $e);
+                try {
+                    $result = $this->callWithDependencies($instance, 'handle', $arguments);
+                } catch (Throwable $e) {
+                    $this->recorder->failAction($actionRun, $e);
 
-            throw $e;
-        }
+                    throw $e;
+                }
 
-        $this->recorder->completeAction($actionRun, $result);
+                $this->recorder->completeAction($actionRun, $result);
+            },
+        );
     }
 }
