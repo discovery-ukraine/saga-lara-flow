@@ -2,6 +2,28 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.0.3 - 2026-07-02
+
+### Fixed
+
+- The migration now ships with a timestamp-prefixed filename
+  (`2026_07_02_000000_create_saga_lara_flow_initial_tables`), matching how first-party Laravel
+  packages (Sanctum, Cashier, Telescope) name their auto-loaded migrations. In 1.0.2 it loaded under
+  a bare, dateless name (`create_saga_lara_flow_initial_tables`), which looked wrong in
+  `migrate:status` and sorted unpredictably against the app's own migrations.
+
+### Upgrading from 1.0.1 / 1.0.2
+
+The migration's recorded name changes, so a host app that already ran 1.0.1 or 1.0.2 will see the
+new name as "pending" and `php artisan migrate` would try to create the tables again. The engine
+tables already exist, so either:
+
+- **Fresh dev database:** `php artisan migrate:fresh` (destroys data — dev only), or
+- **Keep your data:** rename the recorded migration so Laravel treats it as already run —
+  `UPDATE migrations SET migration = '2026_07_02_000000_create_saga_lara_flow_initial_tables' WHERE migration = 'create_saga_lara_flow_initial_tables';`
+
+Brand-new installs (no prior 1.0.1/1.0.2) are unaffected — `composer require` + `php artisan migrate`.
+
 ## v1.0.2 - 2026-07-02
 
 ### Fixed
