@@ -96,18 +96,24 @@ Install the package via Composer:
 composer require discovery-ukraine/saga-lara-flow
 ```
 
-Publish and run the migrations:
+Run the migrations:
 
 ```bash
-php artisan vendor:publish --tag="saga-lara-flow-migrations"
 php artisan migrate
 ```
+
+The engine's migration ships with the package, so `migrate` picks it up directly — no publish step.
+Future versions add their migrations the same way: `composer update` then `php artisan migrate`.
 
 Optionally publish the config file:
 
 ```bash
 php artisan vendor:publish --tag="saga-lara-flow-config"
 ```
+
+You can also publish the migration if you want to customize the schema before running it
+(`php artisan vendor:publish --tag="saga-lara-flow-migrations"`); a published copy overrides the
+package's own.
 
 **Requirements:** PHP `^8.5`, Laravel 13 (`illuminate/*: ^13`). The package registers its service
 provider and the `SagaFlow` facade automatically.

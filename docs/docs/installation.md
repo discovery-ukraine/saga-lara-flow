@@ -12,17 +12,27 @@ Install the package via Composer:
 composer require discovery-ukraine/saga-lara-flow
 ```
 
-Publish and run the migrations:
+Run the migrations:
 
 ```bash
-php artisan vendor:publish --tag="saga-lara-flow-migrations"
 php artisan migrate
 ```
+
+The engine's migration ships with the package and is loaded into the migrator directly, so
+`migrate` picks it up with **no publish step**. Future versions add their migrations the same way —
+`composer update` then `php artisan migrate` is all a host app needs.
 
 Optionally publish the config file:
 
 ```bash
 php artisan vendor:publish --tag="saga-lara-flow-config"
+```
+
+If you need to customize the schema before it runs, you can publish the migration too — a published
+copy overrides the package's own:
+
+```bash
+php artisan vendor:publish --tag="saga-lara-flow-migrations"
 ```
 
 ## Requirements
