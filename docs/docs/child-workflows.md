@@ -50,5 +50,11 @@ try {
 }
 ```
 
+Like an action failure, this surfaces on the parent's **replay** pass (the child runs as its own
+run), not the instant the child fails — a `try/catch` around `->run()` catches it when the parent is
+re-driven. It is for **local** branching; for cross-cutting failure reporting prefer the
+[`FlowFailed`](./events.md) event, and if you report from inside `handle()`, re-throw so the parent
+still fails and compensates.
+
 To let the parent proceed regardless of the child's outcome, call `->continueParentOnFailure()` — the
 child's failure is then swallowed rather than thrown.

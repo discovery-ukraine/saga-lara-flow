@@ -18,6 +18,14 @@ Event::listen(FlowFailed::class, function (FlowFailed $event): void {
 });
 ```
 
+:::tip The right place to report failures
+`FlowFailed` is the recommended hook for **cross-cutting** failure handling (alerting, reporting,
+metrics). It fires exactly once on the terminal transition — on both the direct-fail and the
+fail-after-compensation paths, and regardless of whether the run was sync or queued — so you catch
+every failed run in one place without wrapping `handle()`. Reserve `try/catch` inside `handle()` for
+**local** branching within a single workflow (see [Actions › Handling failure](./actions.md)).
+:::
+
 ## Available events
 
 Flow lifecycle: `FlowStarted`, `FlowCompleted`, `FlowFailed`, `FlowWaiting`, `FlowResumed`,

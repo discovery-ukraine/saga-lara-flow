@@ -2,6 +2,21 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.0.4 - 2026-07-04
+
+### Documentation
+
+- Clarified how to react to a failed step. `try/catch` around `->run()` inside `handle()` **does**
+  catch `ActionFailedException` / `FlowExpiredException` (and `ChildWorkflowFailedException`) — but on
+  the **replay** pass, not the instant the action fails: in queued mode the action runs off the
+  `handle()` stack in its own job, and the failure surfaces only when the engine re-drives `handle()`.
+  In sync mode `run()` re-throws the action's raw exception instead. Documented that `try/catch` is
+  for **local** branching, while the `FlowFailed` event is the recommended hook for cross-cutting
+  failure reporting (it fires once on the terminal transition, on both the direct-fail and
+  fail-after-compensation paths, sync or queued), and that reporting from inside `handle()` must
+  re-throw so the run still fails and compensates. Touches the Actions, Child workflows, and Events
+  docs plus the README. No code changes.
+
 ## v1.0.3 - 2026-07-02
 
 ### Fixed

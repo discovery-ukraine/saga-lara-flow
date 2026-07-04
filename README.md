@@ -237,9 +237,26 @@ try {
 }
 ```
 
+Two things about *when* this throws:
+
+- **It surfaces on replay, not the instant the action fails.** In queued mode the action runs in its
+  own job, off the `handle()` stack, and retries per `$tries`. Once it ultimately fails the engine
+  re-drives `handle()` from the top and the failed step replays as a throw — that is where your
+  `try/catch` catches it. In **sync** mode the step runs inline and `run()` re-throws the action's
+  **raw** exception (not `ActionFailedException`), so catch the concrete type you expect.
+- **Use `try/catch` for local branching** — "if `ChargeCard` fails, try PayPal instead". For a
+  cross-cutting "report whenever *any* workflow fails", listen to the `FlowFailed` event
+  ([Events](#events)) instead: it fires once on the terminal transition — on both the direct-fail and
+  the fail-after-compensation paths, and regardless of sync/queued. If you do report from inside a
+  `catch` in `handle()`, **re-throw** afterwards so the engine still fails and compensates the run;
+  swallowing the exception lets `handle()` run on past a step that has no result.
+
 > ⚠️ Never catch `DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended` (or any
-> `InternalFlowControl`) — those are the engine's suspend/replay signals, not errors. If you use a
-> broad `catch (\Throwable $e)`, re-throw control flow first: `if ($this->isFlowControl($e)) { throw $e; }`.
+> `InternalFlowControl`) — those are the engine's suspend/replay signals, not errors. Business
+> exceptions (`ActionFailedException`, `FlowExpiredException`, `ChildWorkflowFailedException`, …) all
+> extend `FlowException` and are safe to catch; the two internal signals live under
+> `…\Exceptions\Internal\` and are the *only* things a broad `catch (\Throwable $e)` must re-throw:
+> `if ($this->isFlowControl($e)) { throw $e; }`.
 
 ## Sagas & compensations
 
