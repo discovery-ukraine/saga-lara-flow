@@ -347,6 +347,19 @@ SagaFlow::loadFlow($runId)->signal('approval', ['approved' => true]);
 SagaFlow::loadFlow($runId)->signalIfRunning('approval', ['approved' => true]);
 ```
 
+No `$runId`? Find the run by workflow and tag, then signal it. Use `signalable()` (alias `active()`),
+**not** `running()` — a flow parked on `awaitSignal()` is `Waiting`, not `Running`:
+
+```php
+SagaFlow::query()
+    ->whereWorkflow(ProvisionCompanyWorkflow::class)
+    ->whereTag('company', $companyId)
+    ->signalable()            // Pending, Running, or Waiting
+    ->handles()
+    ->first()
+    ?->signal('owner-synced');
+```
+
 ## Side effects
 
 Anything non-deterministic (random values, `now()`, a UUID, an external read) must be wrapped in
@@ -452,6 +465,9 @@ $stuck = SagaFlow::query()
 $handles = SagaFlow::query()->running()->handles();   // Collection<FlowHandle>
 $count   = SagaFlow::query()->failed()->count();
 ```
+
+Status shortcuts: `running()`, `waiting()`, `completed()`, `failed()`, plus `active()` /
+`signalable()` (Pending, Running, or Waiting) for finding a run to deliver a signal to.
 
 Terminals: `get()`, `first()`, `count()`, `paginate()`, `handles()`, and `builder()` (the raw
 Eloquent builder for ordering/limits).

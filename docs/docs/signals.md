@@ -58,6 +58,28 @@ $delivered = SagaFlow::loadFlow($runId)->signalIfRunning('approval', ['approved'
 // $delivered === false on a terminal run
 ```
 
+`signalIfRunning()` means *"unless the run has already finished"* — it delivers to **any
+non-terminal run**, not only a `Running` one.
+
+### Finding the run to signal
+
+Often you do not have the `$runId` on hand — you know the workflow and a tag. Query for it:
+
+```php
+SagaFlow::query()
+    ->whereWorkflow(ProvisionCompanyWorkflow::class)
+    ->whereTag('company', $companyId)
+    ->signalable()            // Pending, Running, or Waiting — NOT running()
+    ->handles()
+    ->first()
+    ?->signal('owner-synced');
+```
+
+Use `signalable()` (alias `active()`), **not** `running()`. A signal is accepted by any
+non-terminal run — `Pending`, `Running`, or `Waiting` — and a flow parked on `awaitSignal()` sits in
+**`Waiting`**, not `Running`. Filtering by `running()` would silently miss exactly the run you are
+trying to wake.
+
 You can also deliver from the CLI — see [Artisan commands](./artisan-commands.md):
 
 ```bash

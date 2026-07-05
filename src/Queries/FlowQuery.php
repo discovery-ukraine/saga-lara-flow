@@ -68,6 +68,22 @@ readonly class FlowQuery
         return $this->whereStatus(FlowStatus::Waiting);
     }
 
+    /**
+     * Runs that can still be handed a signal — Pending, Running, or Waiting. Use
+     * this, not running(), to locate a run to deliver a signal to: a flow parked
+     * on awaitSignal() is Waiting, not Running.
+     */
+    public function active(): static
+    {
+        return $this->whereStatus(...FlowStatus::signalable());
+    }
+
+    /** Alias of active() that reads as intent right before ->signal(). */
+    public function signalable(): static
+    {
+        return $this->active();
+    }
+
     public function completed(): static
     {
         return $this->whereStatus(FlowStatus::Completed);

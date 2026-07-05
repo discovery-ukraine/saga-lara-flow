@@ -2,6 +2,23 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.0.5 - 2026-07-05
+
+### Added
+
+- `FlowQuery::active()` (alias `FlowQuery::signalable()`) — a scope for runs that can still receive a
+  signal: `Pending`, `Running`, or `Waiting`. Backed by `FlowStatus::signalable()` as the single
+  source of truth, which mirrors the delivery boundary `SignalDispatcher` accepts (non-terminal),
+  minus `Cancelling`. Use it to locate a run to deliver a signal to. Previously the only way was
+  `->whereStatus(FlowStatus::Running, FlowStatus::Waiting)`, and reaching for `->running()` alone
+  silently missed the target: a flow parked on `awaitSignal()` sits in `Waiting`, not `Running`.
+
+### Documentation
+
+- Clarified delivering a signal — how to find the run by workflow + tag without a `$runId` (using
+  `signalable()`), that a signal reaches any non-terminal run (not only `Running`), and that
+  `signalIfRunning()` means "unless the run has already finished", not "only if status is `Running`".
+
 ## v1.0.4 - 2026-07-04
 
 ### Documentation

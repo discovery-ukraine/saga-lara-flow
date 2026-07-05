@@ -49,6 +49,9 @@ $stuck = SagaFlow::query()
 
 - `whereTag(string $key, ?string $value = null)`
 - `whereStatus(FlowStatus ...$statuses)` and shortcuts `running()`, `waiting()`, `completed()`, `failed()`
+- `active()` (alias `signalable()`) — runs that can still receive a signal: `Pending`, `Running`,
+  or `Waiting`. Use this to find a run to deliver a signal to: a flow parked on `awaitSignal()` is
+  `Waiting`, not `Running`, so `running()` would miss it.
 - `whereWorkflow(string $workflowClass)`
 - `before(DateTimeInterface)` / `after(DateTimeInterface)` (both filter `created_at`)
 

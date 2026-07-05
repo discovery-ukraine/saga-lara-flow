@@ -41,6 +41,25 @@ it('filters by status', function () {
         ->toBe([$this->failed->id]);
 });
 
+it('filters to signalable (non-terminal, non-cancelling) runs', function () {
+    $pending = makeQueryableRun(FlowStatus::Pending, TestWorkflow::class);
+    $waiting = makeQueryableRun(FlowStatus::Waiting, TestWorkflow::class);
+    makeQueryableRun(FlowStatus::Cancelling, TestWorkflow::class);
+    makeQueryableRun(FlowStatus::Cancelled, TestWorkflow::class);
+    makeQueryableRun(FlowStatus::Expired, TestWorkflow::class);
+
+    // Running is matched, Waiting is matched (a flow parked on awaitSignal()),
+    // Pending is matched; Cancelling and every terminal status are excluded.
+    $expected = [$this->running->id, $pending->id, $waiting->id];
+
+    expect(SagaFlow::query()->active()->get()->pluck('id')->all())
+        ->toEqualCanonicalizing($expected);
+
+    // signalable() is an alias of active().
+    expect(SagaFlow::query()->signalable()->get()->pluck('id')->all())
+        ->toEqualCanonicalizing($expected);
+});
+
 it('filters by workflow class', function () {
     expect(SagaFlow::query()->whereWorkflow(TwoStepWorkflow::class)->get()->pluck('id')->all())
         ->toBe([$this->completed->id]);

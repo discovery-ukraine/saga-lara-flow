@@ -78,8 +78,11 @@ readonly class FlowHandle
 
     /**
      * Safe variant of signal(): swallows the terminal-run rejection and reports
-     * whether the signal was delivered. (A missing run cannot reach here — loadFlow()
-     * throws FlowNotFoundException before a handle is created.)
+     * whether the signal was delivered. "IfRunning" means "unless the run has
+     * already finished" — a signal reaches any non-terminal run (Pending, Running,
+     * or Waiting, e.g. one parked on awaitSignal()), not only a Running one. (A
+     * missing run cannot reach here — loadFlow() throws FlowNotFoundException before
+     * a handle is created.)
      *
      * @param  array<int|string, mixed>  $payload
      */
