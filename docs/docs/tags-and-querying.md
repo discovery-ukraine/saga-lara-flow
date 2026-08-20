@@ -26,9 +26,25 @@ class CheckoutWorkflow extends Workflow { /* ... */ }
 ```php
 // from inside handle()
 $this->tag('priority', 'high');
+
+// or several at once
+$this->tags([
+    'priority' => 'high',
+    'attempt' => 2,      // int values are cast to string
+    'orders' => null,    // a tag with no value
+]);
 ```
 
 Explicit tags passed to `withTags()` override attribute tags with the same key.
+
+Both `tag()` and `tags()` return the workflow, so they chain:
+
+```php
+$this->tag('priority', 'high')->tags(['tenant' => 'acme']);
+```
+
+Re-tagging an existing key overwrites its value rather than adding a second tag, and both methods
+are idempotent across replays — safe to call unconditionally at the top of `handle()`.
 
 ## Querying runs
 

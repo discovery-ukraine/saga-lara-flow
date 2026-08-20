@@ -448,6 +448,9 @@ SagaFlow::create(CheckoutWorkflow::class)
 
 // inside handle():
 $this->tag('priority', 'high');
+
+// or several at once — both methods chain and are idempotent across replays
+$this->tags(['priority' => 'high', 'attempt' => 2, 'orders' => null]);
 ```
 
 Query runs with the fluent, type-safe `FlowQuery`:
