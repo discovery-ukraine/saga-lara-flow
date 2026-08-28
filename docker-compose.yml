@@ -3,8 +3,13 @@
 #   docker compose run --rm app composer update
 #   docker compose run --rm app composer test
 #   docker compose run --rm app composer lint
+#
+# The suite runs on SQLite by default and `app` depends on nothing, so the command
+# above starts one container and no database. The MySQL run is a separate command
+# behind a profile, for use before a commit and at a milestone:
+#   docker compose --profile mysql run --rm app-mysql vendor/bin/pest
 services:
-  app:
+  app: &app
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -14,5 +19,38 @@ services:
       - .:/app
       - composer-cache:/root/.composer
 
+  # The same toolchain pointed at the MySQL service. Both live in the `mysql`
+  # profile, so neither is started by a command that does not ask for it.
+  app-mysql:
+    <<: *app
+    profiles: [mysql]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SAGA_TEST_DB: mysql
+      SAGA_TEST_DB_HOST: mysql
+
+  mysql:
+    image: mysql:8.4
+    profiles: [mysql]
+    # Durability buys nothing for a throwaway test database and costs an fsync on
+    # every one of the suite's writes.
+    command: --innodb-flush-log-at-trx-commit=0 --innodb-doublewrite=0
+    environment:
+      MYSQL_ROOT_PASSWORD: saga
+      MYSQL_DATABASE: saga_test
+      MYSQL_USER: saga
+      MYSQL_PASSWORD: saga
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-psaga"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
 volumes:
   composer-cache:
+  mysql-data:

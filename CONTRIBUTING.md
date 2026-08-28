@@ -32,6 +32,22 @@ docker compose run --rm app composer test
 docker compose run --rm app composer lint
 ```
 
+The suite runs on an in-memory SQLite database, so the command above starts one container and
+no database server. Some of the engine's writes behave differently on MySQL, so there is a second
+command that runs the same suite against one — use it before a commit and before opening a PR:
+
+```bash
+docker compose --profile mysql run --rm app-mysql vendor/bin/pest
+```
+
+The database lives in the `mysql` compose profile: nothing starts it except a command that asks
+for it by name. `SAGA_TEST_DB=mysql` is all the suite reads, so a host with its own server can run
+against that instead — `SAGA_TEST_DB_HOST`, `_PORT`, `_DATABASE`, `_USERNAME` and `_PASSWORD` point
+it there.
+
+**Whatever database it is pointed at is emptied.** The first test drops every table in it and
+rebuilds the schema; each test after that deletes every row. Give the suite a database of its own.
+
 Or, on a matching PHP toolchain, directly:
 
 ```bash
@@ -98,6 +114,13 @@ for the other changes public behaviour and needs its own exception and its own d
   what it guards, that guard has to survive somewhere — move it, don't delete it.
 - **Queued tests** run against a real database queue driven with `queue:work --stop-when-empty`,
   not the `sync` driver.
+- **Run the suite on MySQL before you commit.** SQLite answers a conditional write differently,
+  and a test that fences on one is meaningless there — see `ConditionalWriteFenceTest`, which is
+  load-bearing on MySQL and trivially green on SQLite.
+- **Never assert the key order of a map read back out of a `json` column.** MySQL's `json` type is
+  a binary format that sorts an object's keys; SQLite keeps the text as written. Key order is the
+  driver's business, not the engine's contract — assert key by key with `toBe`, which stays strict
+  about the values, rather than dropping the whole map to a loose `toEqual`.
 
 Run a single test:
 
@@ -108,9 +131,14 @@ vendor/bin/pest --filter="cancels a non-terminal run"
 
 ### What CI does not check
 
-CI runs on **SQLite only**. Anything driver-dependent — row counts, locking, timestamp precision,
-transaction isolation — is invisible to it. Call out such a change in your PR and reason about
-MySQL and PostgreSQL explicitly; a green suite is not evidence there.
+CI runs the suite on SQLite across the `os × stability` matrix, and once more on **MySQL**. Two
+gaps remain, and a green suite is not evidence in either:
+
+- **PostgreSQL.** Untested. It counts matched rows like SQLite, so the fences hold, but a failed
+  statement poisons the transaction it is in for good — and the engine catches exceptions inside
+  its own transactions.
+- **Real concurrency.** Every interleaving in the suite is staged from one process. Nothing runs
+  two workers at once, so a lock held too long or a deadlock retried wrongly would pass.
 
 ## Documentation
 

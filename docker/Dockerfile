@@ -1,6 +1,7 @@
 # PHP 8.5 development/test image for the saga-lara-flow package.
-# Provides the extensions Testbench + the package need (pdo_sqlite for in-memory tests,
-# intl, zip, bcmath, pcntl, mbstring) plus Composer.
+# Provides the extensions Testbench + the package need (pdo_sqlite for the default
+# in-memory suite, pdo_mysql for the MySQL run, intl, zip, bcmath, pcntl, mbstring)
+# plus Composer.
 FROM php:8.5-cli
 
 RUN apt-get update \
@@ -13,6 +14,7 @@ RUN apt-get update \
         libsqlite3-dev \
     && docker-php-ext-install -j"$(nproc)" \
         pdo_sqlite \
+        pdo_mysql \
         intl \
         zip \
         bcmath \
