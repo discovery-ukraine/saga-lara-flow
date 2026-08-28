@@ -2,6 +2,8 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow;
 
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
+
 /**
  * Read-only access to the current run's identity/metadata, plus queryable tags,
  * attachable one at a time or in bulk.
@@ -10,9 +12,17 @@ trait ProvidesFlowMetadata
 {
     /**
      * Attach a queryable tag to the current run. Idempotent across replays.
+     *
+     * @throws RetryPolicyReentryException
      */
     public function tag(string $key, string|int|null $value = null): void
     {
+        // The only workflow-facing write that never takes an ordinal, so
+        // nextSequence() cannot cover it: guard it where it happens.
+        if ($this->runtime->isDecidingRun($this->runtime->run()->id)) {
+            throw RetryPolicyReentryException::for('tag()');
+        }
+
         $this->runtime->run()->tags()->updateOrCreate(
             ['key' => $key],
             ['value' => $value === null ? null : (string) $value],

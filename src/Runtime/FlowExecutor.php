@@ -43,6 +43,15 @@ class FlowExecutor
     ) {}
 
     /**
+     * Whether the run currently deciding a retryOnSignal() predicate is this one.
+     * The executor answers because it owns the runtime a pass is driven with.
+     */
+    public function isDecidingRun(string $flowRunId): bool
+    {
+        return $this->runtime->isDecidingRun($flowRunId);
+    }
+
+    /**
      * @throws Throwable
      */
     public function drive(FlowRun $flowRun, RunMode $mode): FlowRun

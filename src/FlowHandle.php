@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
@@ -31,6 +32,21 @@ readonly class FlowHandle
     public function id(): string
     {
         return $this->flowRun->id;
+    }
+
+    /**
+     * Refuse a write to the run whose own retryOnSignal() predicate is running.
+     *
+     * @throws RetryPolicyReentryException
+     */
+    private function rejectWhileDeciding(string $operation): void
+    {
+        // Asked of the executor, not of the container: FlowExecutor is a singleton
+        // holding a scoped runtime, and a queue worker forgets scoped instances
+        // between jobs — so a fresh resolve would answer for the wrong instance.
+        if (app(FlowExecutor::class)->isDecidingRun($this->flowRun->id)) {
+            throw RetryPolicyReentryException::for($operation);
+        }
     }
 
     public function run(): FlowRun
@@ -80,6 +96,8 @@ readonly class FlowHandle
      */
     public function withTags(array $tags): static
     {
+        $this->rejectWhileDeciding('withTags()');
+
         foreach ($tags as $key => $value) {
             $this->flowRun->tags()->updateOrCreate(['key' => $key], ['value' => $value]);
         }
@@ -100,6 +118,8 @@ readonly class FlowHandle
      */
     public function signal(string $name, array $payload = []): FlowRun
     {
+        $this->rejectWhileDeciding('signal()');
+
         app(SignalDispatcher::class)->deliver($this->flowRun, $name, $payload);
 
         return $this->flowRun;
@@ -136,6 +156,8 @@ readonly class FlowHandle
      */
     public function cancel(?string $reason = null): FlowRun
     {
+        $this->rejectWhileDeciding('cancel()');
+
         if ($this->flowRun->isTerminal()) {
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
@@ -161,6 +183,8 @@ readonly class FlowHandle
      */
     public function compensate(): FlowRun
     {
+        $this->rejectWhileDeciding('compensate()');
+
         if ($this->flowRun->isTerminal()) {
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }

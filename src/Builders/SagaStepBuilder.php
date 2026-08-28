@@ -4,6 +4,8 @@ namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
 use Closure;
 use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RetryContext;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use Throwable;
 
@@ -14,6 +16,8 @@ use Throwable;
  * config). retryOnSignal() mirrors the action-level policy so a step inside a group
  * can park on a signal too. step()/run() delegate back to the group so the fluent
  * chain reads as a single transactional block.
+ *
+ * Constructed by SagaBuilder::step(); its method signatures are treated as internal.
  */
 final class SagaStepBuilder
 {
@@ -28,7 +32,7 @@ final class SagaStepBuilder
 
     private ?bool $compensateOnSelfFailure = null;
 
-    private ?string $retrySignal = null;
+    private RetryPolicy|string|null $retrySignal = null;
 
     private ?int $retryMaxRetries = null;
 
@@ -38,6 +42,11 @@ final class SagaStepBuilder
      * @var list<class-string<Throwable>>|null
      */
     private ?array $retryOnly = null;
+
+    /**
+     * @var ?Closure(RetryContext): bool
+     */
+    private ?Closure $retryWhen = null;
 
     private ?int $reclaimStaleAfterSeconds = null;
 
@@ -84,18 +93,26 @@ final class SagaStepBuilder
      * suspends the group where it stands: the steps already completed keep their
      * compensations on the stack and roll back only if this one eventually gives up.
      *
+     * Stored untouched, policy object included, and handed to the action builder when
+     * the group runs. Reading or validating here would happen before run() replayed a
+     * single step, so a misconfigured later step would fail the group with its earlier
+     * steps' compensations unregistered.
+     *
      * @param  list<class-string<Throwable>>|null  $only
+     * @param  ?Closure(RetryContext): bool  $when
      */
     public function retryOnSignal(
-        string $signal,
+        RetryPolicy|string $signal,
         ?int $maxRetries = null,
         ?int $waitSeconds = null,
         ?array $only = null,
+        ?Closure $when = null,
     ): self {
         $this->retrySignal = $signal;
         $this->retryMaxRetries = $maxRetries;
         $this->retryWaitSeconds = $waitSeconds;
         $this->retryOnly = $only;
+        $this->retryWhen = $when;
 
         return $this;
     }
@@ -187,6 +204,7 @@ final class SagaStepBuilder
                 $this->retryMaxRetries,
                 $this->retryWaitSeconds,
                 $this->retryOnly,
+                $this->retryWhen,
             );
         }
 
