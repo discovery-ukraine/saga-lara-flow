@@ -23,13 +23,16 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\HistoryContractGuard;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\DeclinableChargeAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FailingWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\MakeValueAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OptionalFallbackWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OptionalRetryOnSignalWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RecordingRetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryBudgetSagaWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryOnSignalWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryPolicyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UnreliablePaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UnreliableRetryOnSignalWorkflow;
 use Illuminate\Support\Facades\Artisan;
@@ -44,6 +47,8 @@ use Illuminate\Support\Facades\Event;
 beforeEach(function () {
     FlakyPaymentAction::reset();
     UnreliablePaymentAction::reset();
+    DeclinableChargeAction::reset();
+    RecordingRetryPolicy::reset();
     CompensationLog::reset();
 });
 
@@ -1176,4 +1181,42 @@ it('does not reopen an optional step that already published its give-up', functi
     expect($final->status)->toBe(FlowStatus::Completed)
         ->and($final->actions()->where('sequence', 0)->first()->status)
         ->toBe(ActionStatus::OptionalFailed);
+});
+
+it('reaches the same retry policy decision through the queue as inline', function () {
+    useDatabaseQueue();
+    DeclinableChargeAction::reset(failures: 99, code: 422);
+    RecordingRetryPolicy::$refuseCode = 422;
+
+    $run = SagaFlow::create(RetryPolicyWorkflow::class)->withArguments('order-q-policy')->run();
+    drainQueue();
+
+    $final = SagaFlow::findRun($run->id);
+
+    // The gate lives on the replay seam, which both transports share — but only the
+    // queued path lets the step burn its native attempts first, so the policy must
+    // still be asked exactly once, and only after the queue has given up.
+    expect($final->status)->toBe(FlowStatus::Failed)
+        ->and($final->actions()->where('sequence', 1)->first()->status)->toBe(ActionStatus::Failed)
+        ->and($final->signals()->count())->toBe(0)
+        ->and(RecordingRetryPolicy::calls())->toBe(1)
+        ->and(RecordingRetryPolicy::last()->cyclesSpent)->toBe(0)
+        ->and(CompensationLog::all())->toBe(['undo:created']);
+});
+
+it('parks through the queue when the policy allows the failure', function () {
+    useDatabaseQueue();
+    DeclinableChargeAction::reset(failures: 99, code: 503);
+    RecordingRetryPolicy::$refuseCode = 422;
+
+    $run = SagaFlow::create(RetryPolicyWorkflow::class)->withArguments('order-q-park')->run();
+    drainQueue();
+
+    $final = SagaFlow::findRun($run->id);
+
+    expect($final->status)->toBe(FlowStatus::Waiting)
+        ->and($final->actions()->where('sequence', 1)->first()->status)->toBe(ActionStatus::AwaitingRetry)
+        ->and(RecordingRetryPolicy::calls())->toBe(1)
+        ->and(RecordingRetryPolicy::last()->failure->code)->toBe(503)
+        ->and(CompensationLog::all())->toBe([]);
 });

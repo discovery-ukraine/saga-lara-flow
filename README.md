@@ -384,6 +384,8 @@ $this->action(ChargeCard::class, $orderId)
         maxRetries: 3,                                  // null = unbounded, never negative
         waitSeconds: 86400,                             // how long one wait may last
         only: [InsufficientBalanceException::class],    // null = park on any exception
+        // the final say, for what the class alone cannot express
+        when: fn (RetryContext $context): bool => $context->failure->code !== 422,
     )
     ->run();
 ```
@@ -391,8 +393,42 @@ $this->action(ChargeCard::class, $orderId)
 Deliver `balance-refilled` the way you deliver any other signal and `ChargeCard` runs again, alone;
 earlier steps stay completed and un-compensated. The layers stack: Laravel's `$tries` first, then
 `retryOnSignal()`, then `continueOnFailure()`, then hard failure and compensation. When the budget is
-spent or the wait times out, the step fails exactly as it would have without the policy — same
-`ActionFailedException`, same rollback.
+spent, the wait times out, or the policy refuses the failure, the step fails exactly as it would have
+without the policy — same `ActionFailedException`, same rollback.
+
+A policy worth naming goes in a class instead, and the call site takes the object:
+
+```php
+final class BalanceRefillRecovery extends RetryPolicy
+{
+    public function signal(): string
+    {
+        return 'balance-refilled';
+    }
+
+    public function maxRetries(): ?int
+    {
+        return 3;
+    }
+
+    public function only(): ?array
+    {
+        return [InsufficientBalanceException::class];
+    }
+
+    public function shouldRetry(RetryContext $context): bool
+    {
+        return $context->failure->code !== 422;
+    }
+}
+
+$this->action(ChargeCard::class, $orderId)->retryOnSignal(new BalanceRefillRecovery)->run();
+```
+
+Nothing about the policy is persisted — it is rebuilt by `handle()` on every replay — and it decides
+whether to **park**, not whether to wake: an already-parked step spends its cycle when the signal
+arrives. The predicate must stay a pure function of its `RetryContext`; writing to the run it is
+deciding for raises `RetryPolicyReentryException`.
 
 A retry consumes **no new sequence**: the step reuses its own ordinal and `action_runs` row, so
 downstream steps land identically whether it retried or not. `saga()->step()` mirrors the method.

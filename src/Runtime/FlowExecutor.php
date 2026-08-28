@@ -13,6 +13,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Throwable;
@@ -43,10 +44,37 @@ class FlowExecutor
     ) {}
 
     /**
+     * Whether the run currently deciding a retryOnSignal() predicate is this one.
+     * The executor answers because it owns the runtime a pass is driven with.
+     */
+    public function isDecidingRun(string $flowRunId): bool
+    {
+        return $this->runtime->isDecidingRun($flowRunId);
+    }
+
+    /**
+     * A retryOnSignal() predicate may read any run it likes, but it may not drive
+     * one — not even somebody else's. There is a single runtime behind this
+     * singleton, and a nested pass rebinds and resets the one the deciding pass is
+     * suspended inside: the outer run loses its saga stack, its ordinal counter and,
+     * once the nested pass clears up after itself, the run it was bound to.
+     *
+     * @throws RetryPolicyReentryException
+     */
+    private function rejectWhileDeciding(): void
+    {
+        if ($this->runtime->isDeciding()) {
+            throw RetryPolicyReentryException::for('a nested flow execution');
+        }
+    }
+
+    /**
      * @throws Throwable
      */
     public function drive(FlowRun $flowRun, RunMode $mode): FlowRun
     {
+        $this->rejectWhileDeciding();
+
         try {
             return $this->tenancy->for(
                 $flowRun,
@@ -124,6 +152,8 @@ class FlowExecutor
      */
     public function collectCompensations(FlowRun $flowRun): array
     {
+        $this->rejectWhileDeciding();
+
         return $this->tenancy->for(
             $flowRun,
             $flowRun->workflow_class,

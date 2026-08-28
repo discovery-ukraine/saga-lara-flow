@@ -407,6 +407,31 @@ Note that neither is a subclass of `InvalidTransitionException`, and `Concurrent
 is deliberately not one either: that exception means the state graph forbids the move, and repeating
 it cannot help, whereas a lost race is transient and re-reading the run is the sensible response.
 
+### 17. `retryOnSignal()` takes a policy object and a `when:` predicate
+
+The first parameter widens from `string` to `RetryPolicy|string`, and a fifth optional parameter,
+`when:`, is appended. Every existing call site compiles and behaves identically — nothing is
+required of you.
+
+What is new is the fourth gate. A failure that passed `only:` is now also put to `when:` (or to the
+policy's `shouldRetry()`), and a `false` there ends the policy for that failure: the step fails
+exactly as it would have without one. With neither given, nothing is asked and nothing changes.
+
+The one thing to know before writing a policy class: **nothing about it is persisted**, and only the
+ceiling's stored value is frozen. `maxRetries()` is read when the step is scheduled and held on
+`action_runs.retry_signal_max_attempts`, which is what replay enforces from then on — the same rule
+`maxRetries:` has always followed. What is *not* frozen is the calling: your `handle()` builds the
+policy again on every pass, and the builder re-reads `signal()`, `waitSeconds()` and `only()` off it
+every time — including on a pass that only replays a step already scheduled or completed. Their
+values take effect immediately. `shouldRetry()` is stored rather than called, and runs at the gate
+only for a step that has failed. A deploy therefore changes all four for runs already in flight —
+including which signal a parked step will next wait for.
+
+`ActionBuilder` and `SagaStepBuilder` are constructed by the engine, and this release widens
+`retryOnSignal()` on both. That is reachable if you override the public `Workflow::action()` to
+return your own builder subclass: PHP refuses to load an override whose signature no longer matches,
+so widen it to `RetryPolicy|string $signal` and accept the fifth `?Closure $when` parameter.
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

@@ -4,6 +4,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\MissingFlowContextException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 
 /**
@@ -24,6 +25,8 @@ final class FlowRuntime
     private int $sagaGroup = 0;
 
     private bool $collecting = false;
+
+    private bool $deciding = false;
 
     public function __construct(
         private readonly StepSequence $sequence = new StepSequence,
@@ -48,8 +51,16 @@ final class FlowRuntime
         return $this->mode;
     }
 
+    /**
+     * @throws RetryPolicyReentryException
+     */
     public function nextSequence(): int
     {
+        // Every seam takes its ordinal here first, so one check covers them all.
+        if ($this->deciding) {
+            throw RetryPolicyReentryException::for('a workflow operation');
+        }
+
         return $this->sequence->next();
     }
 
@@ -93,6 +104,38 @@ final class FlowRuntime
     }
 
     /**
+     * Enter a retryOnSignal() decision: while the caller's predicate runs, no seam
+     * may consume an ordinal. See RetryPolicyReentryException for why.
+     */
+    public function beginDeciding(): void
+    {
+        $this->deciding = true;
+    }
+
+    public function endDeciding(): void
+    {
+        $this->deciding = false;
+    }
+
+    /**
+     * Whether any retryOnSignal() decision is in flight. Reads on other runs are
+     * fine during one; driving the engine is not, because there is one runtime.
+     */
+    public function isDeciding(): bool
+    {
+        return $this->deciding;
+    }
+
+    /**
+     * Whether the run being decided is this one. A predicate may touch other runs;
+     * not the one whose parking the seam writes the moment it returns.
+     */
+    public function isDecidingRun(string $flowRunId): bool
+    {
+        return $this->deciding && $this->flowRun?->id === $flowRunId;
+    }
+
+    /**
      * Start a replay pass: rewind the sequence counter and the saga stack/group
      * counter so the pass rebuilds them deterministically from stored history.
      */
@@ -102,6 +145,7 @@ final class FlowRuntime
         $this->sagaStack->reset();
         $this->sagaGroup = 0;
         $this->collecting = false;
+        $this->deciding = false;
     }
 
     /**

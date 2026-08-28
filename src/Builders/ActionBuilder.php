@@ -19,11 +19,17 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RecordedFailure;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RetryContext;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\CompensationEntry;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowSuspender;
@@ -50,9 +56,14 @@ use Throwable;
  * nothing. onCompensationFailure() overrides the default Stop policy. All three
  * resolve with precedence action > group (saga()) > config.
  *
+ * Constructed by the engine, and reachable for subclassing only by overriding
+ * Workflow::action(): its method signatures are treated as internal.
+ *
  * retryOnSignal() turns a failure into a wait: the step parks on a named signal, and
  * each delivery re-runs THIS step alone at the very same ordinal. The seam is the only
- * decision-maker, so nothing else resolves the row it reads back.
+ * decision-maker, so nothing else resolves the row it reads back. Its policy may be
+ * four arguments or a RetryPolicy object; either way nothing about it is persisted
+ * beyond the signal name and the ceiling, and the decision is retaken on every replay.
  */
 class ActionBuilder
 {
@@ -84,6 +95,14 @@ class ActionBuilder
      * @var list<class-string<Throwable>>|null
      */
     private ?array $retryOnly = null;
+
+    /**
+     * Both forms of the fourth gate reduce to this, so nothing below knows which the
+     * caller used: a RetryPolicy contributes shouldRetry(...), when: contributes itself.
+     *
+     * @var ?Closure(RetryContext): bool
+     */
+    private ?Closure $retryDecision = null;
 
     private ?int $reclaimStaleAfterSeconds = null;
 
@@ -234,18 +253,38 @@ class ActionBuilder
      * $waitSeconds bounds ONE wait (null falls back to the configured default signal
      * timeout);
      * $only restricts the policy to the listed exception classes and their
-     * subclasses (null reacts to every failure). Once the budget is spent, the wait
-     * times out, or the failure falls outside $only, the step fails exactly as it
-     * would have without this policy.
+     * subclasses (null reacts to every failure);
+     * $when has the final say on a failure that passed $only, and returning false
+     * from it ends the policy for that failure. Once the budget is spent, the wait
+     * times out, the failure falls outside $only, or $when refuses it, the step
+     * fails exactly as it would have without this policy.
+     *
+     * A RetryPolicy passed as $signal carries all four itself, and combining it with
+     * any of them is refused. See RetryPolicy for which of its values survive a
+     * deploy and which do not.
      *
      * @param  list<class-string<Throwable>>|null  $only
+     * @param  ?Closure(RetryContext): bool  $when
      */
     public function retryOnSignal(
-        string $signal,
+        RetryPolicy|string $signal,
         ?int $maxRetries = null,
         ?int $waitSeconds = null,
         ?array $only = null,
+        ?Closure $when = null,
     ): static {
+        if ($signal instanceof RetryPolicy) {
+            $this->rejectPolicyWithArguments($maxRetries, $waitSeconds, $only, $when);
+
+            // Unwrapped once, so the policy is asked as often as an argument list is
+            // evaluated and every seam below goes on reading a plain string.
+            $when = $signal->shouldRetry(...);
+            $maxRetries = $signal->maxRetries();
+            $waitSeconds = $signal->waitSeconds();
+            $only = $signal->only();
+            $signal = $signal->signal();
+        }
+
         $this->rejectNegative('maxRetries', $maxRetries);
         $this->rejectNegative('waitSeconds', $waitSeconds);
 
@@ -253,6 +292,7 @@ class ActionBuilder
         $this->retryMaxRetries = $maxRetries;
         $this->retryWaitSeconds = $waitSeconds;
         $this->retryOnly = $only;
+        $this->retryDecision = $when;
 
         return $this;
     }
@@ -448,8 +488,20 @@ class ActionBuilder
                     app(FlowSuspender::class)->suspend('action', $sequence);
                 }
 
-                if ($this->shouldRetryOnSignal($step)) {
-                    $this->parkForRetry($step, $sequence);
+                try {
+                    if ($this->shouldRetryOnSignal($step)) {
+                        $this->parkForRetry($step, $sequence);
+                    }
+                } catch (RetryPolicyReentryException $reentry) {
+                    // The predicate is broken, but the step under it really did fail,
+                    // and the rollback is built from this pass alone — so without this
+                    // the one thing the run forgets is the compensation the caller
+                    // asked for on this very step.
+                    if ($this->shouldCompensateFailedStep()) {
+                        $this->pushCompensation($step->id, $sequence);
+                    }
+
+                    throw $reentry;
                 }
 
                 // An optional step still has retries left: it is not yet
@@ -798,6 +850,8 @@ class ActionBuilder
      * Whether this replay pass should park the failed step for a signal-gated retry.
      * The seam decides alone: the only-filter is never persisted, and the budget and
      * the wait are read from the row.
+     *
+     * @throws InternalFlowControl
      */
     private function shouldRetryOnSignal(ActionRun $step): bool
     {
@@ -818,7 +872,77 @@ class ActionBuilder
             return false;
         }
 
-        return $this->matchesOnly($step);
+        if (! $this->matchesOnly($step)) {
+            return false;
+        }
+
+        return $this->policyAllows($step, $maxRetries);
+    }
+
+    /**
+     * The last gate, and the only one that runs the caller's own code — hence last,
+     * after three structural checks that cost a column read.
+     *
+     * A throw is absorbed as "do not park", the outcome the caller was already
+     * prepared for; letting it out would fail the whole run on one path and truncate
+     * the compensation stack in silence on the other. It is logged rather than
+     * swallowed: a policy that never parks looks identical to one that always throws.
+     *
+     * @throws InternalFlowControl
+     */
+    private function policyAllows(ActionRun $step, ?int $maxRetries): bool
+    {
+        $decide = $this->retryDecision;
+
+        if ($decide === null) {
+            return true;
+        }
+
+        // Compensation-only planning stops at this step either way, so the answer
+        // would change nothing — and it runs caller code, which that pass must not.
+        if ($this->runtime->isCollecting()) {
+            return true;
+        }
+
+        $flowRun = $this->runtime->run();
+
+        // Outside the guard: that absorbs a defect in the caller's predicate, and
+        // reading our own row is not one. A throw here is ours and should surface.
+        $context = new RetryContext(
+            runId: $flowRun->id,
+            workflowClass: $flowRun->workflow_class,
+            actionClass: $step->action_class,
+            sequence: $step->sequence,
+            signal: (string) $this->retrySignal,
+            cyclesSpent: $step->retry_signal_attempts,
+            cap: $maxRetries,
+            executions: $step->attempts,
+            failure: RecordedFailure::fromRecord($step->exception),
+        );
+
+        $this->runtime->beginDeciding();
+
+        try {
+            return $decide($context);
+        } catch (InternalFlowControl|HistoryContractMismatchException|RetryPolicyReentryException $control) {
+            // Not answers, and none has a safe reading: the engine suspends with the
+            // first, reports the second on its own terms, and the third is a workflow
+            // the caller has to fix, not a step that quietly never parks.
+            throw $control;
+        } catch (Throwable $exception) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_RETRY_POLICY_THREW, [
+                'flow_run_id' => $flowRun->id,
+                'action_run_id' => $step->id,
+                'sequence' => $step->sequence,
+                'signal' => $this->retrySignal,
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return false;
+        } finally {
+            $this->runtime->endDeciding();
+        }
     }
 
     /**
@@ -909,6 +1033,36 @@ class ActionBuilder
                 "retryOnSignal() {$name} must be zero or greater, got {$value}.",
             );
         }
+    }
+
+    /**
+     * A policy object and the arguments it replaces are two sources of truth for one
+     * decision, and there is no reading of "both" that is not a guess about which one
+     * the caller meant. Refuse it, naming what to drop.
+     *
+     * @param  list<class-string<Throwable>>|null  $only
+     */
+    private function rejectPolicyWithArguments(
+        ?int $maxRetries,
+        ?int $waitSeconds,
+        ?array $only,
+        ?Closure $when,
+    ): void {
+        $given = array_keys(array_filter([
+            'maxRetries' => $maxRetries !== null,
+            'waitSeconds' => $waitSeconds !== null,
+            'only' => $only !== null,
+            'when' => $when !== null,
+        ]));
+
+        if ($given === []) {
+            return;
+        }
+
+        throw new InvalidArgumentException(
+            'retryOnSignal() takes a RetryPolicy or the arguments it replaces, not both; '
+            .'drop '.implode(', ', $given).' or move it into the policy.',
+        );
     }
 
     /**
