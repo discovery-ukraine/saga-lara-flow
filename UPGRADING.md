@@ -421,10 +421,11 @@ The one thing to know before writing a policy class: **nothing about it is persi
 ceiling's stored value is frozen. `maxRetries()` is read when the step is scheduled and held on
 `action_runs.retry_signal_max_attempts`, which is what replay enforces from then on — the same rule
 `maxRetries:` has always followed. What is *not* frozen is the calling: your `handle()` builds the
-policy again on every pass, and the builder reads `signal()`, `waitSeconds()` and `only()` off it
-again — for a step already scheduled or completed included — with their values taking effect
-immediately. `shouldRetry()` is asked only of a failed step, at the gate. A deploy therefore changes
-all four for runs already in flight — including which signal a parked step will next wait for.
+policy again on every pass, and the builder re-reads `signal()`, `waitSeconds()` and `only()` off it
+every time — including on a pass that only replays a step already scheduled or completed. Their
+values take effect immediately. `shouldRetry()` is stored rather than called, and runs at the gate
+only for a step that has failed. A deploy therefore changes all four for runs already in flight —
+including which signal a parked step will next wait for.
 
 `ActionBuilder` and `SagaStepBuilder` are constructed by the engine, and this release widens
 `retryOnSignal()` on both. That is reachable if you override the public `Workflow::action()` to

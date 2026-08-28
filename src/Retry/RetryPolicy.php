@@ -13,10 +13,11 @@ use Throwable;
  * step behaves exactly as it would have with the equivalent arguments.
  *
  * Your handle() builds the policy afresh on every replay, so nothing about it is
- * persisted. The builder reads signal(), maxRetries(), waitSeconds() and only() there
- * and then — for a step already scheduled or completed included; shouldRetry() it
- * keeps for the gate, where only a failed step is put to it. What is frozen is one
- * value, not one method:
+ * persisted. The builder reads signal(), maxRetries(), waitSeconds() and only() the
+ * moment it is handed the object, and it does so on every pass — including a pass
+ * that only replays a step already scheduled or completed. shouldRetry() is stored
+ * rather than called: it runs at the gate, and only for a step that has failed. What
+ * is frozen is one value, not one method:
  *
  * - maxRetries() is read when the step is SCHEDULED into
  *   action_runs.retry_signal_max_attempts, and every later replay enforces the row.
