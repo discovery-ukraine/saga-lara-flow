@@ -12,9 +12,11 @@ use Throwable;
  * Pass an instance to ActionBuilder::retryOnSignal(); the builder reads it and the
  * step behaves exactly as it would have with the equivalent arguments.
  *
- * All five run on every replay — the builder rebuilds the policy each pass, so even a
- * step already scheduled or completed calls them again. What is frozen is one value,
- * not one method:
+ * Your handle() builds the policy afresh on every replay, so nothing about it is
+ * persisted. The builder reads signal(), maxRetries(), waitSeconds() and only() there
+ * and then — for a step already scheduled or completed included; shouldRetry() it
+ * keeps for the gate, where only a failed step is put to it. What is frozen is one
+ * value, not one method:
  *
  * - maxRetries() is read when the step is SCHEDULED into
  *   action_runs.retry_signal_max_attempts, and every later replay enforces the row.
@@ -25,8 +27,8 @@ use Throwable;
  *   back: renaming a signal moves what a parked step will next wait for, and abandons
  *   a delivery already made under the old name.
  *
- * Every method runs during replay, so all five must be deterministic — the same
- * question must get the same answer on every pass. Two further obligations:
+ * None of the five is asked once and remembered, so all five must be deterministic —
+ * the same question must get the same answer on every pass. Two further obligations:
  *
  * - The first four are called while the workflow is still building the step, before
  *   the seam has resolved anything, so one that throws takes the whole run down with

@@ -176,8 +176,10 @@ cancel the run, or let the wait time out.
 :::
 
 :::info One value is frozen; no method is
-All five methods run on every replay — the builder rebuilds the policy each pass, so even a step
-already scheduled or completed calls them again.
+Your `handle()` builds the policy afresh on every replay, so nothing about it is persisted. The
+builder reads `signal()`, `maxRetries()`, `waitSeconds()` and `only()` there and then, for a step
+already scheduled or completed included. `shouldRetry()` it keeps for the gate, where only a failed
+step is put to it.
 
 `maxRetries()` is the one whose value is kept: it is written to
 `action_runs.retry_signal_max_attempts` when the step is scheduled, and every later replay enforces

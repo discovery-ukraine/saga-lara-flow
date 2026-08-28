@@ -413,6 +413,20 @@ it('holds the re-entry guard when the container forgets its scoped instances', f
         ->and($run->signals()->count())->toBe(0);
 });
 
+it('reads the policy config on every replay but asks the predicate only of a failure [pinning]', function () {
+    DeclinableChargeAction::reset(failures: 1);
+
+    $run = SagaFlow::create(RetryPolicyWorkflow::class)->withArguments('order-22')->runSync();
+    $run = refillAndDriveRun($run);
+
+    // Pins what the docs promise: handle() rebuilds the policy on every pass and the
+    // builder reads its configuration off it again, a completed step included, while
+    // the predicate is only ever put to a step that has actually failed.
+    expect($run->status)->toBe(FlowStatus::Completed)
+        ->and(RecordingRetryPolicy::calls())->toBe(1)
+        ->and(RecordingRetryPolicy::$configReads)->toBeGreaterThan(RecordingRetryPolicy::calls());
+});
+
 it('refuses a predicate that drives another run', function () {
     DeclinableChargeAction::reset(failures: 99);
 

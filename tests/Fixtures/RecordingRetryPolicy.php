@@ -23,6 +23,12 @@ final class RecordingRetryPolicy extends RetryPolicy
 
     public static string $signalName = 'balance-refilled';
 
+    /**
+     * How often the builder read the policy's configuration, as against how often it
+     * put a failure to the predicate. The two are deliberately different numbers.
+     */
+    public static int $configReads = 0;
+
     public static ?int $refuseCode = null;
 
     public static bool $throws = false;
@@ -39,6 +45,7 @@ final class RecordingRetryPolicy extends RetryPolicy
     public static function reset(): void
     {
         self::$seen = [];
+        self::$configReads = 0;
         self::$signalName = 'balance-refilled';
         self::$refuseCode = null;
         self::$throws = false;
@@ -59,6 +66,8 @@ final class RecordingRetryPolicy extends RetryPolicy
 
     public function signal(): string
     {
+        self::$configReads++;
+
         return self::$signalName;
     }
 

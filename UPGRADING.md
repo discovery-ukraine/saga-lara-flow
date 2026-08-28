@@ -417,14 +417,14 @@ What is new is the fourth gate. A failure that passed `only:` is now also put to
 policy's `shouldRetry()`), and a `false` there ends the policy for that failure: the step fails
 exactly as it would have without one. With neither given, nothing is asked and nothing changes.
 
-The one thing to know before writing a policy class: **every method is called on every replay**, and
-only the ceiling's stored value is frozen. `maxRetries()` is read when the step is scheduled and held
-on `action_runs.retry_signal_max_attempts`, which is what replay enforces from then on — the same
-rule `maxRetries:` has always followed. What is *not* frozen is the calling: the builder reconstructs
-the policy on every pass, so all five run again even for a step already scheduled or completed, and
-their values, `maxRetries()`'s excepted, take effect immediately. A deploy therefore changes
-`signal()`, `waitSeconds()`, `only()` and `shouldRetry()` for runs already in flight — including
-which signal a parked step will next wait for.
+The one thing to know before writing a policy class: **nothing about it is persisted**, and only the
+ceiling's stored value is frozen. `maxRetries()` is read when the step is scheduled and held on
+`action_runs.retry_signal_max_attempts`, which is what replay enforces from then on — the same rule
+`maxRetries:` has always followed. What is *not* frozen is the calling: your `handle()` builds the
+policy again on every pass, and the builder reads `signal()`, `waitSeconds()` and `only()` off it
+again — for a step already scheduled or completed included — with their values taking effect
+immediately. `shouldRetry()` is asked only of a failed step, at the gate. A deploy therefore changes
+all four for runs already in flight — including which signal a parked step will next wait for.
 
 `ActionBuilder` and `SagaStepBuilder` are constructed by the engine, and this release widens
 `retryOnSignal()` on both. That is reachable if you override the public `Workflow::action()` to
