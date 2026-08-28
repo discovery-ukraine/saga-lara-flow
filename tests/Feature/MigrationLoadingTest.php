@@ -1,8 +1,15 @@
 <?php
 
+use DiscoveryUkraine\SagaLaraFlow\Tests\TestCase;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+
+// The only file that changes the schema rather than reading it: it rolls single
+// migrations up and down, drops the tables, and adds and removes uniques. On SQLite
+// whatever it leaves behind dies with the in-memory database. On a server the schema
+// outlives the test, so hand the next one a rebuild.
+afterEach(fn () => TestCase::forgetSchema());
 
 // The provider calls runsMigrations(), so a host app installs with just
 // `php artisan migrate` — no vendor:publish step. Two things must hold, and each

@@ -77,8 +77,14 @@ it('retries only the parked step when the signal arrives', function () {
 
     $final = refillAndDrive($run);
 
+    // Read key by key rather than comparing the map whole: a map read back out of a
+    // json column comes back in whatever order the driver stored it, and MySQL's json
+    // type is a binary format that sorts an object's keys. Comparing the whole map
+    // would have to drop to a loose ==, which would stop noticing an int that turned
+    // into a string.
     expect($final->status)->toBe(FlowStatus::Completed)
-        ->and($final->result['charged'] ?? null)->toBe(['charged' => 'order-2', 'calls' => 2]);
+        ->and($final->result['charged']['charged'] ?? null)->toBe('order-2')
+        ->and($final->result['charged']['calls'] ?? null)->toBe(2);
 
     $actions = $final->actions()->orderBy('sequence')->get();
 

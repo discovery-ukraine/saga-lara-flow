@@ -65,3 +65,51 @@ jobs:
 
       - name: Execute tests
         run: vendor/bin/pest --ci
+
+  # A second job rather than a `db` axis on the matrix above: service containers are
+  # declared per job and run on Linux only, and that matrix includes windows-latest.
+  # One combination is enough — the divergence this covers is the driver's, not the
+  # dependency resolution's.
+  test-mysql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    name: MySQL - P8.5 - L13.* - prefer-stable
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: saga
+          MYSQL_DATABASE: saga_test
+          MYSQL_USER: saga
+          MYSQL_PASSWORD: saga
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -psaga"
+          --health-interval=3s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.5
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, pdo_mysql, bcmath, soap, intl, gd, exif, iconv, imagick, fileinfo
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer require "laravel/framework:13.*" "orchestra/testbench:11.*" --no-interaction --no-update
+          composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute tests
+        env:
+          SAGA_TEST_DB: mysql
+          SAGA_TEST_DB_HOST: 127.0.0.1
+        run: vendor/bin/pest --ci
