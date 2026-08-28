@@ -4,7 +4,12 @@
 # plus Composer.
 FROM php:8.5-cli
 
-RUN apt-get update \
+# Fetch over HTTPS. Some networks sit behind a transparent HTTP cache that hands apt a
+# body whose hash does not match the index, and the build dies on "Hash Sum mismatch"
+# for a different package each time.
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null; \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         git \
         unzip \
