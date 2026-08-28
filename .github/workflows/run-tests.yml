@@ -9,6 +9,10 @@ on:
       - 'phpunit.xml.dist'
       - 'composer.json'
       - 'composer.lock'
+      # The harness decides which database the suite runs against, so a change to it
+      # is a change to what these jobs prove.
+      - 'docker-compose.yml'
+      - 'docker/**'
   pull_request:
     paths:
       - '**.php'
@@ -17,6 +21,10 @@ on:
       - 'phpunit.xml.dist'
       - 'composer.json'
       - 'composer.lock'
+      # The harness decides which database the suite runs against, so a change to it
+      # is a change to what these jobs prove.
+      - 'docker-compose.yml'
+      - 'docker/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -111,5 +119,51 @@ jobs:
       - name: Execute tests
         env:
           SAGA_TEST_DB: mysql
+          SAGA_TEST_DB_HOST: 127.0.0.1
+        run: vendor/bin/pest --ci
+
+  # Same shape as test-mysql, for a driver that answers a different question: it counts
+  # matched rows like SQLite, but it refuses every statement after a failed one until the
+  # transaction is rolled back, and it truncates an identifier past 63 bytes.
+  test-pgsql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    name: PostgreSQL - P8.5 - L13.* - prefer-stable
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: saga_test
+          POSTGRES_USER: saga
+          POSTGRES_PASSWORD: saga
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U saga -d saga_test"
+          --health-interval=3s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.5
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, pdo_pgsql, bcmath, soap, intl, gd, exif, iconv, imagick, fileinfo
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer require "laravel/framework:13.*" "orchestra/testbench:11.*" --no-interaction --no-update
+          composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute tests
+        env:
+          SAGA_TEST_DB: pgsql
           SAGA_TEST_DB_HOST: 127.0.0.1
         run: vendor/bin/pest --ci

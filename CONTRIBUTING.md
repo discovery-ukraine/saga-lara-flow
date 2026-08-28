@@ -33,17 +33,22 @@ docker compose run --rm app composer lint
 ```
 
 The suite runs on an in-memory SQLite database, so the command above starts one container and
-no database server. Some of the engine's writes behave differently on MySQL, so there is a second
-command that runs the same suite against one — use it before a commit and before opening a PR:
+no database server. Some of the engine's writes behave differently on a real server, so the same
+suite also runs against MySQL and PostgreSQL, each behind a compose profile of its own:
 
 ```bash
 docker compose --profile mysql run --rm app-mysql vendor/bin/pest
+docker compose --profile pgsql run --rm app-pgsql vendor/bin/pest
 ```
 
-The database lives in the `mysql` compose profile: nothing starts it except a command that asks
-for it by name. `SAGA_TEST_DB=mysql` is all the suite reads, so a host with its own server can run
-against that instead — `SAGA_TEST_DB_HOST`, `_PORT`, `_DATABASE`, `_USERNAME` and `_PASSWORD` point
-it there.
+Run **MySQL before a commit and before opening a PR** — it is where a conditional write answers
+differently, which is what most of the engine rests on. **PostgreSQL at a milestone**, and whenever
+a change touches transactions, locking or migrations. CI runs both on any pull request that touches
+code or the harness, so a local run buys you the answer sooner, not a different one.
+
+Nothing starts a server except a command that asks for it by name. `SAGA_TEST_DB=mysql` or `=pgsql`
+is all the suite reads, so a host with its own server can run against that instead —
+`SAGA_TEST_DB_HOST`, `_PORT`, `_DATABASE`, `_USERNAME` and `_PASSWORD` point it there.
 
 **Whatever database it is pointed at is emptied.** The first test drops every table in it and
 rebuilds the schema; each test after that deletes every row. Give the suite a database of its own.
@@ -78,6 +83,11 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
   whose every value already equals what is stored reports zero there and one on SQLite and
   PostgreSQL. Never fence on an update whose only written column may already hold its value, and
   refuse only after reading back what actually holds the row. See `FlowStateMachine::write()`.
+- **Never swallow a query failure inside a `transaction()`.** PostgreSQL aborts the whole
+  transaction on the first failed statement and turns the eventual commit into a rollback, while
+  reporting success; SQLite and MySQL carry on. A caught-and-ignored failure therefore commits on
+  two drivers and silently discards everything on the third. This reaches listener code too: the
+  events the engine fires inside its own transactions run there.
 - **A read that decides something must use `useWritePdo()`.** A lagging replica will answer with the
   very state the fence was guarding against.
 - **Do not `refresh()` a model the caller still holds.** It discards their unsaved attributes;
@@ -117,6 +127,10 @@ for the other changes public behaviour and needs its own exception and its own d
 - **Run the suite on MySQL before you commit.** SQLite answers a conditional write differently,
   and a test that fences on one is meaningless there — see `ConditionalWriteFenceTest`, which is
   load-bearing on MySQL and trivially green on SQLite.
+- **A test may be written for one driver, but say so in the file.** `LongTablePrefixTest` skips
+  everywhere but PostgreSQL because no other driver truncates an identifier, and
+  `TransactionIntegrityTest` skips one case on PostgreSQL against a defect that is filed rather
+  than hidden. A skip without a stated reason is indistinguishable from a test nobody runs.
 - **Never assert the key order of a map read back out of a `json` column.** MySQL's `json` type is
   a binary format that sorts an object's keys; SQLite keeps the text as written. Key order is the
   driver's business, not the engine's contract — assert key by key with `toBe`, which stays strict
@@ -131,14 +145,13 @@ vendor/bin/pest --filter="cancels a non-terminal run"
 
 ### What CI does not check
 
-CI runs the suite on SQLite across the `os × stability` matrix, and once more on **MySQL**. Two
-gaps remain, and a green suite is not evidence in either:
+CI runs the suite on SQLite across the `os × stability` matrix, and once more on each of **MySQL**
+and **PostgreSQL**. Two gaps remain, and a green suite is not evidence in either:
 
-- **PostgreSQL.** Untested. It counts matched rows like SQLite, so the fences hold, but a failed
-  statement poisons the transaction it is in for good — and the engine catches exceptions inside
-  its own transactions.
 - **Real concurrency.** Every interleaving in the suite is staged from one process. Nothing runs
   two workers at once, so a lock held too long or a deadlock retried wrongly would pass.
+- **Transaction isolation.** For the same reason: `READ COMMITTED` and `REPEATABLE READ` differ
+  only for a read-back that races another writer, and nothing here races.
 
 ## Documentation
 
