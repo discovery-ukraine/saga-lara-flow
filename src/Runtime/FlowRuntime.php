@@ -118,6 +118,15 @@ final class FlowRuntime
     }
 
     /**
+     * Whether any retryOnSignal() decision is in flight. Reads on other runs are
+     * fine during one; driving the engine is not, because there is one runtime.
+     */
+    public function isDeciding(): bool
+    {
+        return $this->deciding;
+    }
+
+    /**
      * Whether the run being decided is this one. A predicate may touch other runs;
      * not the one whose parking the seam writes the moment it returns.
      */

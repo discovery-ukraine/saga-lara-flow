@@ -192,11 +192,17 @@ delivery already made under the old name. That is true of the plain string form 
 
 A predicate may not write to the run it is deciding for — no `action()`, `awaitSignal()`, `child()`,
 `sideEffect()` or `tag()`, and no `signal()`, `cancel()`, `compensate()` or `withTags()` on that
-run's own handle.
-It is not asked again once the step it guards succeeds, so an ordinal it consumed would be left
-unclaimed and the next step would land in the wrong slot, and a run it cancelled would be handed a
-live wait a moment later. The engine refuses the attempt with `RetryPolicyReentryException` before
-anything is written. Other runs are fair game.
+run's own handle. It is not asked again once the step it guards succeeds, so an ordinal it consumed
+would be left unclaimed and the next step would land in the wrong slot, and a run it cancelled would
+be handed a live wait a moment later.
+
+Nor may it drive *any* run, its own or somebody else's — `runSync()` and `compensate()` are refused
+too. One runtime serves the whole process, so a nested pass would rewind the ordinal counter and
+empty the saga stack of the pass waiting on the answer. Reading other runs — their status, their
+history, their tags — stays fair game.
+
+The engine refuses every one of these with `RetryPolicyReentryException` before anything is
+written.
 
 A predicate that throws anything else is read as `false`: the step fails as it would have without a
 policy, and the run carries the step's own business failure rather than the policy's. The throw is

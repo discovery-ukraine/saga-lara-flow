@@ -14,6 +14,9 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\DeclinableChargeAction;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ManualCompensateWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\NestedCompensateRetryWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\NestedDriveRetryWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RecordingRetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ReentrantRetryCompensationWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryOnSignalSagaGroupWorkflow;
@@ -408,4 +411,38 @@ it('holds the re-entry guard when the container forgets its scoped instances', f
         ->and($run->exception['class'] ?? null)->toBe(RetryPolicyReentryException::class)
         ->and($run->actions()->where('status', ActionStatus::AwaitingRetry)->count())->toBe(0)
         ->and($run->signals()->count())->toBe(0);
+});
+
+it('refuses a predicate that drives another run', function () {
+    DeclinableChargeAction::reset(failures: 99);
+
+    $run = SagaFlow::create(NestedDriveRetryWorkflow::class)->withArguments('order-20')->runSync();
+
+    // There is one runtime behind the singleton executor: a nested pass rebinds and
+    // resets it, then clears it on the way out, leaving the deciding pass with no
+    // bound run at all. The target being a different run is no protection.
+    expect($run->status)->toBe(FlowStatus::Failed)
+        ->and($run->exception['class'] ?? null)->toBe(RetryPolicyReentryException::class)
+        ->and($run->signals()->count())->toBe(0)
+        ->and($run->actions()->where('status', ActionStatus::AwaitingRetry)->count())->toBe(0);
+});
+
+it('refuses a predicate that compensates another run', function () {
+    DeclinableChargeAction::reset(failures: 99);
+
+    // Non-terminal, so compensate() gets past its own terminal check and reaches
+    // the executor — which is the path under test.
+    $other = SagaFlow::create(ManualCompensateWorkflow::class)->runSync();
+    expect($other->status)->toBe(FlowStatus::Waiting);
+
+    $run = SagaFlow::create(NestedCompensateRetryWorkflow::class)
+        ->withArguments('order-21', $other->id)
+        ->runSync();
+
+    // compensate() reaches the same executor by a compensation-only replay, so it
+    // is refused on the same grounds — and the other run is left as it was.
+    expect($run->status)->toBe(FlowStatus::Failed)
+        ->and($run->exception['class'] ?? null)->toBe(RetryPolicyReentryException::class)
+        ->and(SagaFlow::findRun($other->id)->status)->toBe(FlowStatus::Waiting)
+        ->and(CompensationLog::all())->toBe([]);
 });

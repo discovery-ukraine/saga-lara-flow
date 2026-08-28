@@ -20,8 +20,8 @@ class RetryPolicyReentryException extends FlowException
         return new self(
             "A retryOnSignal() decision tried to run {$operation}. A retry predicate must be a pure "
             .'function of the RetryContext it is given: it cannot start actions, await signals, run '
-            .'child workflows, or record side effects, because it is not replayed once the step it '
-            .'guards succeeds. Move the work into the action, or into a listener.'
+            .'child workflows, record side effects, or drive another run, because it is not replayed '
+            .'once the step it guards succeeds. Move the work into the action, or into a listener.'
         );
     }
 }
