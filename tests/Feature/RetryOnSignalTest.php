@@ -81,10 +81,14 @@ it('retries only the parked step when the signal arrives', function () {
     // json column comes back in whatever order the driver stored it, and MySQL's json
     // type is a binary format that sorts an object's keys. Comparing the whole map
     // would have to drop to a loose ==, which would stop noticing an int that turned
-    // into a string.
+    // into a string. The count keeps what the whole-map comparison also said: these
+    // two keys and no third.
+    $charged = $final->result['charged'] ?? null;
+
     expect($final->status)->toBe(FlowStatus::Completed)
-        ->and($final->result['charged']['charged'] ?? null)->toBe('order-2')
-        ->and($final->result['charged']['calls'] ?? null)->toBe(2);
+        ->and($charged)->toHaveCount(2)
+        ->and($charged['charged'] ?? null)->toBe('order-2')
+        ->and($charged['calls'] ?? null)->toBe(2);
 
     $actions = $final->actions()->orderBy('sequence')->get();
 
