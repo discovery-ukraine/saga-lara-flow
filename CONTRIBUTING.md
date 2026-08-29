@@ -88,6 +88,14 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
   reporting success; SQLite and MySQL carry on. A caught-and-ignored failure therefore commits on
   two drivers and silently discards everything on the third. This reaches listener code too: the
   events the engine fires inside its own transactions run there.
+- **A transaction that runs caller code must verify its own outcome.** The commit reporting success
+  is the caller's word for it, and the paragraph above is why that word is worth nothing. Read the
+  row back afterwards and act on what it says — see `ActionRecorder::claimSurvivedCommit()`. Moving
+  the event out of the transaction is not the same fix: a model observer on a row the transaction
+  writes runs there whatever the event does, which is what `TransactionIntegrityTest`'s observer
+  case pins. What such a read proves is visibility on the writing connection, which equals
+  durability only while the engine's transaction is the outermost one — a host transaction wrapped
+  around a run is out of the engine's reach on every driver, and the docs ask hosts not to open one.
 - **A read that decides something must use `useWritePdo()`.** A lagging replica will answer with the
   very state the fence was guarding against.
 - **Do not `refresh()` a model the caller still holds.** It discards their unsaved attributes;

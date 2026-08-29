@@ -162,12 +162,14 @@ final readonly class ActionRecorder
      *
      * The claim and its two records share one transaction: a listener throwing on
      * ActionStarted would otherwise leave the row Running with nothing executing it.
+     * A commit is not proof the claim survived one, so the row is read back afterwards
+     * — see claimSurvivedCommit().
      *
      * @throws Throwable
      */
     public function startAction(ActionRun $actionRun, ?int $expectedRetryGeneration = null): bool
     {
-        return $actionRun->getConnection()->transaction(
+        $claimed = $actionRun->getConnection()->transaction(
             function () use ($actionRun, $expectedRetryGeneration): bool {
                 $now = Carbon::now();
 
@@ -226,6 +228,64 @@ final readonly class ActionRecorder
                 return true;
             }
         );
+
+        return $claimed && $this->claimSurvivedCommit($actionRun);
+    }
+
+    /**
+     * Whether the claim is on record now the transaction that made it has closed. A
+     * commit reporting success is not proof: PostgreSQL aborts a transaction on the
+     * first failed statement and turns the eventual COMMIT into a rollback, reporting
+     * success either way, so any caller code running inside it — a listener on
+     * ActionStarted, a model observer on the flow_events insert — that runs a failing
+     * query and swallows it discards the claim while the caller is told it holds one.
+     * The row is the only answer that covers every such shape: the claim is visible or
+     * it is not.
+     *
+     * Refusing a row a second worker legitimately took between the commit and this read
+     * is the same answer for the same reason — it is no longer ours to execute.
+     *
+     * What the read proves is that the claim is visible on the connection that wrote it,
+     * which is durability only while the engine's transaction is the outermost one. A
+     * host transaction wrapped around a run can still discard every row the run recorded
+     * with its side effects already spent — on any driver, and whatever this check said —
+     * which is why the documentation asks hosts not to open one.
+     */
+    private function claimSurvivedCommit(ActionRun $actionRun): bool
+    {
+        $claimedAttempts = $actionRun->attempts;
+
+        // Read from the writer: this read decides whether the step body runs, and a
+        // lagging replica would answer with the very state the claim replaced.
+        $stored = $actionRun->newQuery()
+            ->useWritePdo()
+            ->whereKey($actionRun->getKey())
+            ->first(['status', 'attempts']);
+
+        if ($stored?->status === ActionStatus::Running && $stored->attempts === $claimedAttempts) {
+            return true;
+        }
+
+        // `attempts` is only ever incremented, and by the database, so a stored count
+        // below the one this claim produced can only be that increment undone. Anything
+        // else is the ordinary race the row lost after it was won.
+        $this->anomalies->log(
+            $stored === null || $stored->attempts < $claimedAttempts
+                ? AnomalyLog::REASON_CLAIM_NOT_COMMITTED
+                : AnomalyLog::REASON_CLAIM_LOST,
+            [
+                'entity' => 'action',
+                'flow_run_id' => $actionRun->flow_run_id,
+                'action_run_id' => $actionRun->id,
+                'sequence' => $actionRun->sequence,
+                'action_class' => $actionRun->action_class,
+                'claimed_attempts' => $claimedAttempts,
+                'stored_attempts' => $stored?->attempts,
+                'stored_status' => $stored?->status->value,
+            ]
+        );
+
+        return false;
     }
 
     /**
