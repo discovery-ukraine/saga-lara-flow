@@ -95,7 +95,10 @@ class CancelChildWorkflowJob implements ShouldQueue
             // Plan once before taking control, and throw the result away. Planning
             // starts no work of its own, so a child whose rollback cannot be planned
             // is left where this job found it instead of in Cancelling, which the
-            // monitor and the doctor both pass over on purpose.
+            // monitor and the doctor both pass over on purpose. One already Cancelling
+            // was fenced by an earlier attempt that then failed to plan: both plans
+            // fail or neither does, so a retry recovers it once the replay can read
+            // what it could not.
             if ($this->withCompensation) {
                 $executor->collectCompensations($child);
             }

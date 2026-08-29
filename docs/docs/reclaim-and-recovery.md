@@ -220,7 +220,8 @@ journal for them — `AnomalyLog`, alongside the `flow_events` business history:
 ],
 ```
 
-Five reason codes to grep for, each carrying the run id, row id, sequence and class:
+Five reason codes to grep for. The first four carry the run id, row id, sequence and class; the fifth
+is about a run rather than a row, and carries the run id, its workflow class and the throw:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped.

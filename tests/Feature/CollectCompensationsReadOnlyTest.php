@@ -6,6 +6,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
+use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
@@ -201,4 +202,32 @@ it('fences a child before planning the rollback it will act on', function () {
     // re-parked while an earlier plan was being made would still match it.
     expect(fn () => app(FlowExecutor::class)->drive(SagaFlow::findRun($child->id), RunMode::Queued))
         ->toThrow(InvalidTransitionException::class);
+});
+
+it('retries a child close that failed after it had taken control', function () {
+    // A real queue: finalizing the child notifies the parent, which batches its own
+    // rollback. Nothing drains it — the assertions here are about the child.
+    useDatabaseQueue();
+
+    $run = SagaFlow::create(ParentOfVanishingChildWorkflow::class)->runSync();
+    $child = SagaFlow::findRun($run->children()->first()->child_flow_run_id);
+
+    // The window the two plans leave: the first succeeded, the child was fenced, and
+    // the second met a world that had moved. The child is Cancelling and owned.
+    app(StateMachine::class)->transition($child, FlowStatus::Cancelling);
+    VanishedArgumentWorkflow::$label = null;
+
+    expect(fn () => dispatch_sync(new CancelChildWorkflowJob($child->id, FlowStatus::Cancelled, true)))
+        ->toThrow(RuntimeException::class)
+        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelling);
+
+    // Cancelling has no way back — allowedFrom() lists only terminal states — so the
+    // child sits there until the replay can read what it could not. It is not stuck
+    // for good, though: the retry recovers it once the cause is fixed.
+    VanishedArgumentWorkflow::reset();
+
+    dispatch_sync(new CancelChildWorkflowJob($child->id, FlowStatus::Cancelled, true));
+
+    expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
+        ->and(CompensationLog::all())->toBe(['undo:b', 'undo:a']);
 });
