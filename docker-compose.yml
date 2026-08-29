@@ -5,9 +5,10 @@
 #   docker compose run --rm app composer lint
 #
 # The suite runs on SQLite by default and `app` depends on nothing, so the command
-# above starts one container and no database. The MySQL run is a separate command
-# behind a profile, for use before a commit and at a milestone:
+# above starts one container and no database. Each server run is a separate command
+# behind a profile of its own:
 #   docker compose --profile mysql run --rm app-mysql vendor/bin/pest
+#   docker compose --profile pgsql run --rm app-pgsql vendor/bin/pest
 services:
   app: &app
     build:
@@ -19,8 +20,8 @@ services:
       - .:/app
       - composer-cache:/root/.composer
 
-  # The same toolchain pointed at the MySQL service. Both live in the `mysql`
-  # profile, so neither is started by a command that does not ask for it.
+  # The same toolchain pointed at a server. Each pair lives in a profile of its own,
+  # so neither half is started by a command that does not ask for it.
   app-mysql:
     <<: *app
     profiles: [mysql]
@@ -51,6 +52,39 @@ services:
       retries: 20
       start_period: 30s
 
+  app-pgsql:
+    <<: *app
+    profiles: [pgsql]
+    depends_on:
+      pgsql:
+        condition: service_healthy
+    environment:
+      SAGA_TEST_DB: pgsql
+      SAGA_TEST_DB_HOST: pgsql
+      SAGA_TEST_DB_PORT: 5432
+
+  pgsql:
+    image: postgres:18
+    profiles: [pgsql]
+    # Same trade as the MySQL service: a throwaway test database has nothing to
+    # gain from surviving a power cut, and every write pays for it.
+    command: -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+    environment:
+      POSTGRES_DB: saga_test
+      POSTGRES_USER: saga
+      POSTGRES_PASSWORD: saga
+    volumes:
+      # Postgres 18 wants the mount one level up: the data goes in a subdirectory of
+      # it, and a volume placed at .../data instead makes the image refuse to start.
+      - pgsql-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saga -d saga_test"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
 volumes:
   composer-cache:
   mysql-data:
+  pgsql-data:

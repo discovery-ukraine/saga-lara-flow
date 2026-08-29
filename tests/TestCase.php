@@ -33,11 +33,12 @@ class TestCase extends Orchestra
     }
 
     /**
-     * SQLite is the default and needs nothing running; SAGA_TEST_DB=mysql points the
-     * suite at a server instead — one whose database is the suite's own, since the first
-     * test drops every table in it. The engine fences on `update() === 1`, and MySQL counts
-     * the rows it changed rather than the rows it matched — a whole class of defect is
-     * invisible until the suite has been over both.
+     * SQLite is the default and needs nothing running; SAGA_TEST_DB=mysql or =pgsql
+     * points the suite at a server instead — one whose database is the suite's own, since
+     * the first test drops every table in it. Each server answers something the others do
+     * not: MySQL counts the rows an update changed rather than the rows it matched, and
+     * PostgreSQL refuses every statement after a failed one until the transaction is
+     * rolled back. Neither is visible to a suite that has only ever run on SQLite.
      *
      * The name is the package's own rather than DB_CONNECTION, which Testbench and a
      * host .env both have opinions about.
@@ -56,6 +57,20 @@ class TestCase extends Orchestra
                 'password' => env('SAGA_TEST_DB_PASSWORD', 'saga'),
                 'charset' => 'utf8mb4',
                 'collation' => 'utf8mb4_unicode_ci',
+                'prefix' => '',
+            ],
+            'pgsql' => [
+                'driver' => 'pgsql',
+                'host' => env('SAGA_TEST_DB_HOST', '127.0.0.1'),
+                'port' => env('SAGA_TEST_DB_PORT', '5432'),
+                'database' => env('SAGA_TEST_DB_DATABASE', 'saga_test'),
+                'username' => env('SAGA_TEST_DB_USERNAME', 'saga'),
+                'password' => env('SAGA_TEST_DB_PASSWORD', 'saga'),
+                'charset' => 'utf8',
+                // Named rather than left to the server's own: getTableListing() reads
+                // every schema on the path, and the reset below empties what it lists.
+                'search_path' => 'public',
+                'sslmode' => 'prefer',
                 'prefix' => '',
             ],
             default => [
@@ -158,13 +173,20 @@ class TestCase extends Orchestra
      * they outlive the test that made them — along with any job it left unworked, which
      * the next drainQueue() would happily run.
      *
+     * Scoped to the schemas dropAllTables() clears, so the two halves of the reset agree
+     * on what "the database" means. Left unscoped, PostgreSQL lists every schema on the
+     * server and hands back bare names: a table outside the search path is then either
+     * missing when the delete resolves the name, or shadowed by a same-named one in
+     * public, which gets emptied twice while the real rows stay put.
+     *
      * The schema declares no foreign keys, so nothing constrains the order.
      */
-    private function truncate(): void
+    protected function truncate(): void
     {
         $connection = DB::connection('testing');
+        $schema = Schema::connection('testing');
 
-        foreach (Schema::connection('testing')->getTableListing(schemaQualified: false) as $table) {
+        foreach ($schema->getTableListing($schema->getCurrentSchemaListing(), schemaQualified: false) as $table) {
             $connection->table($table)->delete();
         }
     }

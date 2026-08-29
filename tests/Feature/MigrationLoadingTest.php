@@ -11,6 +11,14 @@ use Illuminate\Support\Facades\Schema;
 // outlives the test, so hand the next one a rebuild.
 afterEach(fn () => TestCase::forgetSchema());
 
+// flow_run_id is a ulid, which is char(26). PostgreSQL pads a shorter value out to the
+// full width and hands the padding back on the way out; MySQL trims it on read and
+// SQLite ignores the width. Nothing in the engine can put a short value there — every
+// id comes from HasUlids — so these stand in for one at its real length rather than
+// leaning on a value the column cannot hold faithfully.
+const RUN_ONE = 'run-1-00000000000000000000';
+const RUN_TWO = 'run-2-00000000000000000000';
+
 // The provider calls runsMigrations(), so a host app installs with just
 // `php artisan migrate` — no vendor:publish step. Two things must hold, and each
 // has bitten us before:
@@ -133,10 +141,10 @@ it('collapses tag keys that the wider unique had let diverge', function (): void
     $migration->down();
 
     DB::table('saga_flow_tags')->insert([
-        ['flow_run_id' => 'run-1', 'key' => 'stage', 'value' => 'charged'],
-        ['flow_run_id' => 'run-1', 'key' => 'stage', 'value' => 'shipped'],
-        ['flow_run_id' => 'run-1', 'key' => 'tenant', 'value' => 'acme'],
-        ['flow_run_id' => 'run-2', 'key' => 'stage', 'value' => 'charged'],
+        ['flow_run_id' => RUN_ONE, 'key' => 'stage', 'value' => 'charged'],
+        ['flow_run_id' => RUN_ONE, 'key' => 'stage', 'value' => 'shipped'],
+        ['flow_run_id' => RUN_ONE, 'key' => 'tenant', 'value' => 'acme'],
+        ['flow_run_id' => RUN_TWO, 'key' => 'stage', 'value' => 'charged'],
     ]);
 
     $migration->up();
@@ -144,7 +152,11 @@ it('collapses tag keys that the wider unique had let diverge', function (): void
     // Only the diverged key loses a row, and the newest write is the one kept.
     expect(DB::table('saga_flow_tags')->orderBy('id')->get()->map(
         fn ($tag): string => "{$tag->flow_run_id}:{$tag->key}={$tag->value}",
-    )->all())->toBe(['run-1:stage=shipped', 'run-1:tenant=acme', 'run-2:stage=charged']);
+    )->all())->toBe([
+        RUN_ONE.':stage=shipped',
+        RUN_ONE.':tenant=acme',
+        RUN_TWO.':stage=charged',
+    ]);
 });
 
 it('carries on from whichever half of the tag key swap already happened', function (): void {
@@ -179,8 +191,8 @@ it('keeps the tag value written last, not the row inserted last', function (): v
     $migration->down();
 
     DB::table('saga_flow_tags')->insert([
-        ['id' => 1, 'flow_run_id' => 'run-1', 'key' => 'stage', 'value' => 'charged', 'updated_at' => now()],
-        ['id' => 2, 'flow_run_id' => 'run-1', 'key' => 'stage', 'value' => 'shipped', 'updated_at' => now()],
+        ['id' => 1, 'flow_run_id' => RUN_ONE, 'key' => 'stage', 'value' => 'charged', 'updated_at' => now()],
+        ['id' => 2, 'flow_run_id' => RUN_ONE, 'key' => 'stage', 'value' => 'shipped', 'updated_at' => now()],
     ]);
 
     // updateOrCreate rewrites the row it matched instead of inserting a new one, so

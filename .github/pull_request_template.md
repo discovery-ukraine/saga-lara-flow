@@ -35,9 +35,13 @@ Open an issue first for anything breaking or larger than a focused fix.
 - [ ] Reads that decide something use `useWritePdo()`
 - [ ] No new write to `flow_runs.updated_at` as a side effect (it is the repair staleness clock)
 - [ ] Events raised inside a new transaction implement `ShouldDispatchAfterCommit`
+- [ ] No query failure is caught and ignored inside a transaction
+      (PostgreSQL refuses everything after it and turns the commit into a rollback)
 - [ ] Existing lock order (`flow_runs` → `action_runs` / `flow_signals`) is preserved
 
-CI runs on SQLite only. If this change is driver-dependent, explain how it behaves on MySQL and
-PostgreSQL:
+CI runs the suite on SQLite, MySQL and PostgreSQL, so a driver difference shows up on its own —
+but only for behaviour a test actually reaches. Locking, transaction isolation and anything that
+needs two workers at once are still staged from one process and prove nothing. Say which of those
+this change depends on:
 
 <!-- your reasoning here, or "not driver-dependent" -->

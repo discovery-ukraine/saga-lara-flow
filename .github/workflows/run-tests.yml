@@ -9,6 +9,9 @@ on:
       - 'phpunit.xml.dist'
       - 'composer.json'
       - 'composer.lock'
+      # Checked by the harness job below. docker/ is deliberately absent: no job here
+      # builds the image, so a change to it would trigger a run that proves nothing.
+      - 'docker-compose.yml'
   pull_request:
     paths:
       - '**.php'
@@ -17,12 +20,46 @@ on:
       - 'phpunit.xml.dist'
       - 'composer.json'
       - 'composer.lock'
+      # Checked by the harness job below. docker/ is deliberately absent: no job here
+      # builds the image, so a change to it would trigger a run that proves nothing.
+      - 'docker-compose.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # The compose file is what a contributor runs the suite with, and its one hard rule is
+  # invisible to every other job here: the default command must start one container and
+  # no database. Nothing but a person watching `docker ps` enforced that until now.
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    name: Compose harness
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: The default command starts no database
+        run: |
+          services=$(docker compose config --services | sort | tr '\n' ' ')
+          echo "default profile: ${services}"
+          test "${services}" = "app "
+
+      - name: The default service waits on nothing
+        run: |
+          docker compose config --format json \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['services']['app'].get('depends_on'); sys.exit(0 if not d else 1)"
+
+      - name: Each server and the toolchain that talks to it live behind one profile
+        run: |
+          for profile in mysql pgsql; do
+            docker compose --profile "${profile}" config --services | grep -qx "${profile}"
+            docker compose --profile "${profile}" config --services | grep -qx "app-${profile}"
+          done
+
   test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
@@ -111,5 +148,51 @@ jobs:
       - name: Execute tests
         env:
           SAGA_TEST_DB: mysql
+          SAGA_TEST_DB_HOST: 127.0.0.1
+        run: vendor/bin/pest --ci
+
+  # Same shape as test-mysql, for a driver that answers a different question: it counts
+  # matched rows like SQLite, but it refuses every statement after a failed one until the
+  # transaction is rolled back, and it truncates an identifier past 63 bytes.
+  test-pgsql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    name: PostgreSQL - P8.5 - L13.* - prefer-stable
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: saga_test
+          POSTGRES_USER: saga
+          POSTGRES_PASSWORD: saga
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U saga -d saga_test"
+          --health-interval=3s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 8.5
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, pdo_pgsql, bcmath, soap, intl, gd, exif, iconv, imagick, fileinfo
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer require "laravel/framework:13.*" "orchestra/testbench:11.*" --no-interaction --no-update
+          composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute tests
+        env:
+          SAGA_TEST_DB: pgsql
           SAGA_TEST_DB_HOST: 127.0.0.1
         run: vendor/bin/pest --ci
