@@ -1,8 +1,10 @@
 <?php
 
+use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
@@ -182,4 +184,21 @@ it('does not strand a child whose rollback it could not plan', function () {
     // Cancelling is the one state nothing recovers: the monitor and the doctor both
     // pass over it. The child is left where the close found it, for a retry to close.
     expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Waiting);
+});
+
+it('fences a child before planning the rollback it will act on', function () {
+    config()->set('saga-lara-flow.queue.after_commit', false);
+
+    $run = SagaFlow::create(ParentOfVanishingChildWorkflow::class)->runSync();
+    $child = SagaFlow::findRun($run->children()->first()->child_flow_run_id);
+
+    app(StateMachine::class)->transition($child, FlowStatus::Cancelling);
+
+    // This is what makes a plan made after the transition final, and a plan made
+    // before it a guess: nothing can drive a Cancelling run, so no further step can
+    // complete under one. The close plans on this side of the fence for that reason
+    // — the transition's own guard reads status alone, so a child resumed and
+    // re-parked while an earlier plan was being made would still match it.
+    expect(fn () => app(FlowExecutor::class)->drive(SagaFlow::findRun($child->id), RunMode::Queued))
+        ->toThrow(InvalidTransitionException::class);
 });

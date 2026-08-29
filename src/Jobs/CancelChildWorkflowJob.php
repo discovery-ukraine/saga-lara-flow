@@ -92,12 +92,13 @@ class CancelChildWorkflowJob implements ShouldQueue
             $lifecycle,
             $child,
         ): void {
-            // Plan before taking control. Planning starts no work of its own, and a
-            // fault in it must not leave the child sitting in Cancelling with nothing
-            // coming to move it on: the monitor and the doctor both pass over a
-            // Cancelling run on purpose. Losing the child to somebody else between the
-            // two is the ordinary race the transition's own guard already refuses.
-            $entries = $this->withCompensation ? $executor->collectCompensations($child) : [];
+            // Plan once before taking control, and throw the result away. Planning
+            // starts no work of its own, so a child whose rollback cannot be planned
+            // is left where this job found it instead of in Cancelling, which the
+            // monitor and the doctor both pass over on purpose.
+            if ($this->withCompensation) {
+                $executor->collectCompensations($child);
+            }
 
             // Take control of the child from any non-terminal state (Pending/Running/
             // Waiting) — the state machine allows each into Cancelling.
@@ -106,6 +107,14 @@ class CancelChildWorkflowJob implements ShouldQueue
             $cause = $this->cause($repository, $child);
 
             if ($this->withCompensation) {
+                // The plan that is acted on is made here, with the child fenced:
+                // Cancelling is a state no drive() can leave, so nothing can complete
+                // another compensatable step under it. A plan made before the fence
+                // can go stale — the transition guard reads status alone, so a child
+                // resumed and re-parked in between still matches — and unwinding it
+                // would leave that step standing under a run reported as rolled back.
+                $entries = $executor->collectCompensations($child);
+
                 // Roll back inline (Sync), inside THIS job, rather than dispatching another
                 // queued Bus::batch: we are already on a worker, we just collected the stack
                 // synchronously, and a single in-process pass keeps the finalize + the
