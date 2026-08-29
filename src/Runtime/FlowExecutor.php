@@ -189,15 +189,17 @@ class FlowExecutor
 
                 $this->callWithDependencies($workflow, 'handle', $arguments);
             } catch (InternalFlowControl|ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException) {
-                // The frontier, or a failure already recorded in this run's history
-                // replaying as a throw: a seam decided the replay ends here.
+                // The four classes that end a replay: the frontier, and a step failure,
+                // an expiry or a signal timeout already recorded in this run's history.
+                // Membership is all this tests — a caller raising one of these itself
+                // is read as an ending too, which is why the set is kept small.
                 //
-                // Nothing else did. A throw from a builder argument, a workflow helper
-                // or anything else the replay runs is a fault, and swallowing it hands
-                // back a stack truncated at that point for compensate() to roll back
-                // and report as a complete unwind. It leaves here instead, before the
-                // run has been touched, so the operator sees the cause and still has a
-                // run to retry the rollback on.
+                // Nothing else ends it. A throw from a builder argument, a workflow
+                // helper or anything else the replay runs is a fault, and swallowing it
+                // hands back a stack truncated at that point for compensate() to roll
+                // back and report as a complete unwind. It leaves here instead, before
+                // the run has been touched, so the operator sees the cause and still
+                // has a run to retry the rollback on.
             }
 
             return $this->runtime->sagaStack()->entries();

@@ -94,9 +94,10 @@ SagaFlow::loadFlow($runId)->compensate(); // roll back completed steps, then can
 The rollback is planned before anything is undone: the handle replays `handle()` only to learn which
 completed steps carry compensations. Every seam is guarded for that pass, so it runs no business
 logic, starts no work, and settles no step — one it has not seen is a place to stop, not a place to
-schedule. (Your own `tag()` calls still rewrite their rows, as they do on every replay.) If the
-replay throws for a reason the engine did not put there — an
-argument expression reading a record that has since been deleted, say — the plan is incomplete, so
+schedule. (Your own `tag()` calls still rewrite their rows, as they do on every replay.) Four
+exception classes end that pass — the frontier it stopped at, and a step failure, an expiry or a
+signal timeout already in the run's history. Anything else is a fault, not an ending: an argument
+expression reading a record that has since been deleted, say. The plan is then incomplete, so
 `compensate()` surfaces the throw and leaves the run as it found it, rather than unwinding part of
 it and reporting a finished rollback. Fix the cause and call it again.
 
