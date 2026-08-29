@@ -111,7 +111,9 @@ it('lets a per-action explicit threshold win regardless of the enabled flags', f
         ->withArguments(42)
         ->runSync();
 
-    expect($run->actions()->first()->reclaim_stale_after_seconds)->toBe(42);
+    // Ordered, not just first: ReclaimOverrideWorkflow schedules a second step that
+    // carries no override, and an unordered read is free to hand it back instead.
+    expect($run->actions()->orderBy('sequence')->first()->reclaim_stale_after_seconds)->toBe(42);
 });
 
 it('lets a per-action override force-enable reclaim (config default seconds) even when config is off', function () {
@@ -119,7 +121,7 @@ it('lets a per-action override force-enable reclaim (config default seconds) eve
         ->withArguments(null, true)
         ->runSync();
 
-    expect($run->actions()->first()->reclaim_stale_after_seconds)
+    expect($run->actions()->orderBy('sequence')->first()->reclaim_stale_after_seconds)
         ->toBe((int) config('saga-lara-flow.actions.reclaim.stale_running.after_seconds'));
 });
 
@@ -130,7 +132,7 @@ it('lets a per-action override force-disable reclaim even when config is globall
         ->withArguments(null, false)
         ->runSync();
 
-    expect($run->actions()->first()->reclaim_stale_after_seconds)->toBeNull();
+    expect($run->actions()->orderBy('sequence')->first()->reclaim_stale_after_seconds)->toBeNull();
 });
 
 it('resolves the compensation-side reclaim threshold independently of the action-side one', function () {
@@ -141,8 +143,8 @@ it('resolves the compensation-side reclaim threshold independently of the action
         ->runSync();
 
     expect($run->status)->toBe(FlowStatus::Failed)
-        ->and($run->actions()->first()->reclaim_stale_after_seconds)->toBe(42)
-        ->and($run->compensations()->first()->reclaim_stale_after_seconds)->toBe(77);
+        ->and($run->actions()->orderBy('sequence')->first()->reclaim_stale_after_seconds)->toBe(42)
+        ->and($run->compensations()->orderBy('sequence')->first()->reclaim_stale_after_seconds)->toBe(77);
 });
 
 it('gives RunCompensationJob its own WithoutOverlapping lock, independent of the action lock', function () {
