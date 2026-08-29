@@ -93,9 +93,9 @@ final readonly class FlowMonitor
         $count = 0;
 
         foreach ($this->flows->dueForExpiration($limit) as $run) {
-            $this->expireRun($run);
-
-            $count++;
+            if ($this->expireRun($run)) {
+                $count++;
+            }
         }
 
         return $count;
@@ -106,11 +106,29 @@ final readonly class FlowMonitor
      * back queued, finalize as Expired) lives on FlowExecutor — the owner of every
      * run-terminal transition — and is shared with the lazy drive() deadline check.
      *
-     * @throws Throwable
+     * A run the sweep cannot expire is journalled and stepped over. Letting the throw
+     * out would cost far more than the run it came from: the batch is read oldest
+     * first and a run that failed to expire is still overdue, so the same one would
+     * come back every sweep, and the signal and action passes below never run at all.
+     * The lazy check inside drive() has one run to answer for and still surfaces it.
      */
-    private function expireRun(FlowRun $run): void
+    private function expireRun(FlowRun $run): bool
     {
-        $this->executor->expireRun($run);
+        try {
+            $this->executor->expireRun($run);
+
+            return true;
+        } catch (Throwable $failure) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_EXPIRY_FAILED, [
+                'entity' => 'flow',
+                'flow_run_id' => $run->id,
+                'workflow_class' => $run->workflow_class,
+                'status' => $run->status->value,
+                'exception' => $this->exceptionToArray($failure),
+            ]);
+
+            return false;
+        }
     }
 
     private function timeoutSignals(int $limit): int

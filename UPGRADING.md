@@ -475,13 +475,13 @@ See [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery).
 ### 21. `compensate()` plans the rollback without starting work, and stops if it cannot finish
 
 Planning a manual rollback replays `handle()` to find the compensations. That replay no longer
-settles a spent optional step (`action.optional_failed`, with the `OptionalActionFailed` event), and
-no longer schedules and dispatches a parallel block it had only reached to read — both are the next
-ordinary replay's work. Nor is every throw the end of the stack now: four classes end it — the
-frontier, a step failure, an expiry, a signal timeout — and an unexpected throw surfaces out of
-`compensate()`, run untouched, instead of rolling back a truncated plan and reporting it complete.
+settles a spent optional step (`action.optional_failed`, with its `OptionalActionFailed` event) and
+no longer schedules a parallel block it had only reached to read. Nor is every throw the end of the
+stack now: four classes end it, and an unexpected throw surfaces out of `compensate()`, run
+untouched, rather than rolling back a truncated plan and reporting it complete.
 
-Nothing to do unless a listener expected `OptionalActionFailed` during `compensate()`. See
+Nothing to do unless a listener expected `OptionalActionFailed` during `compensate()`. The expiry
+sweep absorbs such a throw instead, journalling `expiry_failed` and stepping over the run. See
 [Sagas & compensation](https://sagalaraflow.dev/sagas-and-compensation).
 
 ### Recommended while you are here

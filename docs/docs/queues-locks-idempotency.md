@@ -109,7 +109,8 @@ package keeps a second journal for them:
 
 Grep for `claim_lost`, `outcome_rejected` and `batch_finished_early`; each line carries the run id,
 row id, sequence and class. `claim_not_committed` joins them when a claim did not survive its own
-transaction, which is a defect in listener or observer code rather than a race. A refused run
+transaction, which is a defect in listener or observer code rather than a race, and `expiry_failed`
+when the sweep could not plan an overdue run's rollback and stepped over it. A refused run
 transition is journalled here too, as `transition_lost`,
 carrying the status observed, the one intended and the one actually holding the row — it is the one
 entry that is not always quiet, since `FlowHandle` raises rather than absorbing it. None of them are

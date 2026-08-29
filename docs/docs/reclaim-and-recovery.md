@@ -220,18 +220,24 @@ journal for them — `AnomalyLog`, alongside the `flow_events` business history:
 ],
 ```
 
-Four reason codes to grep for, each carrying the run id, row id, sequence and class:
+Five reason codes to grep for, each carrying the run id, row id, sequence and class:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped.
 - **`batch_finished_early`** — a parallel step completed after a duplicate delivery had closed its batch.
 - **`claim_not_committed`** — a claim was written and was gone once its transaction closed. The line carries both
   attempt counts, the claimed one and the one the row actually holds.
+- **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
+  the next. The line carries the throw. The run stays overdue and is tried again on the next sweep.
 
 Raise the level to `warning` to surface them in your alerting. A steady stream of the first three points to a queue
 timeout tuned shorter than the work takes, or to locks being off.
 
-The fourth is not a race and does not come from tuning: something ran inside the engine's own transaction and left it
+The last two are not races and do not come from tuning. `expiry_failed` means the run's own `handle()` threw while the
+sweep was replaying it to find the compensations — a workflow reading something that has since gone, most often. Until
+that is fixed the run cannot be expired, but nothing else in the sweep is held up by it.
+
+`claim_not_committed` is the other one: something ran inside the engine's own transaction and left it
 unusable. On PostgreSQL a single failed statement aborts a transaction and turns the eventual commit into a rollback
 while still reporting success, so a listener on `ActionStarted` or a model observer that runs a failing query and
 swallows it discards the claim without anything raising. The claim is read back after the transaction closes for

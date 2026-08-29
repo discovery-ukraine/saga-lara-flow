@@ -92,6 +92,13 @@ class CancelChildWorkflowJob implements ShouldQueue
             $lifecycle,
             $child,
         ): void {
+            // Plan before taking control. Collecting is a read, and a fault in it must
+            // not leave the child sitting in Cancelling with nothing coming to move it
+            // on: the monitor and the doctor both pass over a Cancelling run on
+            // purpose. Losing the child to somebody else between the two is the
+            // ordinary race the transition's own guard already refuses.
+            $entries = $this->withCompensation ? $executor->collectCompensations($child) : [];
+
             // Take control of the child from any non-terminal state (Pending/Running/
             // Waiting) — the state machine allows each into Cancelling.
             $stateMachine->transition($child, FlowStatus::Cancelling);
@@ -99,8 +106,6 @@ class CancelChildWorkflowJob implements ShouldQueue
             $cause = $this->cause($repository, $child);
 
             if ($this->withCompensation) {
-                $entries = $executor->collectCompensations($child);
-
                 // Roll back inline (Sync), inside THIS job, rather than dispatching another
                 // queued Bus::batch: we are already on a worker, we just collected the stack
                 // synchronously, and a single in-process pass keeps the finalize + the

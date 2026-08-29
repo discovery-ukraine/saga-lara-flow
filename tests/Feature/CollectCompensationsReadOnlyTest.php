@@ -5,6 +5,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
@@ -12,6 +13,8 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CaughtTimeoutThenParallelWorkfl
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OptionalRetryCompensatedWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentOfVanishingChildWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SignalOnlyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\VanishedArgumentWorkflow;
 use Illuminate\Support\Facades\DB;
 
@@ -22,6 +25,10 @@ use Illuminate\Support\Facades\DB;
  * to look at it. And it decided by catching, which cannot tell the frontier it was
  * looking for from a fault it was not: any throw ended the stack, and compensate()
  * rolled back the truncated result and reported a complete unwind.
+ *
+ * Surfacing that fault instead has a blast radius of its own, because compensations are
+ * planned from three places, not one. The two the operator did not ask for — the
+ * expiration sweep and a parent closing its child — have to absorb it where it lands.
  */
 beforeEach(function (): void {
     CompensationLog::reset();
@@ -126,4 +133,53 @@ it('does not schedule or dispatch a parallel block it has only reached to read',
         ->and(ActionRun::query()->count())->toBe($rows)
         ->and(DB::connection('testing')->table('jobs')->count())->toBe($jobs)
         ->and(DB::connection('testing')->table('job_batches')->count())->toBe(0);
+});
+
+it('steps over a run whose rollback it cannot plan and journals it', function () {
+    useDatabaseQueue();
+    logToFile($path = sys_get_temp_dir().'/saga-expiry-'.bin2hex(random_bytes(6)).'.log');
+
+    // Oldest deadline, so dueForExpiration() hands this one back first, every sweep.
+    $stuck = SagaFlow::create(VanishedArgumentWorkflow::class)->run();
+    drainQueue();
+    $stuck = SagaFlow::findRun($stuck->id);
+    $stuck->expires_at = now()->subHours(2);
+    $stuck->save();
+
+    $healthy = SagaFlow::create(SignalOnlyWorkflow::class)->run();
+    drainQueue();
+    $healthy = SagaFlow::findRun($healthy->id);
+    $healthy->expires_at = now()->subMinute();
+    $healthy->save();
+
+    VanishedArgumentWorkflow::$label = null;
+
+    // The sweep reads oldest first and runs before the signal and action passes, so a
+    // throw let out here would cost every run behind this one and both passes below.
+    expect(app(FlowMonitor::class)->sweep()['runs'])->toBe(1)
+        ->and(SagaFlow::findRun($healthy->id)->status)->toBe(FlowStatus::Expired)
+        ->and(SagaFlow::findRun($stuck->id)->status)->toBe(FlowStatus::Waiting);
+
+    $log = is_file($path) ? (string) file_get_contents($path) : '';
+
+    expect($log)->toContain(AnomalyLog::REASON_EXPIRY_FAILED)
+        ->and($log)->toContain($stuck->id);
+});
+
+it('does not strand a child whose rollback it could not plan', function () {
+    config()->set('saga-lara-flow.queue.after_commit', false);
+
+    $run = SagaFlow::create(ParentOfVanishingChildWorkflow::class)->runSync();
+    $child = $run->children()->first()->child;
+
+    expect($child->status)->toBe(FlowStatus::Waiting);
+
+    VanishedArgumentWorkflow::$label = null;
+
+    expect(fn () => SagaFlow::loadFlow($run->id)->compensate())
+        ->toThrow(RuntimeException::class, 'the order this run was built from is gone');
+
+    // Cancelling is the one state nothing recovers: the monitor and the doctor both
+    // pass over it. The child is left where the close found it, for a retry to close.
+    expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Waiting);
 });
