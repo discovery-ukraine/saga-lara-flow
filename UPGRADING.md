@@ -472,6 +472,18 @@ Nothing to do unless your listeners swallow query failures. One that does now st
 journalled as `claim_not_committed` and raised as `ActionClaimFailedException` in synchronous mode.
 See [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery).
 
+### 21. `compensate()` plans the rollback without starting work, and stops if it cannot finish
+
+Planning a manual rollback replays `handle()` to find the compensations. That replay no longer
+settles a spent optional step (`action.optional_failed`, with the `OptionalActionFailed` event), and
+no longer schedules and dispatches a parallel block it had only reached to read — both are the next
+ordinary replay's work. Nor does it treat every throw as the end of the stack: one the engine did
+not raise itself now surfaces out of `compensate()`, run untouched, instead of rolling back a
+truncated plan and reporting a complete unwind.
+
+Nothing to do unless a listener expected `OptionalActionFailed` during `compensate()`. See
+[Sagas & compensation](https://sagalaraflow.dev/sagas-and-compensation).
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

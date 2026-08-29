@@ -68,6 +68,13 @@ final readonly class ParallelRunner
 
         // First encounter (nothing recorded yet): dispatch the whole block, then suspend.
         if (! $anyScheduled) {
+            // Compensation-only planning never starts new work: stop at the frontier.
+            // Without this the block writes a row per step and dispatches its batch —
+            // live jobs started by the one pass whose whole purpose is to read.
+            if ($runtime->isCollecting()) {
+                $this->suspender->suspend('parallel', $slots[0]['sequence']);
+            }
+
             return $runtime->mode() === RunMode::Sync
                 ? $this->dispatchSync($flowRun, $slots, $policy, $groupId)
                 : $this->dispatchQueued($flowRun, $slots, $policy, $groupId);

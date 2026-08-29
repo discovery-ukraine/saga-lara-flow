@@ -4,12 +4,16 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
+use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CaughtTimeoutThenParallelWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OptionalRetryCompensatedWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\VanishedArgumentWorkflow;
+use Illuminate\Support\Facades\DB;
 
 /**
  * collectCompensations() is the read half of a rollback: it replays handle() only to
@@ -101,4 +105,25 @@ it('refuses to report a rollback it could not finish planning', function () {
 
     expect(SagaFlow::loadFlow($run->id)->compensate()->status)->toBe(FlowStatus::Cancelled)
         ->and(CompensationLog::all())->toBe(['undo:b', 'undo:a']);
+});
+
+it('does not schedule or dispatch a parallel block it has only reached to read', function () {
+    useDatabaseQueue();
+
+    $run = SagaFlow::create(CaughtTimeoutThenParallelWorkflow::class)->run();
+    drainQueue();
+
+    // The monitor times the wait out, so the next replay walks past the catch. The
+    // resume job has not run yet, which is the window an operator's rollback lands in.
+    app(FlowMonitor::class)->sweep();
+
+    $rows = ActionRun::query()->count();
+    $jobs = DB::connection('testing')->table('jobs')->count();
+
+    $entries = app(FlowExecutor::class)->collectCompensations(SagaFlow::findRun($run->id));
+
+    expect($entries)->toHaveCount(1)
+        ->and(ActionRun::query()->count())->toBe($rows)
+        ->and(DB::connection('testing')->table('jobs')->count())->toBe($jobs)
+        ->and(DB::connection('testing')->table('job_batches')->count())->toBe(0);
 });
