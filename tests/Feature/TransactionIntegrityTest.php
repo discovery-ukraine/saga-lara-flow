@@ -93,6 +93,8 @@ it('journals a claim its own transaction discarded', function () {
     $run = SagaFlow::create(CountedActionWorkflow::class)->runSync();
 
     $step = $run->actions()->first();
+    $started = claimIsOnRecord($run);
+
     // No anomaly means no file at all: the channel writes lazily, and a driver where
     // the claim held has nothing to journal.
     $log = is_file($path) ? (string) file_get_contents($path) : '';
@@ -101,8 +103,8 @@ it('journals a claim its own transaction discarded', function () {
     // without it an operator sees a run that stopped for no stated reason. Which of the
     // two outcomes a driver produces is its own business — but they are the only two,
     // and the journal accounts for the one that lost the claim.
-    expect(str_contains($log, AnomalyLog::REASON_CLAIM_NOT_COMMITTED))->toBe(! claimIsOnRecord($run))
-        ->and(str_contains($log, $step->id))->toBe(! claimIsOnRecord($run));
+    expect(str_contains($log, AnomalyLog::REASON_CLAIM_NOT_COMMITTED))->toBe(! $started)
+        ->and(str_contains($log, $step->id))->toBe(! $started);
 });
 
 it('does not execute an undo it failed to claim', function () {
