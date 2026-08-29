@@ -25,8 +25,9 @@ difference is *who* drives the steps (your worker vs. the current process).
 A step's body runs while your transaction is still open, so a rollback afterwards — yours, or one a
 failed statement forced on you — discards every row the run recorded while the work those rows
 describe is already done. A charge stays charged with nothing left to attribute it to, on every
-driver. The queued path has no such problem: `queue.after_commit` holds the jobs until your
-transaction commits.
+driver. The queued path is clear of this while `saga-lara-flow.queue.after_commit` is on, as it is
+by default: it holds the jobs until your transaction commits, and turning it off gives them the
+same problem.
 :::
 
 ## When to use which
