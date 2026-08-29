@@ -15,10 +15,12 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CaughtTimeoutThenParallelWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ManualCompensateWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OptionalRetryCompensatedWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentOfVanishingChildWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SignalOnlyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\VanishedArgumentWorkflow;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -230,4 +232,29 @@ it('retries a child close that failed after it had taken control', function () {
 
     expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
         ->and(CompensationLog::all())->toBe(['undo:b', 'undo:a']);
+});
+
+it('surfaces a sweep failure that already took the run into cancelling', function () {
+    // Sync driver and no job_batches table: the plan succeeds, the run is taken to
+    // Cancelling, and dispatching the rollback batch is what throws.
+    config()->set('saga-lara-flow.queue.after_commit', false);
+    logToFile($path = sys_get_temp_dir().'/saga-sweep-'.bin2hex(random_bytes(6)).'.log');
+
+    $run = SagaFlow::create(ManualCompensateWorkflow::class)->runSync();
+    $run = SagaFlow::findRun($run->id);
+    $run->expires_at = now()->subMinute();
+    $run->save();
+
+    expect(fn () => app(FlowMonitor::class)->sweep())->toThrow(QueryException::class)
+        ->and(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Cancelling);
+
+    // Not journalled as a plan that could not be made, because that is not what it
+    // was, and not absorbed either: nothing returns to a run left mid-cancellation.
+    $log = is_file($path) ? (string) file_get_contents($path) : '';
+
+    expect($log)->not->toContain(AnomalyLog::REASON_EXPIRY_FAILED);
+
+    // It cannot wedge the sweep the way a planning failure would: Cancelling is not
+    // a candidate status, so the run is gone from the batch on its own.
+    expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0]);
 });

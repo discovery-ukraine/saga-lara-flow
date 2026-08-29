@@ -106,11 +106,16 @@ final readonly class FlowMonitor
      * back queued, finalize as Expired) lives on FlowExecutor — the owner of every
      * run-terminal transition — and is shared with the lazy drive() deadline check.
      *
-     * A run the sweep cannot expire is journalled and stepped over. Letting the throw
-     * out would cost far more than the run it came from: the batch is read oldest
-     * first and a run that failed to expire is still overdue, so the same one would
-     * come back every sweep, and the signal and action passes below never run at all.
+     * A run whose rollback the sweep could not plan is journalled and stepped over.
+     * Letting that throw out would cost far more than the run it came from: the batch
+     * is read oldest first and the run is still overdue, so the same one would come
+     * back every sweep and the signal and action passes below would never run at all.
      * The lazy check inside drive() has one run to answer for and still surfaces it.
+     *
+     * Only that failure, though. A run this pass already took into Cancelling has left
+     * the candidate set on its own, so its failure cannot wedge anything — and it is
+     * not a plan that could not be made but a rollback that started and did not, which
+     * leaves the run where no sweep returns. That belongs to whoever is watching.
      */
     private function expireRun(FlowRun $run): bool
     {
@@ -119,11 +124,17 @@ final readonly class FlowMonitor
 
             return true;
         } catch (Throwable $failure) {
+            $current = $this->flows->find($run->id)?->status;
+
+            if ($current !== FlowStatus::Running && $current !== FlowStatus::Waiting) {
+                throw $failure;
+            }
+
             app(AnomalyLog::class)->log(AnomalyLog::REASON_EXPIRY_FAILED, [
                 'entity' => 'flow',
                 'flow_run_id' => $run->id,
                 'workflow_class' => $run->workflow_class,
-                'status' => $run->status->value,
+                'status' => $current->value,
                 'exception' => $this->exceptionToArray($failure),
             ]);
 
