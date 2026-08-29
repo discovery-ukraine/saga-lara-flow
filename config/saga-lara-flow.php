@@ -13,7 +13,9 @@ return [
     | Database
     |--------------------------------------------------------------------------
     | Dedicated connection/schema for the package tables. A null connection
-    | falls back to the application's default database connection.
+    | falls back to the application's default database connection. The prefix
+    | is capped at 24 bytes: it rides along in every index name, which MySQL
+    | caps at 64 characters and PostgreSQL truncates past 63 bytes.
     */
     'database' => [
         'connection' => env('SAGA_LARA_FLOW_DB_CONNECTION'),

@@ -19,7 +19,12 @@ likely to touch.
 ```
 
 Point the engine at a dedicated connection to keep its tables separate from your domain data. The
-prefix is applied to every table. The package tables always use *this* connection (via
+prefix is applied to every table, and to every index name derived from one, so it is capped at
+**24 bytes** — 24 characters of ASCII, fewer if you use anything else. MySQL refuses an identifier
+past 64 characters and PostgreSQL truncates one past 63 bytes, and the longest name the schema asks
+for is 40. A longer prefix fails part-way through the initial migration; drop the package tables it
+did create before running `migrate` again, or the retry stops on the first table that already
+exists. The package tables always use *this* connection (via
 `UsesSagaFlowConnection`), so they are unaffected by tenant DB switching unless you leave the
 connection `null`.
 

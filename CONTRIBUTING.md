@@ -112,6 +112,10 @@ for the other changes public behaviour and needs its own exception and its own d
   listeners will act on a delivery that may still roll back — while holding your row locks.
 - **Keep the lock order.** Existing writers take `flow_runs` first, then `action_runs` and
   `flow_signals`. Do not reverse it.
+- **A new index has to leave room for the table prefix.** The documented ceiling is 24 bytes, which
+  is 64 minus the longest name the schema asks for. A longer name lowers that ceiling for everyone,
+  so name the index explicitly instead of letting Laravel derive one — `TablePrefixCeilingTest`
+  fails on MySQL when it does not fit.
 
 ## Tests
 

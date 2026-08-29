@@ -449,6 +449,17 @@ $run->actions()->reorder()->chunkById(500, fn ($actions) => ...);
 Eager loads, `withCount()`, `whereHas()` and plain `chunk()` need nothing. See
 [Configuration](https://sagalaraflow.dev/configuration).
 
+### 19. The table prefix is capped at 24 bytes
+
+`database.table_prefix` rides along in every derived index name, and past a point the driver refuses
+one outright (MySQL, at 7 characters) or truncates two onto each other (PostgreSQL, at 29). Six
+indexes are now named explicitly rather than derived, which lifts the supported prefix to **24
+bytes** — 24 characters of ASCII, fewer if you use anything else. The default `saga_` is five.
+
+Nothing to do on a database that installed. One that failed part-way on a too-long prefix needs its
+package tables dropped before `migrate` will get past the first one. The new names reach a fresh
+install only, nothing reads them, and there is no rename migration.
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

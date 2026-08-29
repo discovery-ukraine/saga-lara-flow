@@ -7,20 +7,32 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration
 {
     /**
+     * Table => columns, index name. The name is given rather than derived: a derived
+     * one here would be the longest identifier the package asks for, and MySQL
+     * refuses one past 64 characters.
+     */
+    private const array INDEXES = [
+        'flow_signals' => [['status', 'name', 'flow_run_id'], 'flow_signals_status_name_run_index'],
+        'action_runs' => [['status', 'retry_signal', 'flow_run_id'], 'action_runs_status_signal_run_index'],
+    ];
+
+    /**
      * The shipped indexes on both tables lead with flow_run_id, which answers "what
      * is this run waiting for" — the opposite of what the FlowQuery wait filters
      * ask.
      */
     public function up(): void
     {
-        $this->add('flow_signals', ['status', 'name', 'flow_run_id']);
-        $this->add('action_runs', ['status', 'retry_signal', 'flow_run_id']);
+        foreach (self::INDEXES as $table => [$columns, $name]) {
+            $this->add($table, $columns, $name);
+        }
     }
 
     public function down(): void
     {
-        $this->drop('action_runs', ['status', 'retry_signal', 'flow_run_id']);
-        $this->drop('flow_signals', ['status', 'name', 'flow_run_id']);
+        foreach (array_reverse(self::INDEXES, preserve_keys: true) as $table => [$columns, $name]) {
+            $this->drop($table, $columns, $name);
+        }
     }
 
     /**
@@ -29,22 +41,22 @@ return new class extends Migration
      *
      * @param  list<string>  $columns
      */
-    private function add(string $table, array $columns): void
+    private function add(string $table, array $columns, string $name): void
     {
-        if ($this->existing($table, $columns) === null) {
-            $this->change($table, fn (Blueprint $blueprint) => $blueprint->index($columns, $this->name($table, $columns)));
+        if ($this->existing($table, $columns, $name) === null) {
+            $this->change($table, fn (Blueprint $blueprint) => $blueprint->index($columns, $this->prefix().$name));
         }
     }
 
     /**
      * @param  list<string>  $columns
      */
-    private function drop(string $table, array $columns): void
+    private function drop(string $table, array $columns, string $name): void
     {
-        $name = $this->existing($table, $columns);
+        $existing = $this->existing($table, $columns, $name);
 
-        if ($name !== null) {
-            $this->change($table, fn (Blueprint $blueprint) => $blueprint->dropIndex($name));
+        if ($existing !== null) {
+            $this->change($table, fn (Blueprint $blueprint) => $blueprint->dropIndex($existing));
         }
     }
 
@@ -62,33 +74,22 @@ return new class extends Migration
      *
      * @param  list<string>  $columns
      */
-    private function existing(string $table, array $columns): ?string
+    private function existing(string $table, array $columns, string $name): ?string
     {
-        $wanted = $this->name($table, $columns);
+        $wanted = strtolower($this->prefix().$name);
 
         foreach (Schema::connection($this->connection())->getIndexes($this->prefix().$table) as $index) {
-            $name = (string) $index['name'];
+            $stored = (string) $index['name'];
 
-            $sameName = strcasecmp($name, $wanted) === 0
-                || (strlen($name) < strlen($wanted) && str_starts_with(strtolower($wanted), strtolower($name)));
+            $sameName = strcasecmp($stored, $wanted) === 0
+                || (strlen($stored) < strlen($wanted) && str_starts_with($wanted, strtolower($stored)));
 
             if ($sameName && $index['columns'] === $columns && ! $index['unique']) {
-                return $name;
+                return $stored;
             }
         }
 
         return null;
-    }
-
-    /**
-     * The name Laravel would derive on its own, so an index created before this
-     * migration started naming them explicitly is still recognised.
-     *
-     * @param  list<string>  $columns
-     */
-    private function name(string $table, array $columns): string
-    {
-        return strtolower($this->prefix().$table.'_'.implode('_', $columns).'_index');
     }
 
     private function connection(): ?string
