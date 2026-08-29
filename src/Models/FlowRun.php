@@ -62,39 +62,61 @@ class FlowRun extends Model
         ];
     }
 
+    /**
+     * Every relation below states the order its rows are meaningful in; without one the
+     * driver picks, and PostgreSQL picks physical order, which moves as rows are updated.
+     *
+     * Reading against it — a reverse order, or the id-cursor paging of chunkById() and
+     * friends, which keeps any order on another column and lets it outrank the cursor —
+     * needs reorder() first.
+     */
     public function actions(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.action_run'), 'flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.action_run'), 'flow_run_id')
+            ->orderBy('sequence');
     }
 
     public function events(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.flow_event'), 'flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.flow_event'), 'flow_run_id')
+            ->orderBy('recorded_at')
+            ->orderBy('id');
     }
 
     public function signals(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.flow_signal'), 'flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.flow_signal'), 'flow_run_id')
+            ->orderBy('id');
     }
 
     public function tags(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.flow_tag'), 'flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.flow_tag'), 'flow_run_id')
+            ->orderBy('id');
     }
 
+    /**
+     * By id as well: compensation_runs carries no unique on (flow_run_id, sequence), and
+     * the counter behind it reads before it writes, so two overlapping rollbacks of one
+     * run could number their rows alike.
+     */
     public function compensations(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.compensation_run'), 'flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.compensation_run'), 'flow_run_id')
+            ->orderBy('sequence')
+            ->orderBy('id');
     }
 
     public function sideEffects(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.side_effect'), 'flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.side_effect'), 'flow_run_id')
+            ->orderBy('sequence');
     }
 
     public function children(): HasMany
     {
-        return $this->hasMany(config('saga-lara-flow.models.flow_child'), 'parent_flow_run_id');
+        return $this->hasMany(config('saga-lara-flow.models.flow_child'), 'parent_flow_run_id')
+            ->orderBy('sequence');
     }
 
     public function parent(): BelongsTo

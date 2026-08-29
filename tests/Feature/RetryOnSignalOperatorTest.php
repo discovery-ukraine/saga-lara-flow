@@ -352,7 +352,7 @@ it('carries a signal payload from saga-flow:signal into the retried run', functi
 
     // The delivery that ended the wait is the marker at the step's own ordinal, and
     // it kept the payload the operator sent.
-    $marker = $final->signals()->orderByDesc('id')->first();
+    $marker = $final->signals()->reorder()->orderByDesc('id')->first();
 
     expect($marker->wait_sequence)->toBe(1)
         ->and($marker->payload)->toBe(['topped_up' => 500]);
