@@ -432,6 +432,23 @@ including which signal a parked step will next wait for.
 return your own builder subclass: PHP refuses to load an override whose signature no longer matches,
 so widen it to `RetryPolicy|string $signal` and accept the fifth `?Closure $when` parameter.
 
+### 18. A run's relations read in a defined order
+
+`FlowRun`'s relations no longer come back in whatever order the driver chose: `actions()`,
+`compensations()`, `sideEffects()` and `children()` read by `sequence`, `events()` by
+`recorded_at`, and `signals()` and `tags()` by `id`.
+
+Nothing that was correct before changes. What to check is a read that appends its own order, or
+one that pages by id — both now land behind the default, so clear it first:
+
+```php
+$run->signals()->reorder()->orderByDesc('id')->first();
+$run->actions()->reorder()->chunkById(500, fn ($actions) => ...);
+```
+
+Eager loads, `withCount()`, `whereHas()` and plain `chunk()` need nothing. See
+[Configuration](https://sagalaraflow.dev/configuration).
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

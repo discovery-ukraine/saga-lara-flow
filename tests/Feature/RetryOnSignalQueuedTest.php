@@ -925,7 +925,7 @@ it('rolls the consumption back when the retry transition fails', function () {
         // The explosion is the setup; the rows it leaves behind are the assertion.
     }
 
-    $signal = SagaFlow::findRun($run->id)->signals()->orderByDesc('id')->first();
+    $signal = SagaFlow::findRun($run->id)->signals()->reorder()->orderByDesc('id')->first();
     $step = SagaFlow::findRun($run->id)->actions()->where('sequence', 1)->first();
 
     expect($signal->status)->toBe(SignalStatus::Received)

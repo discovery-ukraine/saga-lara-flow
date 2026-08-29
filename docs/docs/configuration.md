@@ -35,6 +35,12 @@ connection `null`.
 
 Swap any model for your own subclass to extend behaviour (casts, relations, scopes).
 
+`FlowRun`'s relations read in the order their rows are meaningful in: `actions()`,
+`compensations()`, `sideEffects()` and `children()` by `sequence`, `events()` by `recorded_at` then
+`id`, and `signals()` and `tags()` by `id`. An order you append lands *after* that one — call
+`reorder()` first to read against it, and also before `chunkById()`, `lazyById()` or `eachById()`,
+whose cursor the default order would otherwise outrank.
+
 ## Queue
 
 ```php

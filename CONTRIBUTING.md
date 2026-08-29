@@ -127,11 +127,13 @@ for the other changes public behaviour and needs its own exception and its own d
 - **Run the suite on MySQL before you commit.** SQLite answers a conditional write differently,
   and a test that fences on one is meaningless there — see `ConditionalWriteFenceTest`, which is
   load-bearing on MySQL and trivially green on SQLite.
-- **Order a relation read before you index into it.** `$run->actions()->first()` is whichever row
-  the driver felt like returning. SQLite and MySQL usually answer in insertion order; PostgreSQL
-  returns physical order, which moves as rows are updated. Say `orderBy('sequence')` — or
-  `orderBy('id')` for signals and events — wherever the run holds more than one row and the
-  assertion cares which.
+- **`FlowRun`'s relations carry their order; don't append one that fights it.** Each reads by the
+  column its rows are meaningful in (see `src/Models/FlowRun.php`), because without one the answer
+  is the driver's to choose — SQLite and MySQL usually give insertion order, PostgreSQL gives
+  physical order, which moves as rows are updated. An order you append lands after the default, so
+  to read in the other direction call `reorder()` first — and before any id-cursor traversal
+  (`chunkById()` and friends), whose cursor the default would otherwise outrank. A relation added
+  later needs an order of its own: `RelationOrderTest` fails until it has one.
 - **A test may be written for one driver, but say so in the file.** `LongTablePrefixTest` skips
   everywhere but PostgreSQL because no other driver truncates an identifier, and
   `TransactionIntegrityTest` skips one case on PostgreSQL against a defect that is filed rather
