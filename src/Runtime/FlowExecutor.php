@@ -8,6 +8,8 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
@@ -141,14 +143,17 @@ class FlowExecutor
     }
 
     /**
-     * Rebuild the compensation stack for a run without executing any business
-     * logic: replay handle() in collecting mode so completed steps register their
-     * compensations and the replay stops at the live frontier. Used by the manual
-     * FlowHandle::compensate() path.
+     * Rebuild the compensation stack for a run: replay handle() in collecting mode
+     * so completed steps register their compensations and the replay stops at the
+     * live frontier. Every seam is guarded, so the pass starts no work and settles
+     * no step; a workflow's own tag() calls still rewrite their rows, as they do on
+     * every replay. Used by FlowHandle::compensate(). A throw the
+     * replay did not expect is a fault, not a frontier, and leaves rather than
+     * shortening the stack behind the caller's back.
      *
      * @return list<CompensationEntry>
      *
-     * @throws HistoryContractMismatchException
+     * @throws Throwable
      */
     public function collectCompensations(FlowRun $flowRun): array
     {
@@ -164,7 +169,7 @@ class FlowExecutor
     /**
      * @return list<CompensationEntry>
      *
-     * @throws HistoryContractMismatchException
+     * @throws Throwable
      */
     private function collectCompensationsInner(FlowRun $flowRun): array
     {
@@ -172,29 +177,34 @@ class FlowExecutor
         $this->runtime->reset();
         $this->runtime->beginCollecting();
 
+        // Every exit unbinds, including the ones that leave by throwing: the runtime
+        // is a singleton, and a pass that left it collecting would make the next
+        // ordinary drive of any run refuse to start work.
         try {
-            $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
+            try {
+                $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
 
-            /** @var array<int, mixed> $arguments */
-            $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
+                /** @var array<int, mixed> $arguments */
+                $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
 
-            $this->callWithDependencies($workflow, 'handle', $arguments);
-        } catch (HistoryContractMismatchException $mismatch) {
+                $this->callWithDependencies($workflow, 'handle', $arguments);
+            } catch (InternalFlowControl|ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException) {
+                // The frontier, or a failure already recorded in this run's history
+                // replaying as a throw: a seam decided the replay ends here.
+                //
+                // Nothing else did. A throw from a builder argument, a workflow helper
+                // or anything else the replay runs is a fault, and swallowing it hands
+                // back a stack truncated at that point for compensate() to roll back
+                // and report as a complete unwind. It leaves here instead, before the
+                // run has been touched, so the operator sees the cause and still has a
+                // run to retry the rollback on.
+            }
+
+            return $this->runtime->sagaStack()->entries();
+        } finally {
             $this->runtime->endCollecting();
             $this->runtime->clear();
-
-            throw $mismatch;
-        } catch (Throwable) {
-            // FlowSuspended at the frontier, or a recorded business failure replaying
-            // as a throw — either way the stack is complete up to this point.
         }
-
-        $entries = $this->runtime->sagaStack()->entries();
-
-        $this->runtime->endCollecting();
-        $this->runtime->clear();
-
-        return $entries;
     }
 
     private function suspend(FlowRun $flowRun): FlowRun
