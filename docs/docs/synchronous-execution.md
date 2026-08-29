@@ -21,6 +21,14 @@ $run->result;   // the value handle() returned
 The queued and synchronous paths are guaranteed to reach the **same** final database state — the only
 difference is *who* drives the steps (your worker vs. the current process).
 
+:::warning Do not call `runSync()` inside a transaction of your own
+A step's body runs while your transaction is still open, so a rollback afterwards — yours, or one a
+failed statement forced on you — discards every row the run recorded while the work those rows
+describe is already done. A charge stays charged with nothing left to attribute it to, on every
+driver. The queued path has no such problem: `queue.after_commit` holds the jobs until your
+transaction commits.
+:::
+
 ## When to use which
 
 | | `run()` (queued) | `runSync()` |
