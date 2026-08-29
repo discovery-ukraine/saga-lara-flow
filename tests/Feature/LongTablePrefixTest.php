@@ -5,22 +5,17 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * Both index migrations match an index by the name the driver actually stored, not by
- * the name Laravel derived, because PostgreSQL truncates an identifier past 63 bytes
- * and a long table prefix reaches that. Every one of those `existing()` helpers was
- * written from the documentation and had never been run.
+ * the name they asked for, because PostgreSQL truncates an identifier past 63 bytes and
+ * a long table prefix reaches that. Every one of those `existing()` helpers was written
+ * from the documentation and had never been run.
  *
- * With this 24-character prefix both names that index_signal_waits owns cross the limit
- * — 73 and 66 bytes — so what the catalogue holds is not what `$table->index(..., $name)`
- * asked for, and a migration that compared the two literally would try to create its
- * index a second time.
- *
- * The prefix stops at 24 on purpose. unique_flow_tag_keys needs 32 before its own names
- * truncate, and at 30 the initial migration cannot install at all: three of
- * flow_children's index names truncate onto each other. That is issue #42, and until it
- * is fixed the tag migration's half of this cannot be reached.
+ * This 30-character prefix reaches both halves: index_signal_waits' two names cross the
+ * limit at 65 and 64 bytes, and so does the wide unique that unique_flow_tag_keys drops,
+ * at 68. It is past the documented ceiling of 24 bytes, which PostgreSQL alone has the
+ * room for — the point here is truncation, not a supported install.
  *
  * PostgreSQL only, deliberately. MySQL does not truncate a long identifier, it refuses
- * it outright at 64 bytes, and SQLite has no limit worth reaching: there is no
+ * it outright at 64 characters, and SQLite has no limit worth reaching: there is no
  * truncation to exercise on either. Do not "fix" the skip.
  */
 beforeEach(function () {
@@ -30,7 +25,7 @@ beforeEach(function () {
         return;
     }
 
-    config()->set('saga-lara-flow.database.table_prefix', 'saga_flow_long_prefix_1_');
+    config()->set('saga-lara-flow.database.table_prefix', 'saga_thirty_characters_prefix_');
 
     // Read afresh on every call in UsesSagaFlowConnection::getTable(), so the prefix
     // above is already in force for the migrations this builds the schema with.
@@ -43,7 +38,7 @@ beforeEach(function () {
 afterEach(fn () => TestCase::forgetSchema());
 
 it('finds the indexes it created under the truncated names the driver stored', function () {
-    $names = fn (string $table) => collect(Schema::getIndexes('saga_flow_long_prefix_1_'.$table))
+    $names = fn (string $table) => collect(Schema::getIndexes('saga_thirty_characters_prefix_'.$table))
         ->pluck('name')
         ->all();
 
@@ -52,13 +47,13 @@ it('finds the indexes it created under the truncated names the driver stored', f
     }
 
     // Stored under a name shorter than the one asked for, and still recognisably ours.
-    expect($names('action_runs'))->toContain(substr('saga_flow_long_prefix_1_action_runs_status_retry_signal_flow_run_id_index', 0, 63))
-        ->and($names('flow_signals'))->toContain(substr('saga_flow_long_prefix_1_flow_signals_status_name_flow_run_id_index', 0, 63))
-        ->and(strlen('saga_flow_long_prefix_1_action_runs_status_retry_signal_flow_run_id_index'))->toBeGreaterThan(63);
+    expect($names('action_runs'))->toContain(substr('saga_thirty_characters_prefix_action_runs_status_signal_run_index', 0, 63))
+        ->and($names('flow_signals'))->toContain(substr('saga_thirty_characters_prefix_flow_signals_status_name_run_index', 0, 63))
+        ->and(strlen('saga_thirty_characters_prefix_action_runs_status_signal_run_index'))->toBeGreaterThan(63);
 })->skip(fn () => TestCase::driver() !== 'pgsql', 'Only PostgreSQL truncates an identifier past 63 bytes.');
 
 it('re-runs over its own work rather than creating a second index under the same name', function () {
-    $indexes = fn (string $table) => collect(Schema::getIndexes('saga_flow_long_prefix_1_'.$table))
+    $indexes = fn (string $table) => collect(Schema::getIndexes('saga_thirty_characters_prefix_'.$table))
         ->pluck('columns');
 
     $waits = include __DIR__.'/../../database/migrations/2026_08_26_000000_index_signal_waits.php';
@@ -72,9 +67,12 @@ it('re-runs over its own work rather than creating a second index under the same
     $tags->up();
     $tags->up();
 
+    // The wide unique is gone, which is the tag migration's own half of the matching:
+    // its name truncates at this prefix, so a literal comparison would have left it.
     expect($indexes('flow_signals'))->toContain(['status', 'name', 'flow_run_id'])
         ->and($indexes('action_runs'))->toContain(['status', 'retry_signal', 'flow_run_id'])
-        ->and($indexes('flow_tags')->all())->toContain(['flow_run_id', 'key']);
+        ->and($indexes('flow_tags')->all())->toContain(['flow_run_id', 'key'])
+        ->and($indexes('flow_tags')->all())->not->toContain(['flow_run_id', 'key', 'value']);
 
     $waits->down();
     $waits->down();

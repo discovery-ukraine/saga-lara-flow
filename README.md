@@ -129,7 +129,9 @@ Every setting lives in `config/saga-lara-flow.php`. The most common ones:
 
 - **Dedicated database connection.** `database.connection` (env `SAGA_LARA_FLOW_DB_CONNECTION`) keeps
   the engine's tables on their own connection; `null` uses the app default. `database.table_prefix`
-  (default `saga_`) prefixes every table.
+  (default `saga_`) prefixes every table, and is capped at 24 bytes — it rides along in every index
+  name, and PostgreSQL truncates an identifier past 63 bytes while MySQL refuses one past 64
+  characters.
 - **Swappable models.** Every row model under `models.*` can be pointed at your own subclass.
 - **Queue.** `queue.connection` / `queue.queue` control where workflow and action jobs run;
   `queue.after_commit` dispatches after the surrounding DB transaction commits.

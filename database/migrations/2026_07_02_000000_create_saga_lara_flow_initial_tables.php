@@ -4,6 +4,13 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
+/**
+ * An index whose name Laravel derives carries the table prefix, and the longest of them
+ * decides how long a prefix may be: MySQL refuses an identifier past 64 characters, and
+ * PostgreSQL truncates at 63 bytes, where two names on one table can meet. The four
+ * longest are therefore named here rather than derived; with the two in
+ * index_signal_waits that leaves 24 bytes for a prefix, which the documentation states.
+ */
 return new class extends Migration
 {
     public function up(): void
@@ -12,7 +19,7 @@ return new class extends Migration
 
         $prefix = $this->prefix();
 
-        $schema->create($prefix.'flow_runs', function (Blueprint $table): void {
+        $schema->create($prefix.'flow_runs', function (Blueprint $table) use ($prefix): void {
             $table->ulid('id')->primary();
             $table->string('workflow_class');
             $table->string('workflow_name')->nullable();
@@ -36,7 +43,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->index(['status', 'expires_at']);
-            $table->index(['status', 'repair_available_at']);
+            $table->index(['status', 'repair_available_at'], $prefix.'flow_runs_status_repair_index');
             $table->index(['workflow_class', 'status']);
         });
 
@@ -76,7 +83,7 @@ return new class extends Migration
             $table->timestamps();
         });
 
-        $schema->create($prefix.'flow_signals', function (Blueprint $table): void {
+        $schema->create($prefix.'flow_signals', function (Blueprint $table) use ($prefix): void {
             $table->ulid('id')->primary();
             $table->ulid('flow_run_id')->index();
             $table->string('name');
@@ -88,7 +95,7 @@ return new class extends Migration
             $table->timestamp('consumed_at')->nullable();
             $table->timestamps();
 
-            $table->index(['flow_run_id', 'name', 'status']);
+            $table->index(['flow_run_id', 'name', 'status'], $prefix.'flow_signals_run_name_status_index');
         });
 
         $schema->create($prefix.'compensation_runs', function (Blueprint $table): void {
@@ -130,7 +137,7 @@ return new class extends Migration
             $table->unique(['flow_run_id', 'key', 'value']);
         });
 
-        $schema->create($prefix.'flow_children', function (Blueprint $table): void {
+        $schema->create($prefix.'flow_children', function (Blueprint $table) use ($prefix): void {
             $table->id();
             $table->ulid('parent_flow_run_id')->index();
             $table->ulid('child_flow_run_id')->index();
@@ -141,8 +148,8 @@ return new class extends Migration
             $table->string('status')->index();
             $table->timestamps();
 
-            $table->unique(['parent_flow_run_id', 'sequence']);
-            $table->unique(['parent_flow_run_id', 'child_flow_run_id']);
+            $table->unique(['parent_flow_run_id', 'sequence'], $prefix.'flow_children_parent_sequence_unique');
+            $table->unique(['parent_flow_run_id', 'child_flow_run_id'], $prefix.'flow_children_parent_child_unique');
         });
     }
 
