@@ -92,11 +92,11 @@ class CancelChildWorkflowJob implements ShouldQueue
             $lifecycle,
             $child,
         ): void {
-            // Plan before taking control. Collecting is a read, and a fault in it must
-            // not leave the child sitting in Cancelling with nothing coming to move it
-            // on: the monitor and the doctor both pass over a Cancelling run on
-            // purpose. Losing the child to somebody else between the two is the
-            // ordinary race the transition's own guard already refuses.
+            // Plan before taking control. Planning starts no work of its own, and a
+            // fault in it must not leave the child sitting in Cancelling with nothing
+            // coming to move it on: the monitor and the doctor both pass over a
+            // Cancelling run on purpose. Losing the child to somebody else between the
+            // two is the ordinary race the transition's own guard already refuses.
             $entries = $this->withCompensation ? $executor->collectCompensations($child) : [];
 
             // Take control of the child from any non-terminal state (Pending/Running/
