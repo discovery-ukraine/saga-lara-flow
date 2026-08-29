@@ -826,20 +826,29 @@ class ActionBuilder
      * The retry policy is over (budget spent, wait timed out, or the failure fell
      * outside only): resolve the step exactly as it would have resolved without the
      * policy. An optional step is marked OptionalFailed here — the queued give-up
-     * hook deliberately leaves that to the seam for a step with a retry signal.
+     * hook deliberately leaves that to the seam for a step with a retry signal —
+     * unless this pass is only collecting compensations, which writes nothing.
      */
     private function giveUpAfterRetry(ActionRun $step, int $sequence): mixed
     {
+        // Suspending here instead would be the obvious guard and the wrong one: the
+        // replay would stop at this step, and every compensation after it — the whole
+        // point of collecting — would be missing from the rollback. So the give-up is
+        // resolved from the row as it stands and written by the next ordinary replay.
+        $collecting = $this->runtime->isCollecting();
+
         if (! $this->resolvedContinueOnFailure()) {
             // A timed-out wait arrives here on an AwaitingRetry row (the other ways
             // in are already Failed); leaving it would show a compensated run still
             // holding a step that claims to be waiting.
-            app(ActionRecorder::class)->settleAwaitingRetry($step);
+            if (! $collecting) {
+                app(ActionRecorder::class)->settleAwaitingRetry($step);
+            }
 
             $this->resolveFailed($step, $sequence);
         }
 
-        if ($step->status !== ActionStatus::OptionalFailed) {
+        if (! $collecting && $step->status !== ActionStatus::OptionalFailed) {
             app(ActionRecorder::class)->optionalFail($step);
         }
 
