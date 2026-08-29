@@ -50,8 +50,10 @@ it('installs every table at the documented prefix ceiling', function () {
 });
 
 it('spends the ceiling in bytes, not in characters', function () {
+    // Named encoding: mb_strlen() otherwise reads default_charset, and a host that has
+    // set it to something single-byte would be told this prefix is 24 characters long.
     expect(strlen(SAGA_PREFIX_MULTIBYTE))->toBe(24)
-        ->and(mb_strlen(SAGA_PREFIX_MULTIBYTE))->toBe(13);
+        ->and(mb_strlen(SAGA_PREFIX_MULTIBYTE, 'UTF-8'))->toBe(13);
 
     installAtPrefix(SAGA_PREFIX_MULTIBYTE);
 
