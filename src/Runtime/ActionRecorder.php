@@ -243,7 +243,11 @@ final readonly class ActionRecorder
      * it is not.
      *
      * Refusing a row a second worker legitimately took between the commit and this read
-     * is the same answer for the same reason — it is no longer ours to execute.
+     * is the same answer for the same reason — it is no longer ours to execute. The row
+     * is what answers, though, not a token: a claim of ours that rolled back and a second
+     * worker's claim that replaced it read alike, so a claim lost to that race is
+     * narrowed rather than caught. Telling those two apart needs a value per claim that a
+     * rollback cannot reproduce, which the schema does not carry.
      *
      * What the read proves is that the claim is visible on the connection that wrote it,
      * which is durability only while the engine's transaction is the outermost one. A
