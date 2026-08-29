@@ -460,6 +460,18 @@ Nothing to do on a database that installed. One that failed part-way on a too-lo
 package tables dropped before `migrate` will get past the first one. The new names reach a fresh
 install only, nothing reads them, and there is no rename migration.
 
+### 20. A claim is verified after the transaction that made it commits
+
+Claiming a step or an undo now reads the row back once its transaction has closed, and does not run
+the body unless the claim is really there. A commit reporting success is not proof: on PostgreSQL a
+failed statement aborts the transaction and turns the commit into a rollback, so a listener on
+`ActionStarted` — or a model observer on the `flow_events` insert — that runs a failing query and
+swallows it used to leave the step executing with nothing recording that it started.
+
+Nothing to do unless your listeners swallow query failures. One that does now stops the step,
+journalled as `claim_not_committed` and raised as `ActionClaimFailedException` in synchronous mode.
+See [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery).
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

@@ -108,13 +108,14 @@ final readonly class CompensationRecorder
      * deadline. Mirrors ActionRecorder::startAction() in every respect: the same
      * compare-and-swap shape, the same enclosing transaction, the same absence of
      * Eloquent model events (CompensationStepStarted and the flow_events entry are the
-     * supported way to observe it), and the same attempts counter.
+     * supported way to observe it), and the same attempts counter — including the
+     * read-back that proves the claim survived its own commit.
      *
      * @throws Throwable
      */
     public function startCompensation(CompensationRun $compensation): bool
     {
-        return $compensation->getConnection()->transaction(function () use ($compensation): bool {
+        $claimed = $compensation->getConnection()->transaction(function () use ($compensation): bool {
             $now = Carbon::now();
 
             $staleAfter = $compensation->reclaim_stale_after_seconds;
@@ -163,6 +164,45 @@ final readonly class CompensationRecorder
 
             return true;
         });
+
+        return $claimed && $this->claimSurvivedCommit($compensation);
+    }
+
+    /**
+     * The undo half of ActionRecorder::claimSurvivedCommit(), which carries the
+     * reasoning: a commit reporting success is not proof the claim is on record, so the
+     * row answers for itself — and what it answers is what this connection can see.
+     */
+    private function claimSurvivedCommit(CompensationRun $compensation): bool
+    {
+        $claimedAttempts = $compensation->attempts;
+
+        $stored = $compensation->newQuery()
+            ->useWritePdo()
+            ->whereKey($compensation->getKey())
+            ->first(['status', 'attempts']);
+
+        if ($stored?->status === CompensationStatus::Running && $stored->attempts === $claimedAttempts) {
+            return true;
+        }
+
+        $this->anomalies->log(
+            $stored === null || $stored->attempts < $claimedAttempts
+                ? AnomalyLog::REASON_CLAIM_NOT_COMMITTED
+                : AnomalyLog::REASON_CLAIM_LOST,
+            [
+                'entity' => 'compensation',
+                'flow_run_id' => $compensation->flow_run_id,
+                'compensation_run_id' => $compensation->id,
+                'sequence' => $compensation->sequence,
+                'compensation_class' => $compensation->compensation_class,
+                'claimed_attempts' => $claimedAttempts,
+                'stored_attempts' => $stored?->attempts,
+                'stored_status' => $stored?->status->value,
+            ]
+        );
+
+        return false;
     }
 
     /**

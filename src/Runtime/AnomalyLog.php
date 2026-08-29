@@ -10,12 +10,13 @@ use Throwable;
  *
  * EventLog records what happened to a run in business terms. This records the moments
  * where the world turned out not to be what the engine assumed — a claim lost to
- * whoever already owned the row, an outcome write refused because the row had changed
- * hands, a batch already closed by a duplicate before its own job reported, a run
- * transition refused because the row had moved on, a retry policy that threw. Most are
- * ordinary consequences of at-least-once delivery and of nothing serialising an operator
- * against a worker; the last is a defect in the caller's own code, journalled here for
- * the same reason as the rest — the engine carried on, so nothing else records it.
+ * whoever already owned the row, a claim the transaction that made it did not keep, an
+ * outcome write refused because the row had changed hands, a batch already closed by a
+ * duplicate before its own job reported, a run transition refused because the row had
+ * moved on, a retry policy that threw. Most are ordinary consequences of at-least-once
+ * delivery and of nothing serialising an operator against a worker; the second and the
+ * last are defects in the caller's own code, journalled here for the same reason as the
+ * rest — the engine carried on, so nothing else records it.
  *
  * None of them fails a job. A refused transition also reaches its caller: the engine
  * absorbs it and stops, but FlowHandle lets it surface, because an operator whose
@@ -29,6 +30,8 @@ use Throwable;
 final readonly class AnomalyLog
 {
     public const string REASON_CLAIM_LOST = 'claim_lost';
+
+    public const string REASON_CLAIM_NOT_COMMITTED = 'claim_not_committed';
 
     public const string REASON_OUTCOME_REJECTED = 'outcome_rejected';
 

@@ -220,14 +220,22 @@ journal for them — `AnomalyLog`, alongside the `flow_events` business history:
 ],
 ```
 
-Three reason codes to grep for, each carrying the run id, row id, sequence and class:
+Four reason codes to grep for, each carrying the run id, row id, sequence and class:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped.
 - **`batch_finished_early`** — a parallel step completed after a duplicate delivery had closed its batch.
+- **`claim_not_committed`** — a claim was written and was gone once its transaction closed. The line carries both
+  attempt counts, the claimed one and the one the row actually holds.
 
-Raise the level to `warning` to surface them in your alerting. A steady stream of any of the three points to a queue
+Raise the level to `warning` to surface them in your alerting. A steady stream of the first three points to a queue
 timeout tuned shorter than the work takes, or to locks being off.
+
+The fourth is not a race and does not come from tuning: something ran inside the engine's own transaction and left it
+unusable. On PostgreSQL a single failed statement aborts a transaction and turns the eventual commit into a rollback
+while still reporting success, so a listener on `ActionStarted` or a model observer that runs a failing query and
+swallows it discards the claim without anything raising. The claim is read back after the transaction closes for
+exactly this reason, and the step does not run. Fix the listener; nothing on the engine's side is tunable here.
 
 ## Observability
 
