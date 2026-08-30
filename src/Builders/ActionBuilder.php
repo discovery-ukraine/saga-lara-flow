@@ -922,7 +922,13 @@ class ActionBuilder
         }
 
         if (! $collecting && $step->status !== ActionStatus::OptionalFailed) {
-            app(ActionRecorder::class)->optionalFail($step);
+            if (! app(ActionRecorder::class)->optionalFail($step)) {
+                // The give-up did not happen, so the fallback that stands for it is not
+                // this pass's to hand back: returning it would carry the replay past a
+                // step nothing resolved and — when what refused the write was the run
+                // ending — into work no settlement will ever close.
+                app(FlowSuspender::class)->suspend('action', $sequence);
+            }
         }
 
         return $this->resolveOptionalFailed($step, $sequence);

@@ -19,6 +19,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryOnSignalWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SelfCancellingBeforeParkWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SelfCancellingOptionalRetryWorkflow;
 use Illuminate\Support\Facades\Event;
 
 /**
@@ -35,6 +36,7 @@ use Illuminate\Support\Facades\Event;
 beforeEach(function () {
     FlakyPaymentAction::reset();
     SelfCancellingBeforeParkWorkflow::reset();
+    SelfCancellingOptionalRetryWorkflow::reset();
 
     config()->set('saga-lara-flow.queue.after_commit', false);
 });
@@ -486,4 +488,67 @@ it('verifies the handover committed before starting the retry it bought', functi
         ->and($step->fresh()->status)->toBe(ActionStatus::AwaitingRetry)
         ->and($step->fresh()->retry_signal_attempts)->toBe(0)
         ->and($run->compensations()->count())->toBe(0);
+});
+
+/**
+ * A parking that loses has nothing left to resolve from, and resolving anyway is worse
+ * than stopping: an optional step would hand back its fallback and let handle() carry on
+ * into the next seam, scheduling a row under a run whose settlement has already run.
+ */
+it('stops the pass instead of scheduling more work when a park loses to the run ending', function () {
+    useDatabaseQueue();
+    FlakyPaymentAction::reset(failures: 5);
+    SelfCancellingOptionalRetryWorkflow::$armed = true;
+
+    $handle = SagaFlow::create(SelfCancellingOptionalRetryWorkflow::class)
+        ->withArguments('order-probe')
+        ->run();
+
+    try {
+        drainQueue();
+    } catch (Throwable) {
+        // The cancellation is the setup; the rows it leaves behind are the assertion.
+    }
+
+    $run = FlowRun::query()->findOrFail($handle->id);
+
+    expect($run->status)->toBe(FlowStatus::Cancelled)
+        // The second step must not exist at all: nothing schedules work under a run that
+        // has settled, and nothing would ever settle the row if it did.
+        ->and($run->actions()->count())->toBe(1)
+        ->and($run->actions()->first()->status)->toBe(ActionStatus::Failed)
+        ->and($run->signals()->count())->toBe(0);
+
+    $scheduled = $run->events()->where('type', 'action.scheduled')->count();
+
+    expect($scheduled)->toBe(1);
+});
+
+/**
+ * The same orphan through the other door: with the retry budget spent there is no park
+ * to lose, and the Failed optional step reaches the give-up directly. A refused give-up
+ * is not a give-up, so the fallback that stands for it must not be handed back either.
+ */
+it('stops the pass instead of scheduling more work when a give-up is refused', function () {
+    useDatabaseQueue();
+    config()->set('saga-lara-flow.actions.retry_on_signal.max_retries', 0);
+    FlakyPaymentAction::reset(failures: 5);
+    SelfCancellingOptionalRetryWorkflow::$armed = true;
+
+    $handle = SagaFlow::create(SelfCancellingOptionalRetryWorkflow::class)
+        ->withArguments('order-probe')
+        ->run();
+
+    try {
+        drainQueue();
+    } catch (Throwable) {
+        // The cancellation is the setup; the rows it leaves behind are the assertion.
+    }
+
+    $run = FlowRun::query()->findOrFail($handle->id);
+
+    expect($run->status)->toBe(FlowStatus::Cancelled)
+        ->and($run->actions()->count())->toBe(1)
+        ->and($run->actions()->first()->status)->toBe(ActionStatus::Failed)
+        ->and($run->events()->where('type', 'action.scheduled')->count())->toBe(1);
 });
