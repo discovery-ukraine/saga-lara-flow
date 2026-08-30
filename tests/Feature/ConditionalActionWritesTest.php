@@ -3,13 +3,18 @@
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowEvent;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryOnSignalWorkflow;
@@ -333,4 +338,152 @@ it('does not let a losing park take the row the winning park wrote', function ()
     // not the row the winner parked.
     expect($recorder->optionalFail($loser))->toBeFalse()
         ->and($step->fresh()->status)->toBe(ActionStatus::AwaitingRetry);
+});
+
+/**
+ * The floating-delivery branch spends two signal rows to buy one retry cycle. If the
+ * rewind it pays for is refused after those rows are committed, the delivery is gone and
+ * no cycle exists to show for it — and no later pass looks for it again, because both
+ * rows read as spent.
+ */
+it('does not spend a delivery on a retry cycle the row refused', function () {
+    FlakyPaymentAction::reset(failures: 5);
+
+    $handle = SagaFlow::create(RetryOnSignalWorkflow::class)->withArguments('order-probe');
+
+    try {
+        $handle->runSync();
+    } catch (Throwable) {
+        // Parks on the retry signal.
+    }
+
+    $run = FlowRun::query()->where('workflow_class', RetryOnSignalWorkflow::class)->latest('id')->firstOrFail();
+    $step = $run->actions()->where('sequence', 1)->firstOrFail();
+
+    expect($step->status)->toBe(ActionStatus::AwaitingRetry);
+
+    // The step stays AwaitingRetry: the branch under test is the one that adopts a
+    // delivery which never matched the wait-signal, and only a parked step reaches it.
+    FlowSignal::create([
+        'flow_run_id' => $run->id,
+        'name' => 'balance-refilled',
+        'status' => SignalStatus::Received,
+        'received_at' => now(),
+    ]);
+
+    // The rewind loses inside the handover's own transaction: the cycle moves under this
+    // pass while it is consuming, which an observer on the signal write can stage in one
+    // process because both writes share that transaction.
+    FlowSignal::updated(function (FlowSignal $signal): void {
+        if ($signal->status === SignalStatus::Consumed) {
+            ActionRun::query()
+                ->where('flow_run_id', $signal->flow_run_id)
+                ->where('sequence', 1)
+                ->update(['retry_signal_attempts' => 7]);
+        }
+    });
+
+    try {
+        app(FlowExecutor::class)->drive($run->fresh(), RunMode::Sync);
+    } catch (Throwable) {
+        // The refusal is the setup.
+    }
+
+    $signals = $run->signals()->get();
+
+    // Neither row may read as spent: the delivery is still owed a cycle.
+    expect($signals->where('status', SignalStatus::Consumed)->count())->toBe(0)
+        ->and($signals->where('status', SignalStatus::Waiting)->count())->toBe(1)
+        ->and($signals->where('status', SignalStatus::Received)->count())->toBe(1);
+});
+
+/**
+ * The same construction with nothing moving the row underneath, so the branch above is
+ * held to a reachable path rather than passing because the replay never arrived.
+ */
+it('spends a floating delivery on the retry cycle it pays for', function () {
+    FlakyPaymentAction::reset(failures: 5);
+
+    try {
+        SagaFlow::create(RetryOnSignalWorkflow::class)->withArguments('order-probe')->runSync();
+    } catch (Throwable) {
+        // Parks on the retry signal.
+    }
+
+    $run = FlowRun::query()->where('workflow_class', RetryOnSignalWorkflow::class)->latest('id')->firstOrFail();
+    $step = $run->actions()->where('sequence', 1)->firstOrFail();
+
+    FlowSignal::create([
+        'flow_run_id' => $run->id,
+        'name' => 'balance-refilled',
+        'status' => SignalStatus::Received,
+        'received_at' => now(),
+    ]);
+
+    try {
+        app(FlowExecutor::class)->drive($run->fresh(), RunMode::Sync);
+    } catch (Throwable) {
+        // The step runs again and fails again; the cycle is what matters here.
+    }
+
+    expect($run->signals()->where('status', SignalStatus::Consumed)->count())->toBe(2)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(1);
+});
+
+/**
+ * The handover writes the wait's closure, the delivery's consumption and the rewind in
+ * one transaction, so the rewind's own flow_events row is written inside it — and a host
+ * observer on that row is caller code running there. On PostgreSQL a failing statement it
+ * swallows aborts the whole transaction and turns the eventual commit into a rollback
+ * while still reporting success. Starting the step on that would claim a row the database
+ * still has parked, and the drive loop reads that failure as a business one.
+ */
+it('verifies the handover committed before starting the retry it bought', function () {
+    if (DB::connection('testing')->getDriverName() !== 'pgsql') {
+        $this->markTestSkipped('Only PostgreSQL turns a commit into a rollback after a swallowed failure.');
+    }
+
+    FlakyPaymentAction::reset(failures: 5);
+
+    try {
+        SagaFlow::create(RetryOnSignalWorkflow::class)->withArguments('order-probe')->runSync();
+    } catch (Throwable) {
+        // Parks on the retry signal.
+    }
+
+    $run = FlowRun::query()->where('workflow_class', RetryOnSignalWorkflow::class)->latest('id')->firstOrFail();
+    $step = $run->actions()->where('sequence', 1)->firstOrFail();
+
+    // A delivery that never matched the wait-signal, which is what the handover exists to
+    // take. The step stays AwaitingRetry: only a parked step reaches that branch.
+    FlowSignal::create([
+        'flow_run_id' => $run->id,
+        'name' => 'balance-refilled',
+        'status' => SignalStatus::Received,
+        'received_at' => now(),
+    ]);
+
+    FlowEvent::created(function (FlowEvent $event): void {
+        if ($event->type !== FlowEventType::ActionRetried) {
+            return;
+        }
+
+        try {
+            DB::connection('testing')->select('select * from a_table_that_does_not_exist');
+        } catch (Throwable) {
+            // Swallowed, exactly as the observer code this stands for would.
+        }
+    });
+
+    try {
+        app(FlowExecutor::class)->drive($run->fresh(), RunMode::Sync);
+    } catch (Throwable) {
+        // The poisoned transaction is the setup.
+    }
+
+    // The run is untouched, not failed over a cycle the database threw away.
+    expect($run->fresh()->status)->toBe(FlowStatus::Waiting)
+        ->and($step->fresh()->status)->toBe(ActionStatus::AwaitingRetry)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(0)
+        ->and($run->compensations()->count())->toBe(0);
 });

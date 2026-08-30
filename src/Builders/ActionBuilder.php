@@ -629,11 +629,14 @@ class ActionBuilder
         $delivered = app(SignalRepository::class)
             ->earliestPendingSince($this->runtime->run()->id, $signal->name, $step->finished_at);
 
-        // Close the spent wait-signal and bind the floating row to this ordinal, so no
-        // later await consumes the same signal twice. A lost claim means a delivery
-        // landed in the wait-signal itself, which the next replay resolves.
-        if ($delivered !== null && $this->handOverDelivery($signal, $delivered, $sequence)) {
-            $this->retryNow($step, $sequence);
+        // Close the spent wait-signal, bind the floating row to this ordinal so no later
+        // await consumes the same signal twice, and spend the cycle it pays for — all
+        // three together. A lost claim means a delivery landed in the wait-signal itself,
+        // which the next replay resolves.
+        if ($delivered !== null
+            && $this->handOverAndRetry($signal, $delivered, $step, $sequence)
+            && $this->retrySurvivedCommit($step)) {
+            $this->startRetriedStep($step, $sequence);
         }
 
         $suspender->suspend('action', $sequence);
@@ -739,27 +742,41 @@ class ActionBuilder
     }
 
     /**
-     * Close a spent wait-signal and claim the floating delivery that ended its wait,
-     * atomically. Returns false when the signal is no longer Waiting: it received a
-     * delivery of its own, which the next replay resolves.
+     * Close a spent wait-signal, claim the floating delivery that ended its wait, and
+     * spend the cycle it pays for — one transition, so a delivery is never consumed
+     * without the retry it bought. Returns false when nothing was written: the wait
+     * received a delivery of its own, or the step moved on under this pass; either way
+     * the next replay resolves it from the row as it stands.
      *
      * @throws Throwable
      */
-    private function handOverDelivery(FlowSignal $signal, FlowSignal $delivered, int $sequence): bool
-    {
+    private function handOverAndRetry(
+        FlowSignal $signal,
+        FlowSignal $delivered,
+        ActionRun $step,
+        int $sequence
+    ): bool {
         $recorder = app(SignalRecorder::class);
         $flowRun = $this->runtime->run();
 
-        return (bool) $this->connection()
-            ->transaction(function () use ($recorder, $flowRun, $signal, $delivered, $sequence): bool {
-                if (! $recorder->consumeWhileWaiting($flowRun, $signal, $sequence)) {
-                    return false;
-                }
+        try {
+            return (bool) $this->connection()
+                ->transaction(function () use ($recorder, $flowRun, $signal, $delivered, $step, $sequence): bool {
+                    if (! $recorder->consumeWhileWaiting($flowRun, $signal, $sequence)) {
+                        return false;
+                    }
 
-                $recorder->consumeSignal($flowRun, $delivered, $sequence);
+                    $recorder->consumeSignal($flowRun, $delivered, $sequence);
 
-                return true;
-            });
+                    if (! app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt())) {
+                        throw new FencedWriteLost;
+                    }
+
+                    return true;
+                });
+        } catch (FencedWriteLost) {
+            return false;
+        }
     }
 
     /**
