@@ -521,15 +521,25 @@ final readonly class ActionRecorder
      * retry policy deferred, keeping the exception and finished_at of the attempt that
      * failed. No event is appended — action.failed was recorded back then, and the
      * give-up is visible from the flow's own failure and the timed-out wait-signal.
+     *
+     * Returns whether this call settled the row. The early return covers a row this
+     * caller can already see is not parked; the fence covers the row that stopped being
+     * parked after it was read — terminal settlement leaves Cancelled behind, and
+     * writing Failed over it would put a settled step back into the run's open work.
      */
-    public function settleAwaitingRetry(ActionRun $actionRun): void
+    public function settleAwaitingRetry(ActionRun $actionRun): bool
     {
         if ($actionRun->status !== ActionStatus::AwaitingRetry) {
-            return;
+            return false;
         }
 
         $actionRun->status = ActionStatus::Failed;
-        $actionRun->save();
+
+        return $this->writeFenced(
+            $actionRun,
+            ['status' => ActionStatus::AwaitingRetry],
+            'settle_awaiting_retry',
+        );
     }
 
     /**

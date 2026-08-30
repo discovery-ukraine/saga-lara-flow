@@ -98,3 +98,29 @@ it('records a give-up for a step whose wait timed out on an awaiting_retry row',
     expect(app(ActionRecorder::class)->optionalFail($step))->toBeTrue()
         ->and($step->fresh()->status)->toBe(ActionStatus::OptionalFailed);
 });
+
+it('refuses to settle a parked step that terminal settlement has already closed', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::AwaitingRetry, ['retry_signal' => 'balance-refilled']);
+
+    // The seam is holding the row it read before the cancellation landed.
+    $asRead = ActionRun::query()->findOrFail($step->id);
+
+    $run->markCancelled();
+
+    // Settlement closed it; the in-memory copy the seam holds still says otherwise, so
+    // the early return does not fire and only the fence stands between the two.
+    expect($step->fresh()->status)->toBe(ActionStatus::Cancelled)
+        ->and($asRead->status)->toBe(ActionStatus::AwaitingRetry);
+
+    expect(app(ActionRecorder::class)->settleAwaitingRetry($asRead))->toBeFalse()
+        ->and($step->fresh()->status)->toBe(ActionStatus::Cancelled);
+});
+
+it('settles a parked step normally while the run is still live', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::AwaitingRetry, ['retry_signal' => 'balance-refilled']);
+
+    expect(app(ActionRecorder::class)->settleAwaitingRetry($step))->toBeTrue()
+        ->and($step->fresh()->status)->toBe(ActionStatus::Failed);
+});
