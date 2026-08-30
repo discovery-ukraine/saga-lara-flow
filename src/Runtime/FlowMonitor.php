@@ -7,6 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ExpirationNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -93,9 +94,9 @@ final readonly class FlowMonitor
         $count = 0;
 
         foreach ($this->flows->dueForExpiration($limit) as $run) {
-            $this->expireRun($run);
-
-            $count++;
+            if ($this->expireRun($run)) {
+                $count++;
+            }
         }
 
         return $count;
@@ -106,11 +107,33 @@ final readonly class FlowMonitor
      * back queued, finalize as Expired) lives on FlowExecutor — the owner of every
      * run-terminal transition — and is shared with the lazy drive() deadline check.
      *
-     * @throws Throwable
+     * A run whose rollback the sweep could not plan is journalled and stepped over.
+     * Letting that throw out would cost far more than the run it came from: the batch
+     * is read oldest first and the run is still overdue, so the same one would come
+     * back every sweep and the signal and action passes below would never run at all.
+     * The lazy check inside drive() has one run to answer for and still surfaces it.
+     *
+     * Only that failure, and it says so by its type. Everything else happened after
+     * the run had already been moved — by this pass or by whoever else was holding it
+     * — and swallowing it would hide a rollback that started and did not finish.
      */
-    private function expireRun(FlowRun $run): void
+    private function expireRun(FlowRun $run): bool
     {
-        $this->executor->expireRun($run);
+        try {
+            $this->executor->expireRun($run);
+
+            return true;
+        } catch (ExpirationNotPlannedException $failure) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_EXPIRY_FAILED, [
+                'entity' => 'flow',
+                'flow_run_id' => $run->id,
+                'workflow_class' => $run->workflow_class,
+                'status' => $run->status->value,
+                'exception' => $this->exceptionToArray($failure->getPrevious() ?? $failure),
+            ]);
+
+            return false;
+        }
     }
 
     private function timeoutSignals(int $limit): int
