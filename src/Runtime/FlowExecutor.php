@@ -11,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ExpirationNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
@@ -317,7 +318,14 @@ class FlowExecutor
     {
         $primary = $this->exceptionToArray(FlowExpiredException::forFlowRun($flowRun));
 
-        $entries = $this->collectCompensations($flowRun);
+        // Named, because what the sweep does about a failure depends entirely on
+        // whether it happened here. Nothing has been written yet, so a run whose
+        // rollback cannot be planned is still exactly where it was found.
+        try {
+            $entries = $this->collectCompensations($flowRun);
+        } catch (Throwable $planning) {
+            throw ExpirationNotPlannedException::for($flowRun, $planning);
+        }
 
         if ($entries === []) {
             $flowRun->exception = $primary;

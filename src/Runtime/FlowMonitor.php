@@ -7,6 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ExpirationNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -112,11 +113,9 @@ final readonly class FlowMonitor
      * back every sweep and the signal and action passes below would never run at all.
      * The lazy check inside drive() has one run to answer for and still surfaces it.
      *
-     * Only that failure, though. Cancelling is the one status this pass produces and
-     * nothing returns to — no sweep lists it and the doctor skips it — so a run left
-     * there did not fail to be planned, it failed to be unwound, and that is not the
-     * sweep's to swallow. A run somebody else finished meanwhile is not that: it is
-     * done, it cannot be a candidate again, and the throw is journalled like the rest.
+     * Only that failure, and it says so by its type. Everything else happened after
+     * the run had already been moved — by this pass or by whoever else was holding it
+     * — and swallowing it would hide a rollback that started and did not finish.
      */
     private function expireRun(FlowRun $run): bool
     {
@@ -124,25 +123,13 @@ final readonly class FlowMonitor
             $this->executor->expireRun($run);
 
             return true;
-        } catch (Throwable $failure) {
-            // From the writer: this read decides whether the throw is absorbed, and a
-            // lagging replica would answer with the status the transition replaced.
-            /** @var ?FlowStatus $current */
-            $current = $run->newQuery()
-                ->useWritePdo()
-                ->whereKey($run->getKey())
-                ->value('status');
-
-            if ($current === FlowStatus::Cancelling) {
-                throw $failure;
-            }
-
+        } catch (ExpirationNotPlannedException $failure) {
             app(AnomalyLog::class)->log(AnomalyLog::REASON_EXPIRY_FAILED, [
                 'entity' => 'flow',
                 'flow_run_id' => $run->id,
                 'workflow_class' => $run->workflow_class,
-                'status' => $current?->value,
-                'exception' => $this->exceptionToArray($failure),
+                'status' => $run->status->value,
+                'exception' => $this->exceptionToArray($failure->getPrevious() ?? $failure),
             ]);
 
             return false;

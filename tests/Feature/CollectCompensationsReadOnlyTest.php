@@ -260,7 +260,7 @@ it('surfaces a sweep failure that already took the run into cancelling', functio
     expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0]);
 });
 
-it('does not abort the sweep over a run somebody else finished meanwhile', function () {
+it('does not abort the sweep over a run somebody else was moving meanwhile', function (FlowStatus $moveTo) {
     useDatabaseQueue();
     logToFile($path = sys_get_temp_dir().'/saga-race-'.bin2hex(random_bytes(6)).'.log');
     SelfCancellingThenThrowingWorkflow::reset();
@@ -271,13 +271,13 @@ it('does not abort the sweep over a run somebody else finished meanwhile', funct
     $run->expires_at = now()->subMinute();
     $run->save();
 
-    // The replay finishes the run and then faults — one process doing what two would.
-    SelfCancellingThenThrowingWorkflow::$interfere = true;
+    // The replay moves the run and then faults — one process doing what two would.
+    // Cancelling is the operator's own compensate(), so the sweep cannot read that
+    // status as evidence of its own doing; what it goes on is the type of the throw.
+    SelfCancellingThenThrowingWorkflow::$moveTo = $moveTo;
 
-    // The run is terminal, so it cannot be a candidate again and this attempt never
-    // began a rollback. Only a run left in Cancelling is worth aborting the sweep for.
     expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0])
-        ->and(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Cancelled);
+        ->and(SagaFlow::findRun($run->id)->status)->toBe($moveTo);
 
     $log = is_file($path) ? (string) file_get_contents($path) : '';
 
@@ -285,4 +285,7 @@ it('does not abort the sweep over a run somebody else finished meanwhile', funct
         ->and($log)->toContain($run->id);
 
     SelfCancellingThenThrowingWorkflow::reset();
-});
+})->with([
+    'finished outright' => FlowStatus::Cancelled,
+    'taken by a manual compensate()' => FlowStatus::Cancelling,
+]);
