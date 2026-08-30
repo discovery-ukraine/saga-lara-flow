@@ -630,6 +630,12 @@ $run->result;   // the value handle() returned
 
 The queued and synchronous paths are guaranteed to reach the **same** final database state.
 
+> **Never call it inside a `DB::transaction()` of your own.** The steps run while your transaction
+> is open, so a rollback afterwards discards every row of the run while the work those rows describe
+> is already done. The same holds for `signal()`, `cancel()` and `compensate()`; only the queued
+> `run()` is safe. See
+> [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#host-transactions).
+
 ## Versioning long-running workflows
 
 A workflow may be suspended for days while its code keeps shipping. To change a running workflow's

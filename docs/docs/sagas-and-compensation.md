@@ -101,6 +101,12 @@ expression reading a record that has since been deleted, say. The plan is then i
 `compensate()` surfaces the throw and leaves the run as it found it, rather than unwinding part of
 it and reporting a finished rollback. Fix the cause and call it again.
 
+:::warning Not inside a transaction of your own
+The compensations execute before your transaction closes, so a rollback afterwards discards the
+record while the undo work is already done — and leaves the run compensatable a second time. See
+[what a host transaction leaves behind](./queues-locks-idempotency.md#host-transactions).
+:::
+
 ## Postponing a rollback
 
 Not every failure deserves a rollback. When a step failed only because the world was not ready — a

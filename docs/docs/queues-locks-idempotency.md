@@ -37,6 +37,62 @@ So end-to-end idempotency depends on **your action code**. Make each action safe
 The `(flow_run_id, sequence)` pair is a natural, stable idempotency key to hand to downstream systems.
 :::
 
+## Never wrap an engine call in a transaction of your own {#host-transactions}
+
+The guarantee above is read from the run's **recorded history**. A `DB::transaction()` of your own
+around an engine call puts that history inside your rollback scope, so a rollback erases the record
+while the work it describes has already happened. Measured identically on SQLite, MySQL and
+PostgreSQL — this is the shape of the thing, not a driver quirk:
+
+| the call inside your transaction | after your transaction rolls back |
+| --- | --- |
+| `runSync()` | the steps ran; **every row of the run is gone** |
+| `compensate()` | the compensations ran; no `compensation_runs` row, the run left non-terminal |
+| `signal()` | the delivery is gone; the wait is still open and nothing will wake the run |
+| `cancel()` | the transition is gone; the run is where it was and keeps going |
+| `run()` (queued) | nothing recorded and nothing dispatched — consistent, see below |
+
+Only the queued `run()` is safe, and only while `saga-lara-flow.queue.after_commit` is on, as it is
+by default: the job is held until your transaction commits, so a run either starts on committed data
+or never starts at all. With it off the job goes out immediately, and whether it survives your
+rollback is the queue driver's business rather than the engine's — leaving a job that may name a run
+which was never committed.
+
+Nothing raises. Every one of those calls returns normally and hands you a `FlowRun` describing a
+state your own rollback then discarded.
+
+### Why this is worse than losing the work
+
+The rows are not bookkeeping — they are what stops the work happening twice. `compensate()` under a
+rolled-back transaction leaves the run exactly where it was, so compensating it again runs every
+compensation a second time:
+
+```
+compensate() inside a host transaction that rolls back  → undo:a executed
+compensate() again, normally                            → undo:a executed
+CompensationLog                                         → ["undo:a", "undo:a"]
+compensation_runs rows                                  → 1
+```
+
+Two rollbacks of one step, and one record saying it happened once. The row that would have said
+`undo:a` already ran is the row your rollback deleted.
+
+### Why the engine cannot defend itself
+
+Inside your transaction the engine's own `transaction()` is a **savepoint**, not a transaction
+(measured: nesting level 2). It commits nothing, so durability is yours to decide, and the read-back
+the engine uses to verify its own writes proves visibility on the connection rather than durability
+— those are the same thing only while the engine's transaction is the outermost one. Getting out
+would take a second connection, which then cannot see your uncommitted rows at all and would fence
+against a run that, to it, does not exist. So this is a boundary the package documents rather than a
+defect it is holding open.
+
+### What to do instead
+
+Commit your own work first, then call the engine — or use the queued `run()`, which does that
+ordering for you. Where a step needs data you are about to write, pass it in as an argument or read
+it inside the action, which runs after your transaction has closed.
+
 ## Locks
 
 Concurrent drives of the *same* run are serialized by Laravel's `WithoutOverlapping` middleware:

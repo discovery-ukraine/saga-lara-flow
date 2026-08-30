@@ -74,6 +74,10 @@ $delivered = SagaFlow::loadFlow($runId)->signalIfRunning('approval', ['approved'
 `signalIfRunning()` means *"unless the run has already finished"* — it delivers to **any
 non-terminal run**, not only a `Running` one.
 
+Neither may be called inside a `DB::transaction()` of your own: a rollback afterwards takes the
+delivery with it, the wait stays open, and nothing tells you. See
+[what a host transaction leaves behind](./queues-locks-idempotency.md#host-transactions).
+
 ### Finding the run to signal
 
 Often you do not have the `$runId` on hand — you know the workflow and a tag. Query for it:
