@@ -124,3 +124,65 @@ it('settles a parked step normally while the run is still live', function () {
     expect(app(ActionRecorder::class)->settleAwaitingRetry($step))->toBeTrue()
         ->and($step->fresh()->status)->toBe(ActionStatus::Failed);
 });
+
+it('refuses queue bookkeeping for a retry cycle the row has already left', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed, [
+        'retry_signal' => 'balance-refilled',
+        'retry_signal_attempts' => 0,
+        'queue_attempts_exhausted' => false,
+    ]);
+
+    // RunActionJob::failed() resolved the row and passed its generation guard on cycle
+    // 0. The seam then spends a cycle before this write lands.
+    $asRead = ActionRun::query()->findOrFail($step->id);
+
+    app(ActionRecorder::class)->retryAction(ActionRun::query()->findOrFail($step->id));
+
+    expect($step->fresh()->retry_signal_attempts)->toBe(1)
+        ->and($step->fresh()->status)->toBe(ActionStatus::Pending);
+
+    expect(app(ActionRecorder::class)->markQueueAttemptsExhausted($asRead))->toBeFalse()
+        // Cycle 1's job has not run yet. Left true, ActionBuilder's Failed branch would
+        // stop waiting for the queue and spend a retry on a step still in flight.
+        ->and($step->fresh()->queue_attempts_exhausted)->toBeFalse();
+});
+
+it('records queue bookkeeping for the cycle the row is actually on', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed, [
+        'retry_signal' => 'balance-refilled',
+        'retry_signal_attempts' => 0,
+        'queue_attempts_exhausted' => false,
+    ]);
+
+    expect(app(ActionRecorder::class)->markQueueAttemptsExhausted($step))->toBeTrue()
+        ->and($step->fresh()->queue_attempts_exhausted)->toBeTrue();
+});
+
+/**
+ * A claim raises `attempts` and moves the row to Running; it does not move the retry
+ * cycle. So a queue hook holding the spent view of a Failed row still matches the live
+ * attempt running under it unless the status it read is part of the fence too.
+ */
+it('does not mark a generation exhausted while an attempt is running under it', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed, [
+        'retry_signal' => 'balance-refilled',
+        'retry_signal_attempts' => 0,
+        'queue_attempts_exhausted' => false,
+    ]);
+
+    // The old hook resolved the row while it was Failed and has not written yet.
+    $asRead = ActionRun::query()->findOrFail($step->id);
+
+    // A duplicate delivery claims the same cycle and starts running it.
+    expect(app(ActionRecorder::class)->startAction(ActionRun::query()->findOrFail($step->id)))->toBeTrue()
+        ->and($step->fresh()->status)->toBe(ActionStatus::Running)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(0);
+
+    expect(app(ActionRecorder::class)->markQueueAttemptsExhausted($asRead))->toBeFalse()
+        // Flagged, the seam would stop waiting for a job that has only just started and
+        // spend a retry cycle on a step still in flight.
+        ->and($step->fresh()->queue_attempts_exhausted)->toBeFalse();
+});

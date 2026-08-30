@@ -505,15 +505,29 @@ final readonly class ActionRecorder
      * instead of comparing the attempts counter with the action's $tries, which lives
      * in code and can change under a job already in flight. No event is appended —
      * this is queue bookkeeping, not a step in the flow's history.
+     *
+     * Fenced on the cycle the caller read, because the flag is read back as "the queue
+     * has finished with this row": a hook reporting for a spent cycle would tell the
+     * seam that a cycle rewound in the meantime is over before its job has run, and the
+     * seam would spend a retry on a step still in flight.
      */
-    public function markQueueAttemptsExhausted(ActionRun $actionRun): void
+    public function markQueueAttemptsExhausted(ActionRun $actionRun): bool
     {
         if ($actionRun->queue_attempts_exhausted) {
-            return;
+            return false;
         }
 
         $actionRun->queue_attempts_exhausted = true;
-        $actionRun->save();
+
+        return $this->writeFenced($actionRun, [
+            'queue_attempts_exhausted' => false,
+            // The status too. A claim does not move the cycle — it moves the row to
+            // Running and raises `attempts` — so without this the hook's spent view of a
+            // Failed row still matches the live attempt running under it, and tells the
+            // seam the queue is finished with a job that has only just started.
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ], 'queue_attempts_exhausted');
     }
 
     /**
