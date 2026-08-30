@@ -172,7 +172,8 @@ at-least-once delivery already has.
 
 Only one of them can record an outcome. Each claim increments the row's `attempts`, and every outcome write is
 conditional on two things: the `attempts` value its own claim produced, and the row still being `Running`. A superseded
-worker's write updates no rows, fires no event, and does not fail its job — it is logged and dropped.
+worker's write updates no rows, records no history, and does not fail its job — it is logged and dropped, and what it
+produced is handed to `ActionOutcomeRejected` rather than lost with it (see [Events](./events.md#refused-outcome)).
 
 The two conditions guard two different rivals:
 
@@ -210,8 +211,10 @@ The consequence differs by half of the engine:
 
 ## Finding these races in your logs
 
-A lost claim, a rejected outcome and an early-closed batch are all normal and all silent. The package keeps a second
-journal for them — `AnomalyLog`, alongside the `flow_events` business history:
+A lost claim, a rejected outcome and an early-closed batch are all normal, and none of them fails a job or reaches
+`flow_events`. The package keeps a second journal for them — `AnomalyLog`, alongside the `flow_events` business
+history. A rejected outcome is the one that is not otherwise silent: it also dispatches the event carrying what was
+discarded (see [Events](./events.md#refused-outcome)):
 
 ```php
 'logging' => [
@@ -220,11 +223,13 @@ journal for them — `AnomalyLog`, alongside the `flow_events` business history:
 ],
 ```
 
-Six reason codes to grep for. All but one carry the run id, row id, sequence and class; `expiry_failed`
+Seven reason codes to grep for. All but one carry the run id, row id, sequence and class; `expiry_failed`
 is about a run rather than a row, and carries the run id, its workflow class and the throw:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
-- **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped.
+- **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped. Listen for
+  `ActionOutcomeRejected` / `CompensationOutcomeRejected` to receive the payload this line cannot carry (see
+  [Events](./events.md#refused-outcome)).
 - **`batch_finished_early`** — a parallel step completed after a duplicate delivery had closed its batch.
 - **`claim_not_committed`** — a claim was written and was gone once its transaction closed. The line carries both
   attempt counts, the claimed one and the one the row actually holds.
@@ -232,6 +237,9 @@ is about a run rather than a row, and carries the run id, its workflow class and
   the next. The line carries the throw. The run stays overdue and is tried again on the next sweep.
 - **`write_refused`** — a write to a step was refused because the row had moved on since it was read, or the run under
   it had finished. The line carries a `site` naming which write it was.
+- **`rejection_undelivered`** — the rejection event above could not be handed over: a listener threw, or a queued one
+  could not be serialised with the payload. The line carries the throw's class and message. The refusal itself stands;
+  what is gone is the last copy of the discarded result, so this one is a defect in listener code to fix.
 
 Raise the level to `warning` to surface them in your alerting. A steady stream of the first three points to a queue
 timeout tuned shorter than the work takes, or to locks being off.
