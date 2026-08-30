@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\StepExecution;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
+use DiscoveryUkraine\SagaLaraFlow\Events\ActionRetried;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowEvent;
@@ -436,13 +437,15 @@ it('spends a floating delivery on the retry cycle it pays for', function () {
 
 /**
  * The handover writes the wait's closure, the delivery's consumption and the rewind in
- * one transaction, so the rewind's own flow_events row is written inside it — and a host
- * observer on that row is caller code running there. On PostgreSQL a failing statement it
- * swallows aborts the whole transaction and turns the eventual commit into a rollback
- * while still reporting success. Starting the step on that would claim a row the database
- * still has parked, and the drive loop reads that failure as a business one.
+ * one transaction, so an observer on the retry's own history row is caller code running
+ * inside it. On PostgreSQL a failing statement it swallows aborts the whole transaction
+ * and turns the eventual commit into a rollback while still reporting success — and
+ * ActionRetried is dispatched after commit, which Laravel drains inside transaction().
+ * A listener would then run for a rewind the database threw away, and nothing can take
+ * that back. Published after the read-back instead, the observer runs outside the
+ * transaction, where it can harm nothing.
  */
-it('verifies the handover committed before starting the retry it bought', function () {
+it('tells the host about a retry only when the database has one', function () {
     if (DB::connection('testing')->getDriverName() !== 'pgsql') {
         $this->markTestSkipped('Only PostgreSQL turns a commit into a rollback after a swallowed failure.');
     }
@@ -458,8 +461,7 @@ it('verifies the handover committed before starting the retry it bought', functi
     $run = FlowRun::query()->where('workflow_class', RetryOnSignalWorkflow::class)->latest('id')->firstOrFail();
     $step = $run->actions()->where('sequence', 1)->firstOrFail();
 
-    // A delivery that never matched the wait-signal, which is what the handover exists to
-    // take. The step stays AwaitingRetry: only a parked step reaches that branch.
+    // A delivery that never matched the wait-signal, which is what the handover takes.
     FlowSignal::create([
         'flow_run_id' => $run->id,
         'name' => 'balance-refilled',
@@ -479,17 +481,22 @@ it('verifies the handover committed before starting the retry it bought', functi
         }
     });
 
+    $retried = 0;
+
+    Event::listen(ActionRetried::class, function () use (&$retried): void {
+        $retried++;
+    });
+
     try {
         app(FlowExecutor::class)->drive($run->fresh(), RunMode::Sync);
     } catch (Throwable) {
-        // The poisoned transaction is the setup.
+        // The step runs again and fails again; the cycle is what matters here.
     }
 
-    // The run is untouched, not failed over a cycle the database threw away.
-    expect($run->fresh()->status)->toBe(FlowStatus::Waiting)
-        ->and($step->fresh()->status)->toBe(ActionStatus::AwaitingRetry)
-        ->and($step->fresh()->retry_signal_attempts)->toBe(0)
-        ->and($run->compensations()->count())->toBe(0);
+    // What the host was told and what the row holds have to agree. Published from inside,
+    // the event goes out while the cycle behind it is rolled back.
+    expect($retried)->toBe(1)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(1);
 });
 
 /**

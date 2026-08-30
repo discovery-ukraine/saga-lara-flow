@@ -636,6 +636,8 @@ class ActionBuilder
         if ($delivered !== null
             && $this->handOverAndRetry($signal, $delivered, $step, $sequence)
             && $this->retrySurvivedCommit($step)) {
+            app(ActionRecorder::class)->publishRetried($step);
+
             $this->startRetriedStep($step, $sequence);
         }
 
@@ -768,7 +770,11 @@ class ActionBuilder
 
                     $recorder->consumeSignal($flowRun, $delivered, $sequence);
 
-                    if (! app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt())) {
+                    if (! app(ActionRecorder::class)->retryAction(
+                        $step,
+                        $this->resolvedExpiresAt(),
+                        publish: false,
+                    )) {
                         throw new FencedWriteLost;
                     }
 
@@ -812,7 +818,11 @@ class ActionBuilder
             $this->connection()->transaction(function () use ($signal, $step, $sequence): void {
                 app(SignalRecorder::class)->consumeSignal($this->runtime->run(), $signal, $sequence);
 
-                if (! app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt())) {
+                if (! app(ActionRecorder::class)->retryAction(
+                    $step,
+                    $this->resolvedExpiresAt(),
+                    publish: false,
+                )) {
                     // The row moved on under this pass. Rolling back is what keeps the
                     // delivery: a consumed signal with no cycle behind it would pay for
                     // a retry nobody ran, and no later pass looks for it again.
@@ -828,6 +838,8 @@ class ActionBuilder
         if (! $this->retrySurvivedCommit($step)) {
             app(FlowSuspender::class)->suspend('action', $sequence);
         }
+
+        app(ActionRecorder::class)->publishRetried($step);
 
         $this->startRetriedStep($step, $sequence);
     }

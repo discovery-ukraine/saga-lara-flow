@@ -646,8 +646,11 @@ final readonly class ActionRecorder
      * back into the run's open work — and back into the doctor's reach — under a run
      * that has already finished.
      */
-    public function retryAction(ActionRun $actionRun, ?DateTimeInterface $expiresAt = null): bool
-    {
+    public function retryAction(
+        ActionRun $actionRun,
+        ?DateTimeInterface $expiresAt = null,
+        bool $publish = true
+    ): bool {
         $asRead = [
             'status' => $actionRun->getOriginal('status'),
             'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
@@ -683,6 +686,23 @@ final readonly class ActionRecorder
             return false;
         }
 
+        if ($publish) {
+            $this->publishRetried($actionRun);
+        }
+
+        return true;
+    }
+
+    /**
+     * Append the retry to the run's history and tell the host about it. Separate from the
+     * write because a caller that rewinds inside a transaction of its own must publish
+     * after it closes: ActionRetried is dispatched after commit, and Laravel drains those
+     * callbacks inside transaction(), so on PostgreSQL — where a swallowed failure turns
+     * the commit into a rollback while still reporting success — a listener would run for
+     * a rewind the database threw away. Nothing can take that back afterwards.
+     */
+    public function publishRetried(ActionRun $actionRun): void
+    {
         $this->events->record(
             $actionRun->flowRun,
             FlowEventType::ActionRetried,
@@ -696,8 +716,6 @@ final readonly class ActionRecorder
         );
 
         event(new ActionRetried($actionRun));
-
-        return true;
     }
 
     /**
