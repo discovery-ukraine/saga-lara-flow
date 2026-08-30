@@ -11,9 +11,10 @@ use Throwable;
  * EventLog records what happened to a run in business terms. This records the moments
  * where the world turned out not to be what the engine assumed — a claim lost to
  * whoever already owned the row, a claim the transaction that made it did not keep, an
- * outcome write refused because the row had changed hands, a batch already closed by a
- * duplicate before its own job reported, a run transition refused because the row had
- * moved on, a retry policy that threw, an overdue run whose rollback could not be
+ * outcome write refused because the row had changed hands, a step write refused because
+ * the row had moved on since it was read, a batch already closed by a duplicate before
+ * its own job reported, a run transition refused because the row had moved on, a retry
+ * policy that threw, an overdue run whose rollback could not be
  * planned. Most are ordinary consequences of at-least-once delivery and of nothing
  * serialising an operator against a worker; the claim that did not commit and the last
  * two are defects in the caller's own code, journalled here for the same reason as the
@@ -43,6 +44,8 @@ final readonly class AnomalyLog
     public const string REASON_RETRY_POLICY_THREW = 'retry_policy_threw';
 
     public const string REASON_EXPIRY_FAILED = 'expiry_failed';
+
+    public const string REASON_WRITE_REFUSED = 'write_refused';
 
     /**
      * PSR-3's eight, the only strings a PSR logger accepts. A value outside this set

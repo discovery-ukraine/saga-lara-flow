@@ -392,16 +392,99 @@ final readonly class ActionRecorder
     }
 
     /**
+     * Persist the pending attribute changes only if the row is still the one the caller
+     * read and the run under it has not finished. The values come from getDirty(), so
+     * the model's own casts encode them exactly as save() would; $expected names the
+     * stored values the caller's decision rested on, and the run's liveness rides in the
+     * same statement rather than a read before it, so no row this pass already saw can
+     * move between the check and the write.
+     *
+     * It fences against what is committed, which is what terminal settlement leaves
+     * behind, and not against a transition still in flight — that one is invisible to a
+     * snapshot until it commits. The values are dirty attributes, so a caller with
+     * nothing to write would report a refusal it never made; every site reaches this
+     * with a change.
+     *
+     * Every $expected key that the write also sets names the value being REPLACED, so a
+     * matching row always changes — which keeps the count off the zero MySQL reports for
+     * an update that changed nothing and FlowStateMachine::write() has to disambiguate.
+     *
+     * @param  array<string, mixed|list<mixed>>  $expected
+     * @param  array<string, mixed>  $context
+     */
+    private function writeFenced(ActionRun $actionRun, array $expected, string $site, array $context = []): bool
+    {
+        $query = $actionRun->newQuery()
+            ->whereKey($actionRun->getKey())
+            ->whereHas('flowRun', FlowRun::live(...));
+
+        foreach ($expected as $column => $value) {
+            match (true) {
+                is_array($value) => $query->whereIn($column, $value),
+                // `= NULL` matches nothing in SQL, so a caller expecting an empty column
+                // would silently never write rather than be fenced on what it read.
+                $value === null => $query->whereNull($column),
+                default => $query->where($column, $value),
+            };
+        }
+
+        $written = $query->update($actionRun->getDirty()) === 1;
+
+        if (! $written) {
+            $this->anomalies->log(AnomalyLog::REASON_WRITE_REFUSED, [
+                'entity' => 'action',
+                'site' => $site,
+                'flow_run_id' => $actionRun->flow_run_id,
+                'action_run_id' => $actionRun->id,
+                'sequence' => $actionRun->sequence,
+                'action_class' => $actionRun->action_class,
+                ...$context,
+            ]);
+
+            // Leave the model saying what the database says. The caller carries on with
+            // this instance — the seam resolves the step from it — and an attribute the
+            // write did not land would otherwise be read back as though it had, and be
+            // carried into the next write's getDirty() under a fence that never named it.
+            $actionRun->discardChanges();
+
+            return false;
+        }
+
+        $actionRun->syncOriginal();
+
+        return true;
+    }
+
+    /**
      * Mark a failed optional (continueOnFailure) step as OptionalFailed once its
      * retries are exhausted. The flow is not failed; the recorded exception is
      * preserved and an optional_failed event/Laravel event is appended so the
      * give-up is visible in history.
+     *
+     * Refused, with nothing written and no event appended, when the row has moved on
+     * since it was read or the run under it has finished: a give-up recorded onto a
+     * settled run says a fallback was taken that no replay will ever reach.
      */
-    public function optionalFail(ActionRun $actionRun): void
+    public function optionalFail(ActionRun $actionRun): bool
     {
+        // The row as read, not a named status: a give-up arrives on Failed when the
+        // attempt ended it and on AwaitingRetry when a timed-out wait did, and naming
+        // both would let this write take a row another pass had just parked.
+        //
+        // The cycle too, not the status alone. A row can leave Failed for a retry and
+        // come back to it, so status by itself cannot tell this generation from the next
+        // one, and a hook holding the spent cycle would end a live one with a fallback.
+        $asRead = [
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ];
+
         $actionRun->status = ActionStatus::OptionalFailed;
         $actionRun->finished_at = Carbon::now();
-        $actionRun->save();
+
+        if (! $this->writeFenced($actionRun, $asRead, 'optional_fail')) {
+            return false;
+        }
 
         $this->events->record(
             $actionRun->flowRun,
@@ -412,6 +495,8 @@ final readonly class ActionRecorder
         );
 
         event(new OptionalActionFailed($actionRun));
+
+        return true;
     }
 
     /**
