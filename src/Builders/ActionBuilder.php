@@ -640,9 +640,9 @@ class ActionBuilder
     }
 
     /**
-     * Park a failed step on its retry signal and suspend the flow. Never returns:
-     * either the retry starts immediately (a signal was already delivered) or the
-     * flow goes Waiting until one is.
+     * Park a failed step on its retry signal and suspend the flow. Never returns: either
+     * the retry starts immediately (a signal was already delivered) or the flow goes
+     * Waiting until one is.
      *
      * @throws FlowSuspended
      * @throws Throwable
@@ -699,23 +699,41 @@ class ActionBuilder
      *
      * $record is false when an open signal from an earlier pass was adopted.
      *
+     * A parking that loses its fence — the row moved on, or the run finished — writes
+     * neither row, fires no ActionAwaitingRetry, and suspends like a won one. Whatever
+     * moved the row wrote where the step really is, and a run that ended has nothing
+     * left to resolve; either way this pass has no state left to decide from, and the
+     * suspension leaves no wait behind because none was recorded.
+     *
      * @throws FlowSuspended
      * @throws Throwable
      */
     private function park(ActionRun $step, string $signal, int $sequence, bool $record = true): never
     {
-        $this->connection()->transaction(function () use ($step, $signal, $sequence, $record): void {
-            if ($record) {
-                app(SignalRecorder::class)->recordSignalWaiting(
-                    $this->runtime->run(),
-                    $signal,
-                    $sequence,
-                    $this->retryWaitSeconds === null ? null : now()->addSeconds($this->retryWaitSeconds),
-                );
-            }
+        try {
+            $this->connection()->transaction(function () use ($step, $signal, $sequence, $record): void {
+                if ($record) {
+                    app(SignalRecorder::class)->recordSignalWaiting(
+                        $this->runtime->run(),
+                        $signal,
+                        $sequence,
+                        $this->retryWaitSeconds === null ? null : now()->addSeconds($this->retryWaitSeconds),
+                    );
+                }
 
-            app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step));
-        });
+                if (! app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step))) {
+                    // The wait-signal must go back with the transition it was recorded
+                    // for: left standing, it is the newest open wait for its name, so a
+                    // delivery would be swallowed by a park that never happened.
+                    throw new FencedWriteLost;
+                }
+            });
+        } catch (FencedWriteLost) {
+            // Nothing was written, and there is nothing left to resolve from: whatever
+            // moved the row recorded where the step really is, and a run that ended has
+            // no next step to take. Wait, and read it on the following replay.
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
 
         app(FlowSuspender::class)->suspend('action', $sequence);
     }

@@ -4,11 +4,17 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
+use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
+use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryOnSignalWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SelfCancellingBeforeParkWorkflow;
+use Illuminate\Support\Facades\Event;
 
 /**
  * Every write to an action_runs row now states the row it expects to find, and the
@@ -23,6 +29,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
  */
 beforeEach(function () {
     FlakyPaymentAction::reset();
+    SelfCancellingBeforeParkWorkflow::reset();
 
     config()->set('saga-lara-flow.queue.after_commit', false);
 });
@@ -240,4 +247,90 @@ it('refuses a give-up from a cycle the row has already left and returned from', 
     expect($recorder->optionalFail($spentCycle))->toBeFalse()
         ->and($step->fresh()->status)->toBe(ActionStatus::Failed)
         ->and($step->fresh()->retry_signal_attempts)->toBe(1);
+});
+
+it('writes no retry state when a cancellation lands before the park', function () {
+    FlakyPaymentAction::reset(failures: 5);
+
+    // The cancellation the issue describes: a separate request landing between the
+    // failure being recorded and the park committing. A listener puts it exactly there.
+    $cancelled = null;
+
+    Event::listen(ActionFailed::class, function (ActionFailed $event) use (&$cancelled): void {
+        $cancelled = $event->actionRun->flow_run_id;
+
+        SagaFlow::findRun($cancelled)->markCancelled();
+    });
+
+    try {
+        SagaFlow::create(RetryOnSignalWorkflow::class)->withArguments('order-probe')->runSync();
+    } catch (Throwable) {
+        // The cancellation is the setup; the rows it leaves behind are the assertion.
+    }
+
+    $run = FlowRun::query()->findOrFail($cancelled);
+
+    expect($run->status)->toBe(FlowStatus::Cancelled)
+        ->and($run->actions()->pluck('status')->all())->not->toContain(ActionStatus::AwaitingRetry)
+        ->and($run->signals()->pluck('status')->all())->not->toContain(SignalStatus::Waiting)
+        ->and($run->events()->pluck('type')->all())->not->toContain('action.awaiting_retry');
+});
+
+it('writes no retry state when the run ends during the replay that parks, on the queue', function () {
+    useDatabaseQueue();
+    FlakyPaymentAction::reset(failures: 5);
+    SelfCancellingBeforeParkWorkflow::$armed = true;
+
+    // A cancellation arriving before this replay could not reach the park at all: the
+    // drive loop transitions to Running first, which no terminal status allows. So the
+    // run is ended from inside the pass that is about to park — the window the queued
+    // path really has, staged in one process.
+    $handle = SagaFlow::create(SelfCancellingBeforeParkWorkflow::class)
+        ->withArguments('order-probe')
+        ->run();
+
+    try {
+        drainQueue();
+    } catch (Throwable) {
+        // The cancellation is the setup; the rows it leaves behind are the assertion.
+    }
+
+    $run = FlowRun::query()->findOrFail($handle->id);
+
+    expect($run->status)->toBe(FlowStatus::Cancelled)
+        ->and($run->actions()->pluck('status')->all())->not->toContain(ActionStatus::AwaitingRetry)
+        ->and($run->signals()->pluck('status')->all())->not->toContain(SignalStatus::Waiting)
+        ->and($run->events()->pluck('type')->all())->not->toContain('action.awaiting_retry');
+});
+
+/**
+ * Two replays reading the same failed generation both try to park it. Only one can
+ * win, and the one that loses must not carry the state it failed to write into the
+ * next decision it makes — it holds a model saying AwaitingRetry over a row the winner
+ * parked, and the give-up that follows would take that row and orphan the winner's wait.
+ */
+it('does not let a losing park take the row the winning park wrote', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed, [
+        'continue_on_failure' => true,
+        'retry_signal' => 'balance-refilled',
+    ]);
+
+    $winner = ActionRun::query()->findOrFail($step->id);
+    $loser = ActionRun::query()->findOrFail($step->id);
+
+    $recorder = app(ActionRecorder::class);
+
+    expect($recorder->awaitRetry($winner, 'balance-refilled', null))->toBeTrue()
+        ->and($recorder->awaitRetry($loser, 'balance-refilled', null))->toBeFalse();
+
+    // A refused write leaves the model saying what the database says, so nothing it
+    // failed to write is carried into the next one.
+    expect($loser->status)->toBe(ActionStatus::Failed)
+        ->and($loser->getDirty())->toBe([]);
+
+    // The give-up the losing replay would go on to record must find the row it read,
+    // not the row the winner parked.
+    expect($recorder->optionalFail($loser))->toBeFalse()
+        ->and($step->fresh()->status)->toBe(ActionStatus::AwaitingRetry);
 });

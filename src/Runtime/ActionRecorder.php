@@ -587,9 +587,19 @@ final readonly class ActionRecorder
      * action.awaiting_retry event. The step is NOT terminal — the recorded exception
      * and finished_at of the last attempt are kept so the seam can decide again once
      * the signal arrives (or the wait-signal times out).
+     *
+     * Fenced on the failure being parked and the cycle it belongs to. A park that lands
+     * after terminal settlement would give a finished run a step claiming to be waiting
+     * and a wait nothing will ever resolve: settlement runs once, and every sweep that
+     * could reach them skips a finished run on purpose.
      */
-    public function awaitRetry(ActionRun $actionRun, string $signal, ?int $maxAttempts = null): void
+    public function awaitRetry(ActionRun $actionRun, string $signal, ?int $maxAttempts = null): bool
     {
+        $asRead = [
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ];
+
         $actionRun->status = ActionStatus::AwaitingRetry;
         $actionRun->retry_signal = $signal;
 
@@ -598,7 +608,9 @@ final readonly class ActionRecorder
         // row, so an empty column would silently mean unbounded.
         $actionRun->retry_signal_max_attempts ??= $maxAttempts;
 
-        $actionRun->save();
+        if (! $this->writeFenced($actionRun, $asRead, 'await_retry')) {
+            return false;
+        }
 
         $this->events->record(
             $actionRun->flowRun,
@@ -613,6 +625,8 @@ final readonly class ActionRecorder
         );
 
         event(new ActionAwaitingRetry($actionRun, $signal));
+
+        return true;
     }
 
     /**
