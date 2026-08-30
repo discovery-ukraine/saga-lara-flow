@@ -4,10 +4,8 @@ namespace DiscoveryUkraine\SagaLaraFlow\Repositories;
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
-use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 
 class EloquentActionRunRepository implements ActionRunRepository
@@ -26,7 +24,7 @@ class EloquentActionRunRepository implements ActionRunRepository
             ->whereIn('status', [ActionStatus::Pending, ActionStatus::Running])
             ->whereNotNull('expires_at')
             ->where('expires_at', '<=', Carbon::now())
-            ->whereHas('flowRun', $this->liveRun(...))
+            ->whereHas('flowRun', FlowRun::live(...))
             ->orderBy('expires_at')
             ->limit($limit)
             ->get();
@@ -46,7 +44,7 @@ class EloquentActionRunRepository implements ActionRunRepository
                     ->whereNull('repair_available_at')
                     ->orWhere('repair_available_at', '<=', $now);
             })
-            ->whereHas('flowRun', $this->liveRun(...))
+            ->whereHas('flowRun', FlowRun::live(...))
             ->orderBy('created_at')
             ->limit($limit)
             ->get();
@@ -74,23 +72,10 @@ class EloquentActionRunRepository implements ActionRunRepository
                     ->whereNull('repair_available_at')
                     ->orWhere('repair_available_at', '<=', $now);
             })
-            ->whereHas('flowRun', $this->liveRun(...))
+            ->whereHas('flowRun', FlowRun::live(...))
             ->orderBy('reclaim_stale_at')
             ->limit($limit)
             ->get();
-    }
-
-    /**
-     * Never hand a sweep a step whose run has already finished. Terminal settlement
-     * leaves only rows written before it existed, but they are enough to starve a sweep:
-     * every guard that rejects them returns before any throttle is bumped, so the same
-     * rows come back at the head of every batch, oldest-first, for ever.
-     *
-     * @param  Builder<FlowRun>  $query
-     */
-    private function liveRun(Builder $query): void
-    {
-        $query->whereNotIn('status', FlowStatus::terminal());
     }
 
     /**
