@@ -581,3 +581,31 @@ it('claims a step normally while the run is still live', function () {
         ->and(FlakyPaymentAction::$calls)->toBe(1)
         ->and($step->fresh()->status)->toBe(ActionStatus::Completed);
 });
+
+/**
+ * MySQL counts the rows an UPDATE changed, not the rows it matched, so a write whose
+ * every value already equals what is stored reports zero there and one on SQLite and
+ * PostgreSQL — the ambiguity FlowStateMachine::write() has to read the row back to
+ * resolve. These writes carry no such branch, because every fence names the value it is
+ * replacing: a row that matches always changes, so zero always means the fence lost.
+ *
+ * The flag write is the only one whose target could already be stored, which makes it
+ * the one that proves the invariant.
+ */
+it('gives the same answer on every driver when the stored value is already the target', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed, [
+        'retry_signal' => 'balance-refilled',
+        'queue_attempts_exhausted' => false,
+    ]);
+
+    $asRead = ActionRun::query()->findOrFail($step->id);
+
+    // Another delivery of the same hook got there first.
+    ActionRun::query()->whereKey($step->id)->update(['queue_attempts_exhausted' => true]);
+
+    // The fence names queue_attempts_exhausted = false, so this cannot be an update
+    // that changes nothing: it is a fence that does not match, on every driver alike.
+    expect(app(ActionRecorder::class)->markQueueAttemptsExhausted($asRead))->toBeFalse()
+        ->and($step->fresh()->queue_attempts_exhausted)->toBeTrue();
+});
