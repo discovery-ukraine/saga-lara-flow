@@ -15,6 +15,7 @@ use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
@@ -897,12 +898,16 @@ it('rolls the consumption back when the retry transition fails', function () {
     $run = SagaFlow::create(RetryOnSignalWorkflow::class)->withArguments('order-q23')->run();
     drainQueue();
 
-    // Blowing up on the write that spends the cycle stands in for a process that
-    // dies mid-transition. Spending the signal and spending the cycle it pays for
-    // have to land together or not at all: a consumed signal with the step still
-    // Failed would park again and wait for a second delivery that nobody owes.
-    ActionRun::saved(function (ActionRun $step): void {
-        if ($step->retry_signal_attempts === 1) {
+    // Blowing up between the two writes stands in for a process that dies mid-transition.
+    // Spending the signal and spending the cycle it pays for have to land together or not
+    // at all: a consumed signal with the step still Failed would park again and wait for
+    // a second delivery that nobody owes.
+    //
+    // The hook is on the signal's own save(), which is the one write in that transaction
+    // that still goes through the model: the step is written by a conditional UPDATE,
+    // which fires no Eloquent events at all.
+    FlowSignal::updated(function (FlowSignal $signal): void {
+        if ($signal->status === SignalStatus::Consumed) {
             throw new RuntimeException('the write exploded');
         }
     });

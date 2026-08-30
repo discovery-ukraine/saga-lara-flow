@@ -18,6 +18,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionClaimFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FencedWriteLost;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
@@ -744,20 +745,54 @@ class ActionBuilder
     }
 
     /**
+     * Whether the cycle this pass spent is on record now its transaction has closed. A
+     * commit reporting success is not proof: the rewind records a flow_events row inside
+     * that transaction, so a host observer on it runs there too, and on PostgreSQL a
+     * failing statement it swallows turns the commit into a rollback while still
+     * reporting success — the trap ActionRecorder::claimSurvivedCommit() exists for.
+     * Starting the step on a rewind that was undone claims a row still parked, and that
+     * failure reaches the drive loop as a business one.
+     */
+    private function retrySurvivedCommit(ActionRun $step): bool
+    {
+        $generation = $step->newQuery()
+            ->useWritePdo()
+            ->whereKey($step->getKey())
+            ->value('retry_signal_attempts');
+
+        return (int) $generation === $step->retry_signal_attempts;
+    }
+
+    /**
      * @throws FlowSuspended
      * @throws Throwable
      */
     private function consumeAndRetry(FlowSignal $signal, ActionRun $step, int $sequence): never
     {
-        // Spending the signal and spending the cycle it pays for are one transition:
-        // a crash between them would leave the signal Consumed and the step Failed,
-        // and the next replay — which only looks for an unconsumed signal — would park
-        // again for a delivery nobody owes. Starting the step stays outside.
-        $this->connection()->transaction(function () use ($signal, $step, $sequence): void {
-            app(SignalRecorder::class)->consumeSignal($this->runtime->run(), $signal, $sequence);
+        try {
+            // Spending the signal and spending the cycle it pays for are one transition:
+            // a crash between them would leave the signal Consumed and the step Failed,
+            // and the next replay — which only looks for an unconsumed signal — would park
+            // again for a delivery nobody owes. Starting the step stays outside.
+            $this->connection()->transaction(function () use ($signal, $step, $sequence): void {
+                app(SignalRecorder::class)->consumeSignal($this->runtime->run(), $signal, $sequence);
 
-            app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt());
-        });
+                if (! app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt())) {
+                    // The row moved on under this pass. Rolling back is what keeps the
+                    // delivery: a consumed signal with no cycle behind it would pay for
+                    // a retry nobody ran, and no later pass looks for it again.
+                    throw new FencedWriteLost;
+                }
+            });
+        } catch (FencedWriteLost) {
+            // Nothing was written, so the row still says what it says. Wait for the pass
+            // that did move it, and resolve from the row as it stands next time.
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
+
+        if (! $this->retrySurvivedCommit($step)) {
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
 
         $this->startRetriedStep($step, $sequence);
     }
@@ -780,7 +815,10 @@ class ActionBuilder
      */
     private function retryNow(ActionRun $step, int $sequence): never
     {
-        app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt());
+        if (! app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt())) {
+            // Dispatching now would send a job for a row this pass did not rewind.
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
 
         $this->startRetriedStep($step, $sequence);
     }

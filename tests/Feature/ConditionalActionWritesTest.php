@@ -186,3 +186,58 @@ it('does not mark a generation exhausted while an attempt is running under it', 
         // spend a retry cycle on a step still in flight.
         ->and($step->fresh()->queue_attempts_exhausted)->toBeFalse();
 });
+
+it('refuses to rewind a step that terminal settlement has already closed', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::AwaitingRetry, ['retry_signal' => 'balance-refilled']);
+
+    $asRead = ActionRun::query()->findOrFail($step->id);
+
+    $run->markCancelled();
+
+    expect($step->fresh()->status)->toBe(ActionStatus::Cancelled);
+
+    expect(app(ActionRecorder::class)->retryAction($asRead))->toBeFalse()
+        // Rewound, this row would re-enter dueForRepair() looking live again, under a
+        // run that finished before the cycle was ever spent.
+        ->and($step->fresh()->status)->toBe(ActionStatus::Cancelled)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(0)
+        ->and($run->events()->pluck('type')->all())->not->toContain('action.retried');
+});
+
+it('rewinds a step normally while the run is still live', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::AwaitingRetry, ['retry_signal' => 'balance-refilled']);
+
+    expect(app(ActionRecorder::class)->retryAction($step))->toBeTrue()
+        ->and($step->fresh()->status)->toBe(ActionStatus::Pending)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(1);
+});
+
+/**
+ * A row can leave Failed for a retry and come back to it, so a status-only fence cannot
+ * tell one generation from the next. A queue hook holding the spent cycle would end the
+ * live one with a fallback nobody asked for.
+ */
+it('refuses a give-up from a cycle the row has already left and returned from', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed, [
+        'continue_on_failure' => true,
+        'retry_signal' => 'balance-refilled',
+        'retry_signal_attempts' => 0,
+    ]);
+
+    // The old failed() hook resolved the row on cycle 0 and has not written yet.
+    $spentCycle = ActionRun::query()->findOrFail($step->id);
+
+    $recorder = app(ActionRecorder::class);
+
+    // A signal pays for cycle 1, whose attempt then fails back to Failed — the same
+    // status the hook is holding, one generation on.
+    $recorder->retryAction(ActionRun::query()->findOrFail($step->id));
+    ActionRun::query()->whereKey($step->id)->update(['status' => ActionStatus::Failed]);
+
+    expect($recorder->optionalFail($spentCycle))->toBeFalse()
+        ->and($step->fresh()->status)->toBe(ActionStatus::Failed)
+        ->and($step->fresh()->retry_signal_attempts)->toBe(1);
+});

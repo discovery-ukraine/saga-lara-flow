@@ -620,9 +620,19 @@ final readonly class ActionRecorder
      * the row to Pending so the very same (flow_run_id, sequence) ordinal runs again.
      * `attempts` is deliberately untouched — it counts queue attempts within one
      * execution — and the previous exception stands until the new attempt overwrites it.
+     *
+     * Fenced on the status and the cycle the caller read. Terminal settlement closes a
+     * parked step as Cancelled, and rewinding that to Pending would put a settled step
+     * back into the run's open work — and back into the doctor's reach — under a run
+     * that has already finished.
      */
-    public function retryAction(ActionRun $actionRun, ?DateTimeInterface $expiresAt = null): void
+    public function retryAction(ActionRun $actionRun, ?DateTimeInterface $expiresAt = null): bool
     {
+        $asRead = [
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ];
+
         $actionRun->retry_signal_attempts = $actionRun->retry_signal_attempts + 1;
         $actionRun->status = ActionStatus::Pending;
         $actionRun->started_at = null;
@@ -648,7 +658,10 @@ final readonly class ActionRecorder
         $deadline = $expiresAt ?? $this->defaultExpiry();
 
         $actionRun->expires_at = $deadline === null ? null : Carbon::instance($deadline);
-        $actionRun->save();
+
+        if (! $this->writeFenced($actionRun, $asRead, 'retry_action')) {
+            return false;
+        }
 
         $this->events->record(
             $actionRun->flowRun,
@@ -663,6 +676,8 @@ final readonly class ActionRecorder
         );
 
         event(new ActionRetried($actionRun));
+
+        return true;
     }
 
     /**
