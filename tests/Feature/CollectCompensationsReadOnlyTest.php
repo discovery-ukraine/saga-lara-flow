@@ -18,6 +18,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ManualCompensateWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OptionalRetryCompensatedWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentOfVanishingChildWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SelfCancellingThenThrowingWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SignalOnlyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\VanishedArgumentWorkflow;
 use Illuminate\Database\QueryException;
@@ -257,4 +258,31 @@ it('surfaces a sweep failure that already took the run into cancelling', functio
     // It cannot wedge the sweep the way a planning failure would: Cancelling is not
     // a candidate status, so the run is gone from the batch on its own.
     expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0]);
+});
+
+it('does not abort the sweep over a run somebody else finished meanwhile', function () {
+    useDatabaseQueue();
+    logToFile($path = sys_get_temp_dir().'/saga-race-'.bin2hex(random_bytes(6)).'.log');
+    SelfCancellingThenThrowingWorkflow::reset();
+
+    $run = SagaFlow::create(SelfCancellingThenThrowingWorkflow::class)->run();
+    drainQueue();
+    $run = SagaFlow::findRun($run->id);
+    $run->expires_at = now()->subMinute();
+    $run->save();
+
+    // The replay finishes the run and then faults — one process doing what two would.
+    SelfCancellingThenThrowingWorkflow::$interfere = true;
+
+    // The run is terminal, so it cannot be a candidate again and this attempt never
+    // began a rollback. Only a run left in Cancelling is worth aborting the sweep for.
+    expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0])
+        ->and(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Cancelled);
+
+    $log = is_file($path) ? (string) file_get_contents($path) : '';
+
+    expect($log)->toContain(AnomalyLog::REASON_EXPIRY_FAILED)
+        ->and($log)->toContain($run->id);
+
+    SelfCancellingThenThrowingWorkflow::reset();
 });

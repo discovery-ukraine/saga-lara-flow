@@ -112,10 +112,11 @@ final readonly class FlowMonitor
      * back every sweep and the signal and action passes below would never run at all.
      * The lazy check inside drive() has one run to answer for and still surfaces it.
      *
-     * Only that failure, though. A run this pass already took into Cancelling has left
-     * the candidate set on its own, so its failure cannot wedge anything — and it is
-     * not a plan that could not be made but a rollback that started and did not, which
-     * leaves the run where no sweep returns. That belongs to whoever is watching.
+     * Only that failure, though. Cancelling is the one status this pass produces and
+     * nothing returns to — no sweep lists it and the doctor skips it — so a run left
+     * there did not fail to be planned, it failed to be unwound, and that is not the
+     * sweep's to swallow. A run somebody else finished meanwhile is not that: it is
+     * done, it cannot be a candidate again, and the throw is journalled like the rest.
      */
     private function expireRun(FlowRun $run): bool
     {
@@ -132,7 +133,7 @@ final readonly class FlowMonitor
                 ->whereKey($run->getKey())
                 ->value('status');
 
-            if ($current !== FlowStatus::Running && $current !== FlowStatus::Waiting) {
+            if ($current === FlowStatus::Cancelling) {
                 throw $failure;
             }
 
@@ -140,7 +141,7 @@ final readonly class FlowMonitor
                 'entity' => 'flow',
                 'flow_run_id' => $run->id,
                 'workflow_class' => $run->workflow_class,
-                'status' => $current->value,
+                'status' => $current?->value,
                 'exception' => $this->exceptionToArray($failure),
             ]);
 
