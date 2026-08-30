@@ -484,6 +484,18 @@ Nothing to do unless a listener expected `OptionalActionFailed` during `compensa
 sweep absorbs such a throw instead, journalling `expiry_failed` and stepping over the run. See
 [Sagas & compensation](https://sagalaraflow.dev/sagas-and-compensation).
 
+### 22. Writes to a step check the row is still the one they read
+
+Five recorder transitions — a give-up, a park, a rewind, settling a parked step, and the queue's
+exhausted-attempts flag — now state the row they expect and the run's liveness in one `UPDATE`. One
+that loses writes nothing, journals `write_refused` with a `site`, and returns `false` where it used
+to return `void`. The claim is fenced on the run too, and still reports `claim_lost` as before.
+
+The other thing to check: those five no longer call `save()`, so they raise no Eloquent model events
+— an observer on your `ActionRun` model stops seeing them. Three publish a package event instead,
+and settling a parked step and recording the queue's exhausted attempts publish none, by design. See
+[Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery).
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

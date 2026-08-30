@@ -107,8 +107,9 @@ package keeps a second journal for them:
 ],
 ```
 
-Grep for `claim_lost`, `outcome_rejected` and `batch_finished_early`; each line carries the run id,
-row id, sequence and class. `claim_not_committed` joins them when a claim did not survive its own
+Grep for `claim_lost`, `outcome_rejected`, `batch_finished_early` and `write_refused`; each line
+carries the run id, row id, sequence and class, and `write_refused` adds the `site` of the write that
+was refused. `claim_not_committed` joins them when a claim did not survive its own
 transaction, which is a defect in listener or observer code rather than a race, and `expiry_failed`
 when the sweep could not plan an overdue run's rollback and stepped over it. A refused run
 transition is journalled here too, as `transition_lost`,
