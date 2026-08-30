@@ -27,7 +27,8 @@ failed statement forced on you — discards every row the run recorded while the
 describe is already done. A charge stays charged with nothing left to attribute it to, on every
 driver. The queued path is clear of this while `saga-lara-flow.queue.after_commit` is on, as it is
 by default: it holds the jobs until your transaction commits, and turning it off gives them the
-same problem.
+same problem. The same applies to `signal()`, `cancel()` and `compensate()` — see
+[what a host transaction leaves behind](./queues-locks-idempotency.md#host-transactions).
 :::
 
 ## When to use which

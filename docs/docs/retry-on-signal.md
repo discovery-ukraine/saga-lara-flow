@@ -343,7 +343,8 @@ The counters are two different things: `attempts` keeps counting *every* executi
 
 - **Don't wrap a step in your own `DB::transaction()`.** The engine suspends by throwing, so an
   application transaction around `->run()` would roll the suspension's bookkeeping back. This is true
-  of every suspending seam in the package, not only this one.
+  of every seam and every entry point in the package, not only this one — see
+  [what a host transaction leaves behind](./queues-locks-idempotency.md#host-transactions).
 - **Package event listeners must be queued (`ShouldQueue`) or must not throw.** A throwing listener
   on `ActionRetried` or `FlowSignalConsumed` interrupts the replay mid-way, and the engine reads that
   as a business failure.

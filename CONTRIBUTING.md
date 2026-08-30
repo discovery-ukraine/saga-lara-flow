@@ -94,8 +94,7 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
   the event out of the transaction is not the same fix: a model observer on a row the transaction
   writes runs there whatever the event does, which is what `TransactionIntegrityTest`'s observer
   case pins. What such a read proves is visibility on the writing connection, which equals
-  durability only while the engine's transaction is the outermost one — a host transaction wrapped
-  around a run is out of the engine's reach on every driver, and the docs ask hosts not to open one.
+  durability only while the engine's transaction is the outermost one — see the boundary below.
 - **A read that decides something must use `useWritePdo()`.** A lagging replica will answer with the
   very state the fence was guarding against.
 - **Do not `refresh()` a model the caller still holds.** It discards their unsaved attributes;
@@ -106,6 +105,28 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
 `FlowStatus::terminal()` and `FlowStatus::signalable()` are different sets and are not
 interchangeable. `Cancelling` is **not** terminal — it is a run mid-rollback. Swapping one boundary
 for the other changes public behaviour and needs its own exception and its own documentation.
+
+### A host transaction around an engine call is out of scope
+
+The engine's entry points must be called with no transaction of the caller's open. This is a
+**documented boundary, not an open defect** — do not file it as one, and do not add code that tries
+to detect or survive it.
+
+Measured identically on all three drivers: with a host transaction rolled back around them,
+`runSync()` leaves no row of the run at all, `compensate()` performs the rollback and records
+nothing (leaving the run compensatable a second time — `["undo:a", "undo:a"]` against one
+`compensation_runs` row), and `signal()` and `cancel()` are discarded while the caller is handed a
+`FlowRun` saying otherwise. Only the queued `run()` is safe, and only while `queue.after_commit` is
+on.
+
+The engine cannot get out from under it. Inside a host transaction its own `transaction()` is a
+savepoint (nesting level 2), so it commits nothing and every read-back proves visibility rather than
+durability; a second connection would escape the scope but could not then see the host's uncommitted
+rows at all. Nor can a `transactionLevel() > 0` check sit at the writes: the engine's own writers
+legitimately run above zero — `FlowStateMachine::finish()` settles every open step inside its
+transaction, and `park()` writes the step and its signal inside one. And detection would come too
+late for what the boundary actually costs, which is work already performed. So it is documented in
+`docs/docs/queues-locks-idempotency.md` and enforced nowhere.
 
 ### Side effects
 
