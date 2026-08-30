@@ -160,6 +160,11 @@ final readonly class ActionRecorder
      * stale-cycle check into this same atomic write so a cycle change landing after
      * the row was read still loses the claim. Null imposes no constraint.
      *
+     * The run's liveness is folded in the same way, and for a reason the row cannot see
+     * on its own: terminal settlement leaves a Failed row — the state between two of the
+     * queue's own native tries — exactly as it found it, so without this a job already on
+     * the queue when the run was cancelled still claims it and runs the business logic.
+     *
      * The claim and its two records share one transaction: a listener throwing on
      * ActionStarted would otherwise leave the row Running with nothing executing it.
      * A commit is not proof the claim survived one, so the row is read back afterwards
@@ -180,6 +185,7 @@ final readonly class ActionRecorder
 
                 $claimed = $actionRun->newQuery()
                     ->whereKey($actionRun->getKey())
+                    ->whereHas('flowRun', FlowRun::live(...))
                     ->when(
                         $expectedRetryGeneration !== null,
                         fn ($query) => $query->where('retry_signal_attempts', $expectedRetryGeneration),
@@ -392,16 +398,99 @@ final readonly class ActionRecorder
     }
 
     /**
+     * Persist the pending attribute changes only if the row is still the one the caller
+     * read and the run under it has not finished. The values come from getDirty(), so
+     * the model's own casts encode them exactly as save() would; $expected names the
+     * stored values the caller's decision rested on, and the run's liveness rides in the
+     * same statement rather than a read before it, so no row this pass already saw can
+     * move between the check and the write.
+     *
+     * It fences against what is committed, which is what terminal settlement leaves
+     * behind, and not against a transition still in flight — that one is invisible to a
+     * snapshot until it commits. The values are dirty attributes, so a caller with
+     * nothing to write would report a refusal it never made; every site reaches this
+     * with a change.
+     *
+     * Every $expected key that the write also sets names the value being REPLACED, so a
+     * matching row always changes — which keeps the count off the zero MySQL reports for
+     * an update that changed nothing and FlowStateMachine::write() has to disambiguate.
+     *
+     * @param  array<string, mixed|list<mixed>>  $expected
+     * @param  array<string, mixed>  $context
+     */
+    private function writeFenced(ActionRun $actionRun, array $expected, string $site, array $context = []): bool
+    {
+        $query = $actionRun->newQuery()
+            ->whereKey($actionRun->getKey())
+            ->whereHas('flowRun', FlowRun::live(...));
+
+        foreach ($expected as $column => $value) {
+            match (true) {
+                is_array($value) => $query->whereIn($column, $value),
+                // `= NULL` matches nothing in SQL, so a caller expecting an empty column
+                // would silently never write rather than be fenced on what it read.
+                $value === null => $query->whereNull($column),
+                default => $query->where($column, $value),
+            };
+        }
+
+        $written = $query->update($actionRun->getDirty()) === 1;
+
+        if (! $written) {
+            $this->anomalies->log(AnomalyLog::REASON_WRITE_REFUSED, [
+                'entity' => 'action',
+                'site' => $site,
+                'flow_run_id' => $actionRun->flow_run_id,
+                'action_run_id' => $actionRun->id,
+                'sequence' => $actionRun->sequence,
+                'action_class' => $actionRun->action_class,
+                ...$context,
+            ]);
+
+            // Leave the model saying what the database says. The caller carries on with
+            // this instance — the seam resolves the step from it — and an attribute the
+            // write did not land would otherwise be read back as though it had, and be
+            // carried into the next write's getDirty() under a fence that never named it.
+            $actionRun->discardChanges();
+
+            return false;
+        }
+
+        $actionRun->syncOriginal();
+
+        return true;
+    }
+
+    /**
      * Mark a failed optional (continueOnFailure) step as OptionalFailed once its
      * retries are exhausted. The flow is not failed; the recorded exception is
      * preserved and an optional_failed event/Laravel event is appended so the
      * give-up is visible in history.
+     *
+     * Refused, with nothing written and no event appended, when the row has moved on
+     * since it was read or the run under it has finished: a give-up recorded onto a
+     * settled run says a fallback was taken that no replay will ever reach.
      */
-    public function optionalFail(ActionRun $actionRun): void
+    public function optionalFail(ActionRun $actionRun): bool
     {
+        // The row as read, not a named status: a give-up arrives on Failed when the
+        // attempt ended it and on AwaitingRetry when a timed-out wait did, and naming
+        // both would let this write take a row another pass had just parked.
+        //
+        // The cycle too, not the status alone. A row can leave Failed for a retry and
+        // come back to it, so status by itself cannot tell this generation from the next
+        // one, and a hook holding the spent cycle would end a live one with a fallback.
+        $asRead = [
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ];
+
         $actionRun->status = ActionStatus::OptionalFailed;
         $actionRun->finished_at = Carbon::now();
-        $actionRun->save();
+
+        if (! $this->writeFenced($actionRun, $asRead, 'optional_fail')) {
+            return false;
+        }
 
         $this->events->record(
             $actionRun->flowRun,
@@ -412,6 +501,8 @@ final readonly class ActionRecorder
         );
 
         event(new OptionalActionFailed($actionRun));
+
+        return true;
     }
 
     /**
@@ -420,15 +511,29 @@ final readonly class ActionRecorder
      * instead of comparing the attempts counter with the action's $tries, which lives
      * in code and can change under a job already in flight. No event is appended —
      * this is queue bookkeeping, not a step in the flow's history.
+     *
+     * Fenced on the cycle the caller read, because the flag is read back as "the queue
+     * has finished with this row": a hook reporting for a spent cycle would tell the
+     * seam that a cycle rewound in the meantime is over before its job has run, and the
+     * seam would spend a retry on a step still in flight.
      */
-    public function markQueueAttemptsExhausted(ActionRun $actionRun): void
+    public function markQueueAttemptsExhausted(ActionRun $actionRun): bool
     {
         if ($actionRun->queue_attempts_exhausted) {
-            return;
+            return false;
         }
 
         $actionRun->queue_attempts_exhausted = true;
-        $actionRun->save();
+
+        return $this->writeFenced($actionRun, [
+            'queue_attempts_exhausted' => false,
+            // The status too. A claim does not move the cycle — it moves the row to
+            // Running and raises `attempts` — so without this the hook's spent view of a
+            // Failed row still matches the live attempt running under it, and tells the
+            // seam the queue is finished with a job that has only just started.
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ], 'queue_attempts_exhausted');
     }
 
     /**
@@ -436,15 +541,25 @@ final readonly class ActionRecorder
      * retry policy deferred, keeping the exception and finished_at of the attempt that
      * failed. No event is appended — action.failed was recorded back then, and the
      * give-up is visible from the flow's own failure and the timed-out wait-signal.
+     *
+     * Returns whether this call settled the row. The early return covers a row this
+     * caller can already see is not parked; the fence covers the row that stopped being
+     * parked after it was read — terminal settlement leaves Cancelled behind, and
+     * writing Failed over it would put a settled step back into the run's open work.
      */
-    public function settleAwaitingRetry(ActionRun $actionRun): void
+    public function settleAwaitingRetry(ActionRun $actionRun): bool
     {
         if ($actionRun->status !== ActionStatus::AwaitingRetry) {
-            return;
+            return false;
         }
 
         $actionRun->status = ActionStatus::Failed;
-        $actionRun->save();
+
+        return $this->writeFenced(
+            $actionRun,
+            ['status' => ActionStatus::AwaitingRetry],
+            'settle_awaiting_retry',
+        );
     }
 
     /**
@@ -478,9 +593,19 @@ final readonly class ActionRecorder
      * action.awaiting_retry event. The step is NOT terminal — the recorded exception
      * and finished_at of the last attempt are kept so the seam can decide again once
      * the signal arrives (or the wait-signal times out).
+     *
+     * Fenced on the failure being parked and the cycle it belongs to. A park that lands
+     * after terminal settlement would give a finished run a step claiming to be waiting
+     * and a wait nothing will ever resolve: settlement runs once, and every sweep that
+     * could reach them skips a finished run on purpose.
      */
-    public function awaitRetry(ActionRun $actionRun, string $signal, ?int $maxAttempts = null): void
+    public function awaitRetry(ActionRun $actionRun, string $signal, ?int $maxAttempts = null): bool
     {
+        $asRead = [
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ];
+
         $actionRun->status = ActionStatus::AwaitingRetry;
         $actionRun->retry_signal = $signal;
 
@@ -489,7 +614,9 @@ final readonly class ActionRecorder
         // row, so an empty column would silently mean unbounded.
         $actionRun->retry_signal_max_attempts ??= $maxAttempts;
 
-        $actionRun->save();
+        if (! $this->writeFenced($actionRun, $asRead, 'await_retry')) {
+            return false;
+        }
 
         $this->events->record(
             $actionRun->flowRun,
@@ -504,6 +631,8 @@ final readonly class ActionRecorder
         );
 
         event(new ActionAwaitingRetry($actionRun, $signal));
+
+        return true;
     }
 
     /**
@@ -511,9 +640,22 @@ final readonly class ActionRecorder
      * the row to Pending so the very same (flow_run_id, sequence) ordinal runs again.
      * `attempts` is deliberately untouched — it counts queue attempts within one
      * execution — and the previous exception stands until the new attempt overwrites it.
+     *
+     * Fenced on the status and the cycle the caller read. Terminal settlement closes a
+     * parked step as Cancelled, and rewinding that to Pending would put a settled step
+     * back into the run's open work — and back into the doctor's reach — under a run
+     * that has already finished.
      */
-    public function retryAction(ActionRun $actionRun, ?DateTimeInterface $expiresAt = null): void
-    {
+    public function retryAction(
+        ActionRun $actionRun,
+        ?DateTimeInterface $expiresAt = null,
+        bool $publish = true
+    ): bool {
+        $asRead = [
+            'status' => $actionRun->getOriginal('status'),
+            'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
+        ];
+
         $actionRun->retry_signal_attempts = $actionRun->retry_signal_attempts + 1;
         $actionRun->status = ActionStatus::Pending;
         $actionRun->started_at = null;
@@ -539,8 +681,28 @@ final readonly class ActionRecorder
         $deadline = $expiresAt ?? $this->defaultExpiry();
 
         $actionRun->expires_at = $deadline === null ? null : Carbon::instance($deadline);
-        $actionRun->save();
 
+        if (! $this->writeFenced($actionRun, $asRead, 'retry_action')) {
+            return false;
+        }
+
+        if ($publish) {
+            $this->publishRetried($actionRun);
+        }
+
+        return true;
+    }
+
+    /**
+     * Append the retry to the run's history and tell the host about it. Separate from the
+     * write because a caller that rewinds inside a transaction of its own must publish
+     * after it closes: ActionRetried is dispatched after commit, and Laravel drains those
+     * callbacks inside transaction(), so on PostgreSQL — where a swallowed failure turns
+     * the commit into a rollback while still reporting success — a listener would run for
+     * a rewind the database threw away. Nothing can take that back afterwards.
+     */
+    public function publishRetried(ActionRun $actionRun): void
+    {
         $this->events->record(
             $actionRun->flowRun,
             FlowEventType::ActionRetried,

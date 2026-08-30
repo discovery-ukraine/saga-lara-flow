@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Models;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Models\Concerns\UsesSagaFlowConnection;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -60,6 +61,22 @@ class FlowRun extends Model
             'repair_attempts' => 'integer',
             'repair_available_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Constrain a flow_runs query to runs that have not finished. The engine reads
+     * this in three places — the two sweeps that must not pick up work belonging to a
+     * finished run, and the fenced action writes that must not move a settled row —
+     * and they have to agree, because a run counted live by one and finished by
+     * another is exactly the gap a leftover row survives in.
+     *
+     * A run mid-rollback is still live here: Cancelling is not terminal.
+     *
+     * @param  Builder<FlowRun>  $query
+     */
+    public static function live(Builder $query): void
+    {
+        $query->whereNotIn('status', FlowStatus::terminal());
     }
 
     /**

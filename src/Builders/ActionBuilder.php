@@ -18,6 +18,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionClaimFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FencedWriteLost;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
@@ -628,20 +629,25 @@ class ActionBuilder
         $delivered = app(SignalRepository::class)
             ->earliestPendingSince($this->runtime->run()->id, $signal->name, $step->finished_at);
 
-        // Close the spent wait-signal and bind the floating row to this ordinal, so no
-        // later await consumes the same signal twice. A lost claim means a delivery
-        // landed in the wait-signal itself, which the next replay resolves.
-        if ($delivered !== null && $this->handOverDelivery($signal, $delivered, $sequence)) {
-            $this->retryNow($step, $sequence);
+        // Close the spent wait-signal, bind the floating row to this ordinal so no later
+        // await consumes the same signal twice, and spend the cycle it pays for — all
+        // three together. A lost claim means a delivery landed in the wait-signal itself,
+        // which the next replay resolves.
+        if ($delivered !== null
+            && $this->handOverAndRetry($signal, $delivered, $step, $sequence)
+            && $this->retrySurvivedCommit($step)) {
+            app(ActionRecorder::class)->publishRetried($step);
+
+            $this->startRetriedStep($step, $sequence);
         }
 
         $suspender->suspend('action', $sequence);
     }
 
     /**
-     * Park a failed step on its retry signal and suspend the flow. Never returns:
-     * either the retry starts immediately (a signal was already delivered) or the
-     * flow goes Waiting until one is.
+     * Park a failed step on its retry signal and suspend the flow. Never returns: either
+     * the retry starts immediately (a signal was already delivered) or the flow goes
+     * Waiting until one is.
      *
      * @throws FlowSuspended
      * @throws Throwable
@@ -698,49 +704,104 @@ class ActionBuilder
      *
      * $record is false when an open signal from an earlier pass was adopted.
      *
+     * A parking that loses its fence — the row moved on, or the run finished — writes
+     * neither row, fires no ActionAwaitingRetry, and suspends like a won one. Whatever
+     * moved the row wrote where the step really is, and a run that ended has nothing
+     * left to resolve; either way this pass has no state left to decide from, and the
+     * suspension leaves no wait behind because none was recorded.
+     *
      * @throws FlowSuspended
      * @throws Throwable
      */
     private function park(ActionRun $step, string $signal, int $sequence, bool $record = true): never
     {
-        $this->connection()->transaction(function () use ($step, $signal, $sequence, $record): void {
-            if ($record) {
-                app(SignalRecorder::class)->recordSignalWaiting(
-                    $this->runtime->run(),
-                    $signal,
-                    $sequence,
-                    $this->retryWaitSeconds === null ? null : now()->addSeconds($this->retryWaitSeconds),
-                );
-            }
+        try {
+            $this->connection()->transaction(function () use ($step, $signal, $sequence, $record): void {
+                if ($record) {
+                    app(SignalRecorder::class)->recordSignalWaiting(
+                        $this->runtime->run(),
+                        $signal,
+                        $sequence,
+                        $this->retryWaitSeconds === null ? null : now()->addSeconds($this->retryWaitSeconds),
+                    );
+                }
 
-            app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step));
-        });
+                if (! app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step))) {
+                    // The wait-signal must go back with the transition it was recorded
+                    // for: left standing, it is the newest open wait for its name, so a
+                    // delivery would be swallowed by a park that never happened.
+                    throw new FencedWriteLost;
+                }
+            });
+        } catch (FencedWriteLost) {
+            // Nothing was written, and there is nothing left to resolve from: whatever
+            // moved the row recorded where the step really is, and a run that ended has
+            // no next step to take. Wait, and read it on the following replay.
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
 
         app(FlowSuspender::class)->suspend('action', $sequence);
     }
 
     /**
-     * Close a spent wait-signal and claim the floating delivery that ended its wait,
-     * atomically. Returns false when the signal is no longer Waiting: it received a
-     * delivery of its own, which the next replay resolves.
+     * Close a spent wait-signal, claim the floating delivery that ended its wait, and
+     * spend the cycle it pays for — one transition, so a delivery is never consumed
+     * without the retry it bought. Returns false when nothing was written: the wait
+     * received a delivery of its own, or the step moved on under this pass; either way
+     * the next replay resolves it from the row as it stands.
      *
      * @throws Throwable
      */
-    private function handOverDelivery(FlowSignal $signal, FlowSignal $delivered, int $sequence): bool
-    {
+    private function handOverAndRetry(
+        FlowSignal $signal,
+        FlowSignal $delivered,
+        ActionRun $step,
+        int $sequence
+    ): bool {
         $recorder = app(SignalRecorder::class);
         $flowRun = $this->runtime->run();
 
-        return (bool) $this->connection()
-            ->transaction(function () use ($recorder, $flowRun, $signal, $delivered, $sequence): bool {
-                if (! $recorder->consumeWhileWaiting($flowRun, $signal, $sequence)) {
-                    return false;
-                }
+        try {
+            return (bool) $this->connection()
+                ->transaction(function () use ($recorder, $flowRun, $signal, $delivered, $step, $sequence): bool {
+                    if (! $recorder->consumeWhileWaiting($flowRun, $signal, $sequence)) {
+                        return false;
+                    }
 
-                $recorder->consumeSignal($flowRun, $delivered, $sequence);
+                    $recorder->consumeSignal($flowRun, $delivered, $sequence);
 
-                return true;
-            });
+                    if (! app(ActionRecorder::class)->retryAction(
+                        $step,
+                        $this->resolvedExpiresAt(),
+                        publish: false,
+                    )) {
+                        throw new FencedWriteLost;
+                    }
+
+                    return true;
+                });
+        } catch (FencedWriteLost) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether the cycle this pass spent is on record now its transaction has closed. A
+     * commit reporting success is not proof: the rewind records a flow_events row inside
+     * that transaction, so a host observer on it runs there too, and on PostgreSQL a
+     * failing statement it swallows turns the commit into a rollback while still
+     * reporting success — the trap ActionRecorder::claimSurvivedCommit() exists for.
+     * Starting the step on a rewind that was undone claims a row still parked, and that
+     * failure reaches the drive loop as a business one.
+     */
+    private function retrySurvivedCommit(ActionRun $step): bool
+    {
+        $generation = $step->newQuery()
+            ->useWritePdo()
+            ->whereKey($step->getKey())
+            ->value('retry_signal_attempts');
+
+        return (int) $generation === $step->retry_signal_attempts;
     }
 
     /**
@@ -749,15 +810,36 @@ class ActionBuilder
      */
     private function consumeAndRetry(FlowSignal $signal, ActionRun $step, int $sequence): never
     {
-        // Spending the signal and spending the cycle it pays for are one transition:
-        // a crash between them would leave the signal Consumed and the step Failed,
-        // and the next replay — which only looks for an unconsumed signal — would park
-        // again for a delivery nobody owes. Starting the step stays outside.
-        $this->connection()->transaction(function () use ($signal, $step, $sequence): void {
-            app(SignalRecorder::class)->consumeSignal($this->runtime->run(), $signal, $sequence);
+        try {
+            // Spending the signal and spending the cycle it pays for are one transition:
+            // a crash between them would leave the signal Consumed and the step Failed,
+            // and the next replay — which only looks for an unconsumed signal — would park
+            // again for a delivery nobody owes. Starting the step stays outside.
+            $this->connection()->transaction(function () use ($signal, $step, $sequence): void {
+                app(SignalRecorder::class)->consumeSignal($this->runtime->run(), $signal, $sequence);
 
-            app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt());
-        });
+                if (! app(ActionRecorder::class)->retryAction(
+                    $step,
+                    $this->resolvedExpiresAt(),
+                    publish: false,
+                )) {
+                    // The row moved on under this pass. Rolling back is what keeps the
+                    // delivery: a consumed signal with no cycle behind it would pay for
+                    // a retry nobody ran, and no later pass looks for it again.
+                    throw new FencedWriteLost;
+                }
+            });
+        } catch (FencedWriteLost) {
+            // Nothing was written, so the row still says what it says. Wait for the pass
+            // that did move it, and resolve from the row as it stands next time.
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
+
+        if (! $this->retrySurvivedCommit($step)) {
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
+
+        app(ActionRecorder::class)->publishRetried($step);
 
         $this->startRetriedStep($step, $sequence);
     }
@@ -780,7 +862,10 @@ class ActionBuilder
      */
     private function retryNow(ActionRun $step, int $sequence): never
     {
-        app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt());
+        if (! app(ActionRecorder::class)->retryAction($step, $this->resolvedExpiresAt())) {
+            // Dispatching now would send a job for a row this pass did not rewind.
+            app(FlowSuspender::class)->suspend('action', $sequence);
+        }
 
         $this->startRetriedStep($step, $sequence);
     }
@@ -849,7 +934,13 @@ class ActionBuilder
         }
 
         if (! $collecting && $step->status !== ActionStatus::OptionalFailed) {
-            app(ActionRecorder::class)->optionalFail($step);
+            if (! app(ActionRecorder::class)->optionalFail($step)) {
+                // The give-up did not happen, so the fallback that stands for it is not
+                // this pass's to hand back: returning it would carry the replay past a
+                // step nothing resolved and — when what refused the write was the run
+                // ending — into work no settlement will ever close.
+                app(FlowSuspender::class)->suspend('action', $sequence);
+            }
         }
 
         return $this->resolveOptionalFailed($step, $sequence);

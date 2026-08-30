@@ -220,7 +220,7 @@ journal for them — `AnomalyLog`, alongside the `flow_events` business history:
 ],
 ```
 
-Five reason codes to grep for. The first four carry the run id, row id, sequence and class; the fifth
+Six reason codes to grep for. All but one carry the run id, row id, sequence and class; `expiry_failed`
 is about a run rather than a row, and carries the run id, its workflow class and the throw:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
@@ -230,12 +230,19 @@ is about a run rather than a row, and carries the run id, its workflow class and
   attempt counts, the claimed one and the one the row actually holds.
 - **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
   the next. The line carries the throw. The run stays overdue and is tried again on the next sweep.
+- **`write_refused`** — a write to a step was refused because the row had moved on since it was read, or the run under
+  it had finished. The line carries a `site` naming which write it was.
 
 Raise the level to `warning` to surface them in your alerting. A steady stream of the first three points to a queue
 timeout tuned shorter than the work takes, or to locks being off.
 
-The last two are not races and do not come from tuning. `expiry_failed` means the run's own `handle()` threw while the
-sweep was replaying it to find the compensations — a workflow reading something that has since gone, most often. Until
+`write_refused` is a race like the first three, and the ordinary one: terminal settlement runs once, so anything
+written to a step afterwards would stand for ever with nothing left to notice it. A steady stream of it on runs nobody
+cancelled points the same way as `claim_lost` — a queue timeout tuned shorter than the work takes.
+
+The remaining two are not races and do not come from tuning. `expiry_failed` means the run's own `handle()` threw
+while the sweep was replaying it to find the compensations — a workflow reading something that has since gone, most
+often. Until
 that is fixed the run cannot be expired, but nothing else in the sweep is held up by it.
 
 `claim_not_committed` is the other one: something ran inside the engine's own transaction and left it

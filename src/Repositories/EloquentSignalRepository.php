@@ -4,11 +4,9 @@ namespace DiscoveryUkraine\SagaLaraFlow\Repositories;
 
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
-use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 
 class EloquentSignalRepository implements SignalRepository
@@ -70,22 +68,10 @@ class EloquentSignalRepository implements SignalRepository
             ->where('status', SignalStatus::Waiting)
             ->whereNotNull('timeout_at')
             ->where('timeout_at', '<=', Carbon::now())
-            ->whereHas('flowRun', $this->liveRun(...))
+            ->whereHas('flowRun', FlowRun::live(...))
             ->orderBy('timeout_at')
             ->limit($limit)
             ->get();
-    }
-
-    /**
-     * Never hand the sweep a wait whose run has already finished. Terminal settlement
-     * leaves only rows written before it existed, but timeoutSignal() rejects them with
-     * no counter to hold them off, so one would sit at the head of every batch for ever.
-     *
-     * @param  Builder<FlowRun>  $query
-     */
-    private function liveRun(Builder $query): void
-    {
-        $query->whereNotIn('status', FlowStatus::terminal());
     }
 
     /**
