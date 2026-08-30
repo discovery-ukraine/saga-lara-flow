@@ -14,8 +14,8 @@ use Throwable;
  * outcome write refused because the row had changed hands, a step write refused because
  * the row had moved on since it was read, a batch already closed by a duplicate before
  * its own job reported, a run transition refused because the row had moved on, a retry
- * policy that threw, an overdue run whose rollback could not be
- * planned. Most are ordinary consequences of at-least-once delivery and of nothing
+ * policy that threw, a rejection notice no listener could be given, an overdue run
+ * whose rollback could not be planned. Most are ordinary consequences of at-least-once delivery and of nothing
  * serialising an operator against a worker; the claim that did not commit and the last
  * two are defects in the caller's own code, journalled here for the same reason as the
  * rest — the engine carried on, so nothing else records it.
@@ -46,6 +46,8 @@ final readonly class AnomalyLog
     public const string REASON_EXPIRY_FAILED = 'expiry_failed';
 
     public const string REASON_WRITE_REFUSED = 'write_refused';
+
+    public const string REASON_REJECTION_UNDELIVERED = 'rejection_undelivered';
 
     /**
      * PSR-3's eight, the only strings a PSR logger accepts. A value outside this set

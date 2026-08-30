@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Events\CompensationCompleted;
 use DiscoveryUkraine\SagaLaraFlow\Events\CompensationFailed;
+use DiscoveryUkraine\SagaLaraFlow\Events\CompensationOutcomeRejected;
 use DiscoveryUkraine\SagaLaraFlow\Events\CompensationStarted;
 use DiscoveryUkraine\SagaLaraFlow\Events\CompensationStepStarted;
 use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
@@ -217,7 +218,14 @@ final readonly class CompensationRecorder
         $compensation->result = $this->serializer->serialize($result);
         $compensation->finished_at = Carbon::now();
 
-        if (! $this->writeOutcome($compensation, $claimedAttempts, FlowEventType::CompensationCompleted)) {
+        $written = $this->writeOutcome(
+            $compensation,
+            $claimedAttempts,
+            FlowEventType::CompensationCompleted,
+            result: $compensation->result,
+        );
+
+        if (! $written) {
             return false;
         }
 
@@ -242,7 +250,14 @@ final readonly class CompensationRecorder
         $compensation->exception = $exceptionArray;
         $compensation->finished_at = Carbon::now();
 
-        if (! $this->writeOutcome($compensation, $claimedAttempts, FlowEventType::CompensationFailed)) {
+        $written = $this->writeOutcome(
+            $compensation,
+            $claimedAttempts,
+            FlowEventType::CompensationFailed,
+            exception: $exception,
+        );
+
+        if (! $written) {
             return false;
         }
 
@@ -269,7 +284,9 @@ final readonly class CompensationRecorder
     private function writeOutcome(
         CompensationRun $compensation,
         int $claimedAttempts,
-        FlowEventType $outcome
+        FlowEventType $outcome,
+        mixed $result = null,
+        ?Throwable $exception = null,
     ): bool {
         $written = $compensation->newQuery()
             ->whereKey($compensation->getKey())
@@ -288,12 +305,42 @@ final readonly class CompensationRecorder
                 'claimed_attempts' => $claimedAttempts,
             ]);
 
+            $compensation->discardChanges();
+
+            $this->announceRejection(
+                new CompensationOutcomeRejected($compensation, $outcome, $result, $exception),
+                $compensation,
+            );
+
             return false;
         }
 
         $compensation->syncOriginal();
 
         return true;
+    }
+
+    /**
+     * @see ActionRecorder::announceRejection()
+     */
+    private function announceRejection(
+        CompensationOutcomeRejected $rejection,
+        CompensationRun $compensation
+    ): void {
+        try {
+            event($rejection);
+        } catch (Throwable $undelivered) {
+            $this->anomalies->log(AnomalyLog::REASON_REJECTION_UNDELIVERED, [
+                'entity' => 'compensation',
+                'flow_run_id' => $compensation->flow_run_id,
+                'compensation_run_id' => $compensation->id,
+                'sequence' => $compensation->sequence,
+                'compensation_class' => $compensation->compensation_class,
+                'outcome' => $rejection->outcome->value,
+                'exception' => $undelivered::class,
+                'message' => $undelivered->getMessage(),
+            ]);
+        }
     }
 
     private function nextSequence(FlowRun $flowRun): int

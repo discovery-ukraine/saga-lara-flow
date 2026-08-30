@@ -710,6 +710,13 @@ Event::listen(FlowFailed::class, function (FlowFailed $event): void {
 `FlowCancelled` carries an optional `?string $reason`, populated when you call
 `$handle->cancel('reason here')`.
 
+Two events have no `flow_events` counterpart. A worker that finishes a step whose row has moved on
+has its outcome refused, and `ActionOutcomeRejected` / `CompensationOutcomeRejected` carry what it
+produced — the value the step returned, in the form the row would have stored, or the throw the
+engine deliberately does not rethrow. The work is done and nothing local records it, so the payload
+reaches somewhere you chose rather than nowhere. See
+[Events](https://sagalaraflow.dev/events#refused-outcome).
+
 ## Artisan commands
 
 | Command                                                          | Purpose                                                          |

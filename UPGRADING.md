@@ -81,7 +81,8 @@ of Eloquent hooks.
 Enabling reclaim lets a second worker take over a row whose first worker may be slow rather than
 dead, so both can reach the end of the same step. The outcome writes are therefore fenced against
 the claim that produced them (via `attempts`, which only the claim increments): an executor that has
-been superseded updates no rows, raises no event, and its job does not fail. In practice this means
+been superseded updates no rows, records no history, and its job does not fail — it now hands what
+it produced to `ActionOutcomeRejected` instead of dropping it (item 23). In practice this means
 a **recorded success is never demoted** — a straggler that fails after the live worker succeeded can
 no longer flip the step to `Failed` and send the saga rolling back over work that actually went
 through.
@@ -495,6 +496,15 @@ The other thing to check: those five no longer call `save()`, so they raise no E
 — an observer on your `ActionRun` model stops seeing them. Three publish a package event instead,
 and settling a parked step and recording the queue's exhausted attempts publish none, by design. See
 [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery).
+
+### 23. New: a refused outcome hands its payload to a listener
+
+A worker that finishes a step whose row has moved on has its outcome refused, and until now what it
+produced went nowhere. `ActionOutcomeRejected` and `CompensationOutcomeRejected` now carry it: the
+value the step returned in the form the row would have stored, or the throw the engine deliberately
+does not rethrow. Nothing is stored and nothing about the run changes. A listener that throws is
+journalled as `rejection_undelivered` rather than failing the job, since this path must stay quiet.
+See [Events](https://sagalaraflow.dev/events#refused-outcome).
 
 ### Recommended while you are here
 

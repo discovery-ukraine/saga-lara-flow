@@ -11,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionAwaitingRetry;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionCompleted;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
+use DiscoveryUkraine\SagaLaraFlow\Events\ActionOutcomeRejected;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionRedispatched;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionRetried;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionStarted;
@@ -310,7 +311,7 @@ final readonly class ActionRecorder
         $actionRun->result = $this->serializer->serialize($result);
         $actionRun->finished_at = Carbon::now();
 
-        if (! $this->writeOutcome($actionRun, $claimedAttempts, FlowEventType::ActionCompleted)) {
+        if (! $this->writeOutcome($actionRun, $claimedAttempts, FlowEventType::ActionCompleted, result: $actionRun->result)) {
             return false;
         }
 
@@ -338,7 +339,7 @@ final readonly class ActionRecorder
         $actionRun->exception = $exceptionArray;
         $actionRun->finished_at = Carbon::now();
 
-        if (! $this->writeOutcome($actionRun, $claimedAttempts, FlowEventType::ActionFailed)) {
+        if (! $this->writeOutcome($actionRun, $claimedAttempts, FlowEventType::ActionFailed, exception: $exception)) {
             return false;
         }
 
@@ -370,8 +371,13 @@ final readonly class ActionRecorder
      * late worker would overwrite that Expired and leave the run carrying both
      * action.expired and action.completed.
      */
-    private function writeOutcome(ActionRun $actionRun, int $claimedAttempts, FlowEventType $outcome): bool
-    {
+    private function writeOutcome(
+        ActionRun $actionRun,
+        int $claimedAttempts,
+        FlowEventType $outcome,
+        mixed $result = null,
+        ?Throwable $exception = null,
+    ): bool {
         $written = $actionRun->newQuery()
             ->whereKey($actionRun->getKey())
             ->where('attempts', $claimedAttempts)
@@ -389,12 +395,49 @@ final readonly class ActionRecorder
                 'claimed_attempts' => $claimedAttempts,
             ]);
 
+            // The anomaly line names the loss without carrying what was lost: it goes
+            // to the application's default channel, which nobody chose for business
+            // payloads. The event hands them to the host instead, once the model reads
+            // as the row does rather than as the refused outcome.
+            $actionRun->discardChanges();
+
+            $this->announceRejection(
+                new ActionOutcomeRejected($actionRun, $outcome, $result, $exception),
+                $actionRun,
+            );
+
             return false;
         }
 
         $actionRun->syncOriginal();
 
         return true;
+    }
+
+    /**
+     * Dispatch a rejection notice without letting it fail the job. This branch is
+     * deliberately quiet — ActionDispatcher reports Superseded rather than rethrowing,
+     * because a job that fails here runs failed(), and that writes queue bookkeeping
+     * into a row this worker no longer owns. A listener that throws, or a queued one
+     * the payload cannot be serialised into, must not reopen that path; it is
+     * journalled the way a retry policy that throws already is.
+     */
+    private function announceRejection(ActionOutcomeRejected $rejection, ActionRun $actionRun): void
+    {
+        try {
+            event($rejection);
+        } catch (Throwable $undelivered) {
+            $this->anomalies->log(AnomalyLog::REASON_REJECTION_UNDELIVERED, [
+                'entity' => 'action',
+                'flow_run_id' => $actionRun->flow_run_id,
+                'action_run_id' => $actionRun->id,
+                'sequence' => $actionRun->sequence,
+                'action_class' => $actionRun->action_class,
+                'outcome' => $rejection->outcome->value,
+                'exception' => $undelivered::class,
+                'message' => $undelivered->getMessage(),
+            ]);
+        }
     }
 
     /**
