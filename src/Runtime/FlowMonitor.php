@@ -124,7 +124,13 @@ final readonly class FlowMonitor
 
             return true;
         } catch (Throwable $failure) {
-            $current = $this->flows->find($run->id)?->status;
+            // From the writer: this read decides whether the throw is absorbed, and a
+            // lagging replica would answer with the status the transition replaced.
+            /** @var ?FlowStatus $current */
+            $current = $run->newQuery()
+                ->useWritePdo()
+                ->whereKey($run->getKey())
+                ->value('status');
 
             if ($current !== FlowStatus::Running && $current !== FlowStatus::Waiting) {
                 throw $failure;
