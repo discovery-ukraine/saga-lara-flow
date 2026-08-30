@@ -7,12 +7,14 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\StepExecution;
 use DiscoveryUkraine\SagaLaraFlow\Events\ActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowEvent;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
@@ -551,4 +553,31 @@ it('stops the pass instead of scheduling more work when a give-up is refused', f
         ->and($run->actions()->count())->toBe(1)
         ->and($run->actions()->first()->status)->toBe(ActionStatus::Failed)
         ->and($run->events()->where('type', 'action.scheduled')->count())->toBe(1);
+});
+
+it('refuses the claim on a step whose run has already finished', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed);
+
+    $run->markCancelled();
+
+    // The redelivered job finds the row exactly as its own last attempt left it.
+    expect($step->fresh()->status)->toBe(ActionStatus::Failed);
+
+    $execution = app(ActionDispatcher::class)->execute($step->fresh());
+
+    expect($execution)->toBe(StepExecution::ClaimLost)
+        // The point of the fence: the card is not charged a second time under a run
+        // whose rollback has already been planned and reported.
+        ->and(FlakyPaymentAction::$calls)->toBe(0)
+        ->and($step->fresh()->status)->toBe(ActionStatus::Failed);
+});
+
+it('claims a step normally while the run is still live', function () {
+    $run = fencedFlowRun();
+    $step = fencedStep($run, ActionStatus::Failed);
+
+    expect(app(ActionDispatcher::class)->execute($step))->toBe(StepExecution::Executed)
+        ->and(FlakyPaymentAction::$calls)->toBe(1)
+        ->and($step->fresh()->status)->toBe(ActionStatus::Completed);
 });

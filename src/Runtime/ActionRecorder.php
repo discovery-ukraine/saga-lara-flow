@@ -160,6 +160,11 @@ final readonly class ActionRecorder
      * stale-cycle check into this same atomic write so a cycle change landing after
      * the row was read still loses the claim. Null imposes no constraint.
      *
+     * The run's liveness is folded in the same way, and for a reason the row cannot see
+     * on its own: terminal settlement leaves a Failed row — the state between two of the
+     * queue's own native tries — exactly as it found it, so without this a job already on
+     * the queue when the run was cancelled still claims it and runs the business logic.
+     *
      * The claim and its two records share one transaction: a listener throwing on
      * ActionStarted would otherwise leave the row Running with nothing executing it.
      * A commit is not proof the claim survived one, so the row is read back afterwards
@@ -180,6 +185,7 @@ final readonly class ActionRecorder
 
                 $claimed = $actionRun->newQuery()
                     ->whereKey($actionRun->getKey())
+                    ->whereHas('flowRun', FlowRun::live(...))
                     ->when(
                         $expectedRetryGeneration !== null,
                         fn ($query) => $query->where('retry_signal_attempts', $expectedRetryGeneration),
