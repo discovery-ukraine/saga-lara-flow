@@ -161,11 +161,7 @@ final readonly class FlowMonitor
     {
         $now = Carbon::now();
 
-        $recorded = (int) $run->newQuery()->toBase()->useWritePdo()
-            ->where($run->getKeyName(), $run->getKey())
-            ->value('expiry_attempts');
-
-        $attempts = $recorded + 1;
+        $attempts = $this->recordedAttempts($run) + 1;
 
         $written = $run->newQuery()->toBase()
             ->where($run->getKeyName(), $run->getKey())
@@ -178,7 +174,16 @@ final readonly class FlowMonitor
                 'expiry_available_at' => $now->copy()->addSeconds($this->backoff($attempts)),
             ]);
 
-        $run->expiry_attempts = $written === 1 ? $attempts : $recorded;
+        // Refused: the sweep that got there first holds the count this run is now on,
+        // and the journal line below has to name that one rather than the stale read.
+        $run->expiry_attempts = $written === 1 ? $attempts : $this->recordedAttempts($run);
+    }
+
+    private function recordedAttempts(FlowRun $run): int
+    {
+        return (int) $run->newQuery()->toBase()->useWritePdo()
+            ->where($run->getKeyName(), $run->getKey())
+            ->value('expiry_attempts');
     }
 
     private function backoff(int $attempts): int

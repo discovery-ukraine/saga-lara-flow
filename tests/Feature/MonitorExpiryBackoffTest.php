@@ -234,6 +234,7 @@ function betweenTheReadAndTheWrite(callable $competitor): void
 
 it('refuses a hold-off the row moved under', function () {
     useDatabaseQueue();
+    logToFile($path = sys_get_temp_dir().'/saga-loser-'.bin2hex(random_bytes(6)).'.log');
 
     $stuck = overdueUnplannableRun(120);
     VanishedArgumentWorkflow::$label = null;
@@ -251,7 +252,10 @@ it('refuses a hold-off the row moved under', function () {
     $row = DB::connection('testing')->table($table)->where('id', $stuck)->first();
 
     expect((int) $row->expiry_attempts)->toBe(4)
-        ->and((int) now()->diffInSeconds($row->expiry_available_at, absolute: false))->toBeGreaterThan(3500);
+        ->and((int) now()->diffInSeconds($row->expiry_available_at, absolute: false))->toBeGreaterThan(3500)
+        // The line has to name the count the run is actually on, not the one this
+        // pass read before losing.
+        ->and(is_file($path) ? (string) file_get_contents($path) : '')->toContain('"expiry_attempts":4');
 });
 
 it('refuses a hold-off when only the window was taken', function () {
