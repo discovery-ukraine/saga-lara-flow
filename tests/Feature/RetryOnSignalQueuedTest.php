@@ -36,7 +36,6 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryOnSignalWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RetryPolicyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UnreliablePaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UnreliableRetryOnSignalWorkflow;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
@@ -52,17 +51,6 @@ beforeEach(function () {
     RecordingRetryPolicy::reset();
     CompensationLog::reset();
 });
-
-/**
- * Process exactly one queued job, so a test can inspect the run between two steps
- * of the async path instead of after the whole queue has drained.
- */
-function workOneJob(): void
-{
-    // --sleep=0: an empty queue would otherwise cost the worker's default three
-    // seconds, and these helpers are called in loops.
-    Artisan::call('queue:work', ['--once' => true, '--sleep' => 0, '--no-interaction' => true]);
-}
 
 /**
  * Drive the queue one job at a time until the step at $sequence satisfies $ready, so

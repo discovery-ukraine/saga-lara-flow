@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use Closure;
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
@@ -18,6 +19,7 @@ use DiscoveryUkraine\SagaLaraFlow\Events\ActionStarted;
 use DiscoveryUkraine\SagaLaraFlow\Events\OptionalActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -161,10 +163,12 @@ final readonly class ActionRecorder
      * stale-cycle check into this same atomic write so a cycle change landing after
      * the row was read still loses the claim. Null imposes no constraint.
      *
-     * The run's liveness is folded in the same way, and for a reason the row cannot see
+     * The run's own state is folded in the same way, and for a reason the row cannot see
      * on its own: terminal settlement leaves a Failed row — the state between two of the
      * queue's own native tries — exactly as it found it, so without this a job already on
      * the queue when the run was cancelled still claims it and runs the business logic.
+     * A run rolling back is fenced against too, and not because it has finished: it has
+     * already planned the stack it will undo, and a step starting now lands outside it.
      *
      * The claim and its two records share one transaction: a listener throwing on
      * ActionStarted would otherwise leave the row Running with nothing executing it.
@@ -186,7 +190,7 @@ final readonly class ActionRecorder
 
                 $claimed = $actionRun->newQuery()
                     ->whereKey($actionRun->getKey())
-                    ->whereHas('flowRun', FlowRun::live(...))
+                    ->whereHas('flowRun', FlowRun::mayStartWork(...))
                     ->when(
                         $expectedRetryGeneration !== null,
                         fn ($query) => $query->where('retry_signal_attempts', $expectedRetryGeneration),
@@ -458,14 +462,25 @@ final readonly class ActionRecorder
      * matching row always changes — which keeps the count off the zero MySQL reports for
      * an update that changed nothing and FlowStateMachine::write() has to disambiguate.
      *
+     * $runFence is which boundary the run is held to, because the callers do not all ask
+     * the same thing: writing down what a step already did needs a run that has not
+     * finished, while a caller that starts the step again needs one that may still start
+     * work at all.
+     *
      * @param  array<string, mixed|list<mixed>>  $expected
      * @param  array<string, mixed>  $context
+     * @param  (Closure(Builder<FlowRun>): void)|null  $runFence
      */
-    private function writeFenced(ActionRun $actionRun, array $expected, string $site, array $context = []): bool
-    {
+    private function writeFenced(
+        ActionRun $actionRun,
+        array $expected,
+        string $site,
+        array $context = [],
+        ?Closure $runFence = null,
+    ): bool {
         $query = $actionRun->newQuery()
             ->whereKey($actionRun->getKey())
-            ->whereHas('flowRun', FlowRun::live(...));
+            ->whereHas('flowRun', $runFence ?? FlowRun::live(...));
 
         foreach ($expected as $column => $value) {
             match (true) {
@@ -684,10 +699,13 @@ final readonly class ActionRecorder
      * `attempts` is deliberately untouched — it counts queue attempts within one
      * execution — and the previous exception stands until the new attempt overwrites it.
      *
-     * Fenced on the status and the cycle the caller read. Terminal settlement closes a
-     * parked step as Cancelled, and rewinding that to Pending would put a settled step
-     * back into the run's open work — and back into the doctor's reach — under a run
-     * that has already finished.
+     * Fenced on the status and the cycle the caller read, and on the run being one that
+     * may still start work. Terminal settlement closes a parked step as Cancelled, and
+     * rewinding that to Pending would put a settled step back into the run's open work —
+     * and back into the doctor's reach — under a run that has already finished. A run
+     * rolling back refuses it for the nearer reason: this spends the delivery and a unit
+     * of the budget and then sends a job, which is a cycle beginning, not a record of one
+     * that ran.
      */
     public function retryAction(
         ActionRun $actionRun,
@@ -725,7 +743,7 @@ final readonly class ActionRecorder
 
         $actionRun->expires_at = $deadline === null ? null : Carbon::instance($deadline);
 
-        if (! $this->writeFenced($actionRun, $asRead, 'retry_action')) {
+        if (! $this->writeFenced($actionRun, $asRead, 'retry_action', runFence: FlowRun::mayStartWork(...))) {
             return false;
         }
 

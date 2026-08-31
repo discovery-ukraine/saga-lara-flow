@@ -111,11 +111,12 @@ class CancelChildWorkflowJob implements ShouldQueue
 
             if ($this->withCompensation) {
                 // The plan that is acted on is made here, with the child fenced:
-                // Cancelling is a state no drive() can leave, so nothing can complete
-                // another compensatable step under it. A plan made before the fence
-                // can go stale — the transition guard reads status alone, so a child
-                // resumed and re-parked in between still matches — and unwinding it
-                // would leave that step standing under a run reported as rolled back.
+                // Cancelling is a state no drive() can leave and no step can be claimed
+                // under, so nothing can complete another compensatable step. A plan made
+                // before the fence can go stale — the transition guard reads status
+                // alone, so a child resumed and re-parked in between still matches — and
+                // unwinding it would leave that step standing under a run reported as
+                // rolled back.
                 $entries = $executor->collectCompensations($child);
 
                 // Roll back inline (Sync), inside THIS job, rather than dispatching another

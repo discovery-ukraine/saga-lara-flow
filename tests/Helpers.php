@@ -82,6 +82,23 @@ if (! function_exists('useDatabaseQueue')) {
     }
 
     /**
+     * Process exactly one queued job, so a test can inspect the run between two steps
+     * of the async path instead of after the whole queue has drained.
+     */
+    function workOneJob(): void
+    {
+        // The flags carry the same weight as in drainQueue(): --sleep=0 so an empty
+        // queue costs nothing, --memory so the suite's own footprint cannot stop the
+        // worker silently.
+        Artisan::call('queue:work', [
+            '--once' => true,
+            '--sleep' => 0,
+            '--memory' => 4096,
+            '--no-interaction' => true,
+        ]);
+    }
+
+    /**
      * Snapshot of the durable state a run leaves behind, for cross-mode comparison.
      *
      * @return array<string, mixed>
