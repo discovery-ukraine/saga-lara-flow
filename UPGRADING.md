@@ -478,7 +478,7 @@ See [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery).
 Planning a manual rollback replays `handle()` to find the compensations. That replay no longer
 settles a spent optional step (`action.optional_failed`, with its `OptionalActionFailed` event) and
 no longer schedules a parallel block it had only reached to read. Nor is every throw the end of the
-stack now: four classes end it, and an unexpected throw surfaces out of `compensate()`, run
+stack now: six classes end it, and an unexpected throw surfaces out of `compensate()`, run
 untouched, rather than rolling back a truncated plan and reporting it complete.
 
 Nothing to do unless a listener expected `OptionalActionFailed` during `compensate()`. The expiry
@@ -513,6 +513,16 @@ kept its place in it — enough of them at the head and the runs behind were nev
 run is now held off for a widening window (`monitor.expiration.backoff`, 60s doubling to an hour)
 and counted in two new `flow_runs` columns, so the page moves on and the journal stops repeating
 itself. There is no attempt cap: the cause can be temporary. Run `php artisan migrate`.
+
+### 25. A rollback no longer stops at a child that already finished
+
+Planning a rollback treated any awaited child that was not `Completed` as the live frontier, so a
+parent that carried on past a failed one under `->continueParentOnFailure()` rolled back only the
+steps before it — and `compensate()` reported that partial unwind as complete. A terminal child is
+now read the way an ordinary replay reads it, and the two throws that follow from it end the plan
+like a recorded step failure does. Rollbacks that were silently short are now whole, so a
+compensation you never saw run may start running. See
+[Child workflows](https://sagalaraflow.dev/child-workflows).
 
 ### Recommended while you are here
 
