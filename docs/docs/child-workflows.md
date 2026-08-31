@@ -59,3 +59,8 @@ still fails and compensates.
 
 To let the parent proceed regardless of the child's outcome, call `->continueParentOnFailure()` — the
 child's failure is then swallowed rather than thrown.
+
+A parent that carries on this way keeps collecting compensations, and a later rollback runs them: a
+child that has already finished is history the plan reads, not a frontier it stops at. A child still
+in flight is a frontier, so a rollback planned while one runs covers only the steps before it — the
+child rolls itself back through its own [close policy](#close-policies) instead.

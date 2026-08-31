@@ -10,6 +10,8 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowCancelledException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ExpirationNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
@@ -148,9 +150,10 @@ class FlowExecutor
      * so completed steps register their compensations and the replay stops at the
      * live frontier. Every seam is guarded, so the pass starts no work and settles
      * no step; a workflow's own tag() calls still rewrite their rows, as they do on
-     * every replay. Used by FlowHandle::compensate(). A throw the
-     * replay did not expect is a fault, not a frontier, and leaves rather than
-     * shortening the stack behind the caller's back.
+     * every replay. Planned from three places — compensate(), the expiration sweep and
+     * a parent closing a child — so a throw the replay did not expect is a fault, not a
+     * frontier: it leaves rather than shortening the stack behind the caller's back,
+     * and the two callers the operator did not ask for absorb it where it lands.
      *
      * @return list<CompensationEntry>
      *
@@ -189,11 +192,12 @@ class FlowExecutor
                 $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
 
                 $this->callWithDependencies($workflow, 'handle', $arguments);
-            } catch (InternalFlowControl|ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException) {
-                // The four classes that end a replay: the frontier, and a step failure,
-                // an expiry or a signal timeout already recorded in this run's history.
-                // Membership is all this tests — a caller raising one of these itself
-                // is read as an ending too, which is why the set is kept small.
+            } catch (InternalFlowControl|ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowCancelledException) {
+                // The six classes that end a replay: the frontier, and a step failure,
+                // an expiry, a signal timeout or an awaited child's terminal outcome
+                // already recorded in this run's history. Membership is all this tests —
+                // a caller raising one of these itself is read as an ending too, which
+                // is why the set only grows for a throw the engine itself replays.
                 //
                 // Nothing else ends it. A throw from a builder argument, a workflow
                 // helper or anything else the replay runs is a fault, and swallowing it

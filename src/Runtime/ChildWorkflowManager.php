@@ -67,18 +67,16 @@ readonly class ChildWorkflowManager
 
         $link = $this->guard->expectChild($parent->id, $sequence, $workflowClass);
 
-        // Compensation-only planning: replay a completed child, otherwise stop here
-        // (an unfinished child is the live frontier).
-        if ($runtime->isCollecting()) {
-            if ($link !== null && $link->child->status === FlowStatus::Completed) {
-                return $this->serializer->deserialize($link->child->result);
-            }
-
-            $this->suspender->suspend('child', $sequence);
-        }
-
+        // A recorded child resolves the same way for both replays: what it already
+        // came to is history, and a rollback has to be planned past it.
         if ($link !== null) {
             return $this->resolve($link, $continueParentOnFailure, $sequence);
+        }
+
+        // Compensation-only planning stops at a child this run never started: that is
+        // the live frontier, and the pass must not start one to find out.
+        if ($runtime->isCollecting()) {
+            $this->suspender->suspend('child', $sequence);
         }
 
         // First encounter: create and start the child, then suspend the parent.
@@ -120,6 +118,11 @@ readonly class ChildWorkflowManager
     }
 
     /**
+     * Resolve a child already recorded against this ordinal. A terminal child has an
+     * answer either way — a result, a failure the parent may be told to survive, or a
+     * cancellation it cannot — and only one still in flight is a wait. The compensation
+     * pass runs through here too, where a suspension would end the stack short.
+     *
      * @throws FlowSuspended
      * @throws ChildWorkflowFailedException
      * @throws ChildWorkflowCancelledException
