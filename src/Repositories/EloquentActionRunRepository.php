@@ -30,6 +30,13 @@ class EloquentActionRunRepository implements ActionRunRepository
             ->get();
     }
 
+    /**
+     * Repair sends another job, so the run has to be one that may still start work, not
+     * merely one that has not finished. A run rolling back would have the rule refuse
+     * the row anyway — after it had taken a slot in the batch and before anything held
+     * it off, so ordered oldest-first and never changing it would sit at the head of
+     * every pass and starve the runs behind it.
+     */
     public function dueForRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable
     {
         $now = Carbon::now();
@@ -44,7 +51,7 @@ class EloquentActionRunRepository implements ActionRunRepository
                     ->whereNull('repair_available_at')
                     ->orWhere('repair_available_at', '<=', $now);
             })
-            ->whereHas('flowRun', FlowRun::live(...))
+            ->whereHas('flowRun', FlowRun::mayStartWork(...))
             ->orderBy('created_at')
             ->limit($limit)
             ->get();
@@ -55,7 +62,8 @@ class EloquentActionRunRepository implements ActionRunRepository
      * so staleness is one indexed comparison — the same shape as dueForExpiration().
      * Ordering by the filtered column is what makes the limit safe: a pass can only be
      * filled with rows that are actually due, so a backlog of not-yet-stale rows can
-     * never crowd out stale ones.
+     * never crowd out stale ones. It sends a job too, so it asks dueForRepair()'s
+     * narrower question about the run.
      */
     public function dueForStaleRunningRepair(int $limit, int $maxAttempts): iterable
     {
@@ -72,7 +80,7 @@ class EloquentActionRunRepository implements ActionRunRepository
                     ->whereNull('repair_available_at')
                     ->orWhere('repair_available_at', '<=', $now);
             })
-            ->whereHas('flowRun', FlowRun::live(...))
+            ->whereHas('flowRun', FlowRun::mayStartWork(...))
             ->orderBy('reclaim_stale_at')
             ->limit($limit)
             ->get();

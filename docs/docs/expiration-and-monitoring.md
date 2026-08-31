@@ -142,7 +142,9 @@ Every parameter:
   `monitor.queue_looping`). When `enabled`, the pass runs at most once per `throttle_seconds`.
 
 The doctor only ever re-dispatches existing jobs or re-wakes flows — replay decides the rest, so it never creates
-duplicate work or mutates a business result.
+duplicate work or mutates a business result. It also leaves a run that is rolling back (`Cancelling`) entirely alone:
+another job for a step under it would complete outside the stack that rollback already planned. See
+[statuses](./statuses.md).
 
 :::tip Turn it on in production
 Any step whose job is committed and then dispatched can lose that job to a dying process — including a step restarted

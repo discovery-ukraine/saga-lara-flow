@@ -25,6 +25,14 @@ Every row the engine writes carries a status from a backed enum, so a host can f
 `Completed`, `Failed`, `Cancelled` and `Expired` are terminal: a run never leaves them, and it
 refuses signals and cancellation once there.
 
+`Cancelling` is not terminal, but no **step** starts under it. A rollback plans the stack it will
+undo once, so a step that began afterwards would finish outside that plan — its compensation in no
+stack, never run, under a run reporting a complete unwind. A job already queued for such a step is
+refused when it tries to claim the row, a signal-gated retry will not start another cycle, and the
+[doctor](./expiration-and-monitoring.md#repair-the-doctor) sends no replacement. Settling what
+already started is a different question and carries on as usual: a step past its own deadline is
+still expired, and the rollback's own compensations still run.
+
 ## `ActionStatus` — one step
 
 | Case | Meaning |
@@ -72,7 +80,8 @@ fully unwind — and it is recorded on the run's own `exception` as
 `CompensationUnfinishedException`. See [sagas & compensations](./sagas-and-compensation.md).
 
 A step that is `Cancelled` is inert: a late job cannot claim it, and no monitor or repair sweep
-selects it.
+selects it. A step under a run that is `Cancelling` is inert in the narrower sense above — no job
+claims it and no repair sends another — while the deadline sweeps still settle it.
 
 ## `CompensationStatus` and `ChildStatus`
 

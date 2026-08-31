@@ -524,6 +524,17 @@ like a recorded step failure does. Rollbacks that were silently short are now wh
 compensation you never saw run may start running. See
 [Child workflows](https://sagalaraflow.dev/child-workflows).
 
+### 26. No step starts under a run that is rolling back
+
+A queued step could still be claimed and executed while its run was in `Cancelling` — a job already
+on the queue when the rollback began, one the doctor sent after it, or a signal-gated retry starting
+a fresh cycle. The step then completed after the stack to undo had been planned, so its compensation
+was in no plan and never ran, over a run reporting a complete unwind. Those four seams now ask
+whether the run may start new work, which `Cancelling` is not; settling a row already started is
+unchanged, so an overdue step is still expired and the rollback's own compensations still run. A
+step refused this way is left as the run's terminal settlement finds it. See
+[Statuses](https://sagalaraflow.dev/statuses).
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

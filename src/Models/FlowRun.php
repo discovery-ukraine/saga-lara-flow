@@ -68,19 +68,35 @@ class FlowRun extends Model
     }
 
     /**
-     * Constrain a flow_runs query to runs that have not finished. The engine reads
-     * this in three places — the two sweeps that must not pick up work belonging to a
-     * finished run, and the fenced action writes that must not move a settled row —
-     * and they have to agree, because a run counted live by one and finished by
-     * another is exactly the gap a leftover row survives in.
+     * Constrain a flow_runs query to runs that have not finished. Three places read it —
+     * the two deadline sweeps, which must not settle work belonging to a finished run,
+     * and the fenced action writes, which must not move a settled row — and they have to
+     * agree, because a run counted live by one and finished by another is exactly the gap
+     * a leftover row survives in.
      *
-     * A run mid-rollback is still live here: Cancelling is not terminal.
+     * A run mid-rollback is still live here: Cancelling is not terminal, and settling
+     * its rows is exactly what a rollback needs. Whether work may BEGIN is the other
+     * question — mayStartWork() below.
      *
      * @param  Builder<FlowRun>  $query
      */
     public static function live(Builder $query): void
     {
         $query->whereNotIn('status', FlowStatus::terminal());
+    }
+
+    /**
+     * Constrain a flow_runs query to runs that may still start new work: live(), minus
+     * the run that is rolling back. Asked wherever work BEGINS — the action claim, the
+     * two repair scans that send another job, and the signal-gated retry that spends a
+     * delivery to start a fresh cycle — and never where a row already started is being
+     * settled or written down.
+     *
+     * @param  Builder<FlowRun>  $query
+     */
+    public static function mayStartWork(Builder $query): void
+    {
+        $query->whereIn('status', FlowStatus::mayStartWork());
     }
 
     /**

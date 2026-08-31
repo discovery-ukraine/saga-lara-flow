@@ -102,9 +102,17 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
 
 ### Status boundaries
 
-`FlowStatus::terminal()` and `FlowStatus::signalable()` are different sets and are not
-interchangeable. `Cancelling` is **not** terminal — it is a run mid-rollback. Swapping one boundary
-for the other changes public behaviour and needs its own exception and its own documentation.
+`FlowStatus::terminal()`, `FlowStatus::signalable()` and `FlowStatus::mayStartWork()` are different
+sets and are not interchangeable. `Cancelling` is **not** terminal — it is a run mid-rollback.
+Swapping one boundary for the other changes public behaviour and needs its own exception and its own
+documentation.
+
+The one that decides a write is `mayStartWork()` versus `live()`: ask the narrower one wherever work
+would **begin** (the action claim, the repair rules that send another job, the retry that spends a
+signal to start a fresh cycle), and `live()` wherever a row already started is settled or written
+down. A rollback plans the stack it will undo once, so a
+step that starts under `Cancelling` lands outside every plan there is; but the same rollback needs
+its compensations claimed and its bookkeeping written, and those are not new work.
 
 ### A host transaction around an engine call is out of scope
 

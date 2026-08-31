@@ -140,10 +140,8 @@ final readonly class FlowDoctor
                 return false;
             }
 
-            $flow = $lockedAction->flowRun;
-
             // Never resurrect a step whose run is finished or rolling back.
-            if ($flow->isTerminal() || $flow->status === FlowStatus::Cancelling) {
+            if (! $lockedAction->flowRun->status->canStartWork()) {
                 return false;
             }
 
@@ -188,10 +186,8 @@ final readonly class FlowDoctor
                 return false;
             }
 
-            $flow = $lockedAction->flowRun;
-
             // Never resurrect a step whose run is finished or rolling back.
-            if ($flow->isTerminal() || $flow->status === FlowStatus::Cancelling) {
+            if (! $lockedAction->flowRun->status->canStartWork()) {
                 return false;
             }
 
