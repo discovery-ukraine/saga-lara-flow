@@ -111,6 +111,12 @@ return [
             'enabled' => true,
             'batch_size' => 100,
 
+            // A run whose rollback the sweep cannot plan steps aside for this long
+            // (exponential, per run) instead of holding its place in the page. There
+            // is no attempt cap: the cause can be temporary, and the ceiling is what
+            // keeps a permanent one cheap.
+            'backoff' => ['base_seconds' => 60, 'max_seconds' => 3600],
+
             // Default deadlines (in seconds) applied at write time when none is set
             // explicitly: 'run' on create, 'action' on schedule, 'signal' on await.
             // null = off (no implicit deadline). There is no per-entity opt-out flag;

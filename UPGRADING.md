@@ -506,6 +506,14 @@ does not rethrow. Nothing is stored and nothing about the run changes. A listene
 journalled as `rejection_undelivered` rather than failing the job, since this path must stay quiet.
 See [Events](https://sagalaraflow.dev/events#refused-outcome).
 
+### 24. A run the sweep cannot expire now steps aside instead of holding the page
+
+The monitor reads one page of overdue runs, oldest first, and a run whose rollback it cannot plan
+kept its place in it — enough of them at the head and the runs behind were never inspected. Such a
+run is now held off for a widening window (`monitor.expiration.backoff`, 60s doubling to an hour)
+and counted in two new `flow_runs` columns, so the page moves on and the journal stops repeating
+itself. There is no attempt cap: the cause can be temporary. Run `php artisan migrate`.
+
 ### Recommended while you are here
 
 - **Decide how a killed worker should be recovered** — see item 1. Leaving both reclaim and the

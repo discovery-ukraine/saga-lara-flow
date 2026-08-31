@@ -49,6 +49,7 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
             ->hasMigration('2026_08_25_000000_add_reclaim_stale_running_columns')
             ->hasMigration('2026_08_26_000000_index_signal_waits')
             ->hasMigration('2026_08_26_000001_unique_flow_tag_keys')
+            ->hasMigration('2026_08_31_000000_add_expiry_backoff_to_flow_runs')
             ->runsMigrations()
             ->hasCommands([
                 MakeWorkflowCommand::class,

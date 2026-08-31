@@ -43,11 +43,22 @@ class EloquentFlowRepository implements FlowRepository
 
     public function dueForExpiration(int $limit): iterable
     {
+        $now = Carbon::now();
+
         return $this->flowRunClass()::query()
             ->whereIn('status', [FlowStatus::Running, FlowStatus::Waiting])
             ->whereNotNull('expires_at')
-            ->where('expires_at', '<=', Carbon::now())
-            ->orderBy('expires_at')
+            ->where('expires_at', '<=', $now)
+            // A run the sweep could not expire steps aside for a while, so it stops
+            // holding its place at the head of the page.
+            ->where(function (Builder $query) use ($now): void {
+                $query->whereNull('expiry_available_at')
+                    ->orWhere('expiry_available_at', '<=', $now);
+            })
+            // Oldest first means oldest of what can be acted on now, not oldest
+            // deadline: a run held off carries its retry time instead, so retries
+            // cannot queue ahead of a run that has been waiting longer than they have.
+            ->orderByRaw('coalesce(expiry_available_at, expires_at) asc')
             ->limit($limit)
             ->get();
     }
