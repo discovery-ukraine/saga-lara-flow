@@ -75,6 +75,28 @@ A sweep only ever looks at work belonging to a run that is still going. A run th
 and waits as it ends (see [statuses](./statuses.md)), and the scan skips whatever was left unsettled before that, so a
 batch is always filled with candidates a sweep can actually act on.
 
+## A run the sweep cannot expire
+
+Expiring a run means replaying it to find what to undo, and that replay can throw — a workflow reading something that
+has since gone, or a deploy that edited a workflow with runs still in flight. The sweep journals `expiry_failed`,
+leaves the run exactly where it found it, and holds it off for a while so the page of candidates moves on to the runs
+behind it:
+
+```php
+'monitor' => [
+    'expiration' => [
+        'batch_size' => 100,
+        'backoff' => ['base_seconds' => 60, 'max_seconds' => 3600],
+    ],
+],
+```
+
+The window doubles with each failure up to `max_seconds`, and `flow_runs.expiry_attempts` counts them for you to
+query. A held-off run rejoins the queue on the time its window opens rather than on its original deadline, so however
+many of them there are they cannot queue ahead of a run that has been overdue longer than they have waited. There is **no attempt cap**: the cause is often temporary, so a run that becomes plannable again is expired on
+the next open window. Nothing resets the count, so a run that has been failing since Tuesday says so. Fixing the
+workflow is still the actual remedy — see [Reclaim & recovery](./reclaim-and-recovery.md).
+
 ## Repair (the doctor)
 
 Separate from expiration: the **doctor** recovers a run whose progress was lost to a *dropped job* — an action that

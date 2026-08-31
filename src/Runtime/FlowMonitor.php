@@ -13,7 +13,9 @@ use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Queue\Events\Looping;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
 
@@ -107,11 +109,11 @@ final readonly class FlowMonitor
      * back queued, finalize as Expired) lives on FlowExecutor — the owner of every
      * run-terminal transition — and is shared with the lazy drive() deadline check.
      *
-     * A run whose rollback the sweep could not plan is journalled and stepped over.
-     * Letting that throw out would cost far more than the run it came from: the batch
-     * is read oldest first and the run is still overdue, so the same one would come
-     * back every sweep and the signal and action passes below would never run at all.
-     * The lazy check inside drive() has one run to answer for and still surfaces it.
+     * A run whose rollback the sweep could not plan is journalled, held off, and
+     * stepped over. Letting that throw out would cost far more than the run it came
+     * from: the same run would come back every sweep and the signal and action passes
+     * below would never run at all. The lazy check inside drive() has one run to answer
+     * for and still surfaces it.
      *
      * Only that failure, and it says so by its type. Everything else happened after
      * the run had already been moved — by this pass or by whoever else was holding it
@@ -124,16 +126,67 @@ final readonly class FlowMonitor
 
             return true;
         } catch (ExpirationNotPlannedException $failure) {
+            $this->holdOff($run);
+
             app(AnomalyLog::class)->log(AnomalyLog::REASON_EXPIRY_FAILED, [
                 'entity' => 'flow',
                 'flow_run_id' => $run->id,
                 'workflow_class' => $run->workflow_class,
                 'status' => $run->status->value,
+                'expiry_attempts' => $run->expiry_attempts,
                 'exception' => $this->exceptionToArray($failure->getPrevious() ?? $failure),
             ]);
 
             return false;
         }
+    }
+
+    /**
+     * Step a run that could not be planned aside for a while, so the page moves on to
+     * the ones behind it and the journal stops repeating itself every pass. Unlike the
+     * doctor's throttle it never gives up: a planning failure can be temporary, and the
+     * growing window is what bounds one that is not.
+     *
+     * Written as a plain statement rather than through the model, for three reasons a
+     * save() got wrong: it raises no Eloquent events, so a host observer can neither
+     * cancel the hold-off nor throw out of a branch that must not throw; it leaves
+     * updated_at alone, which is the doctor's staleness clock; and it reads the count
+     * from the writer, so a stale replica read cannot roll an hour's window back to a
+     * minute. The write states back that the window is still open, so a second sweep on
+     * the same run cannot stack a hold-off on top of one that just happened — and since
+     * this is the only writer of either column, the count moves with the window and
+     * needs no separate check. Losing it means that sweep already did this.
+     */
+    private function holdOff(FlowRun $run): void
+    {
+        $now = Carbon::now();
+
+        $recorded = (int) $run->newQuery()->toBase()->useWritePdo()
+            ->where($run->getKeyName(), $run->getKey())
+            ->value('expiry_attempts');
+
+        $attempts = $recorded + 1;
+
+        $written = $run->newQuery()->toBase()
+            ->where($run->getKeyName(), $run->getKey())
+            ->where(function (Builder $query) use ($now): void {
+                $query->whereNull('expiry_available_at')
+                    ->orWhere('expiry_available_at', '<=', $now);
+            })
+            ->update([
+                'expiry_attempts' => $attempts,
+                'expiry_available_at' => $now->copy()->addSeconds($this->backoff($attempts)),
+            ]);
+
+        $run->expiry_attempts = $written === 1 ? $attempts : $recorded;
+    }
+
+    private function backoff(int $attempts): int
+    {
+        $base = (int) config('saga-lara-flow.monitor.expiration.backoff.base_seconds', 60);
+        $max = (int) config('saga-lara-flow.monitor.expiration.backoff.max_seconds', 3600);
+
+        return min($max, $base * (2 ** max(0, $attempts - 1)));
     }
 
     private function timeoutSignals(int $limit): int

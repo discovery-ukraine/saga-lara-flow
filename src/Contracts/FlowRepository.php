@@ -28,8 +28,10 @@ interface FlowRepository
     public function findOrFail(string $id): FlowRun;
 
     /**
-     * Non-terminal runs (Running/Waiting) whose expires_at deadline has passed,
-     * oldest first, capped at $limit. Used by the monitor to expire stuck runs.
+     * Non-terminal runs (Running/Waiting) whose expires_at deadline has passed and
+     * whose hold-off window is open, capped at $limit. Ordered by the longest wait the
+     * monitor can act on: the hold-off window where a run has one, the deadline
+     * otherwise. Used by the monitor to expire stuck runs.
      *
      * @return iterable<int, FlowRun>
      */

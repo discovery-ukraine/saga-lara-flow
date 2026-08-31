@@ -234,7 +234,8 @@ is about a run rather than a row, and carries the run id, its workflow class and
 - **`claim_not_committed`** — a claim was written and was gone once its transaction closed. The line carries both
   attempt counts, the claimed one and the one the row actually holds.
 - **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
-  the next. The line carries the throw. The run stays overdue and is tried again on the next sweep.
+  the next. The line carries the throw and how many times this run has failed that way. The run stays overdue and is
+  tried again once its hold-off window opens.
 - **`write_refused`** — a write to a step was refused because the row had moved on since it was read, or the run under
   it had finished. The line carries a `site` naming which write it was.
 - **`rejection_undelivered`** — the rejection event above could not be handed over: a listener threw, or a queued one
@@ -250,8 +251,11 @@ cancelled points the same way as `claim_lost` — a queue timeout tuned shorter 
 
 The remaining two are not races and do not come from tuning. `expiry_failed` means the run's own `handle()` threw
 while the sweep was replaying it to find the compensations — a workflow reading something that has since gone, most
-often. Until
-that is fixed the run cannot be expired, but nothing else in the sweep is held up by it.
+often, or a deploy that edited a workflow with runs still in flight. Until that is fixed the run cannot be expired.
+Nothing else in the sweep is held up by it: the run is held off for a window that doubles with each failure up to
+`monitor.expiration.backoff.max_seconds`, so it drops out of the candidate page and the runs behind it are reached.
+`flow_runs.expiry_attempts` counts them. There is no cap — a cause that clears is picked up on the next open
+window — and nothing resets the count, so a run that has been failing for a week says so.
 
 `claim_not_committed` is the other one: something ran inside the engine's own transaction and left it
 unusable. On PostgreSQL a single failed statement aborts a transaction and turns the eventual commit into a rollback
