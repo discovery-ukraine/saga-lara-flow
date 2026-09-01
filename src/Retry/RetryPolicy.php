@@ -10,7 +10,7 @@ use Throwable;
  * parking at all. Pass an instance to ActionBuilder::retryOnSignal().
  *
  * Nothing about it is persisted — handle() rebuilds it on every replay — so all five
- * members must be deterministic, and only maxRetries() has its value frozen, onto the
+ * members must be deterministic, and only maxRetries() has its value frozen onto the
  * row at scheduling. shouldRetry() may not write to the run it is deciding for, nor
  * drive any run; the engine refuses that with RetryPolicyReentryException.
  */
