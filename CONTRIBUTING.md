@@ -16,8 +16,11 @@ before opening an issue or pull request.
 - **One feature/fix per PR.** Keep the diff focused.
 - **Do not edit `CHANGELOG.md`.** It is written by maintainers at release time and has no
   `Unreleased` section. A PR that adds one will be asked to remove it.
-- **`UPGRADING.md`** is where a breaking change is described. Add to the section for the version in
-  progress; do not open a section of your own.
+- **`UPGRADING.md`** is where a breaking change is described, under the section for the version in
+  progress; do not open a section of your own. It has three parts — *Action required* for anything
+  a host must change or decide, *Behaviour changed* for a line or two plus a link to the docs page
+  that covers it, *Additions* for what needs nothing done. Mechanism belongs on that docs page, and
+  rationale in the issue and the PR; neither belongs here.
 
 ## Development setup
 

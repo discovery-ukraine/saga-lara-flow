@@ -5,44 +5,14 @@ namespace DiscoveryUkraine\SagaLaraFlow\Retry;
 use Throwable;
 
 /**
- * A named, reusable retryOnSignal() policy: one object that owns which signal a
- * failed step parks on, how long it may keep parking, and — the part four scalar
- * arguments could never express — whether THIS failure is worth parking at all.
+ * A named, reusable retryOnSignal() policy: one object owning which signal a failed
+ * step parks on, how long it may keep parking, and whether THIS failure is worth
+ * parking at all. Pass an instance to ActionBuilder::retryOnSignal().
  *
- * Pass an instance to ActionBuilder::retryOnSignal(); the builder reads it and the
- * step behaves exactly as it would have with the equivalent arguments.
- *
- * Your handle() builds the policy afresh on every replay, so nothing about it is
- * persisted. The builder reads signal(), maxRetries(), waitSeconds() and only() the
- * moment it is handed the object, and it does so on every pass — including a pass
- * that only replays a step already scheduled or completed. shouldRetry() is stored
- * rather than called: it runs at the gate, and only for a step that has failed. What
- * is frozen is one value, not one method:
- *
- * - maxRetries() is read when the step is SCHEDULED into
- *   action_runs.retry_signal_max_attempts, and every later replay enforces the row.
- *   Raising it in a deploy does not lift the ceiling of a step already parked.
- * - signal(), waitSeconds(), only() and shouldRetry() take effect immediately, so a
- *   deploy changes them for runs already in flight. action_runs.retry_signal records
- *   the name a step last parked on but is rewritten at every parking and never read
- *   back: renaming a signal moves what a parked step will next wait for, and abandons
- *   a delivery already made under the old name.
- *
- * None of the five is asked once and remembered, so all five must be deterministic —
- * the same question must get the same answer on every pass. Two further obligations:
- *
- * - The first four are called while the workflow is still building the step, before
- *   the seam has resolved anything, so one that throws takes the whole run down with
- *   it and the step it was attached to never registers its compensation — exactly as
- *   an argument expression that throws would. Only shouldRetry() is guarded.
- * - shouldRetry() is not called exactly once (a process that dies between the
- *   decision and the parking makes the next replay ask again), so it must be a pure
- *   predicate and leave side effects to a listener. It also may not write to the run
- *   it is deciding for — no seam, and no FlowHandle mutation on that run: it is not
- *   asked again once the step it guards succeeds, so an ordinal it consumed would be
- *   left for nobody to replay, and a run it cancelled would be handed a live wait the
- *   moment it returned. RetryPolicyReentryException refuses the attempt before
- *   anything is written. Other runs are fair game.
+ * Nothing about it is persisted — handle() rebuilds it on every replay — so all five
+ * members must be deterministic, and only maxRetries() has its value frozen onto the
+ * row at scheduling. shouldRetry() may not write to the run it is deciding for, nor
+ * drive any run; the engine refuses that with RetryPolicyReentryException.
  */
 abstract class RetryPolicy
 {

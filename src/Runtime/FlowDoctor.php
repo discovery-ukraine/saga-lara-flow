@@ -18,30 +18,22 @@ use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
- * The opt-in repair pass — the "doctor". Distinct from the
- * expiration monitor (FlowMonitor): it recovers progress lost to a *dropped job*,
- * not a passed deadline. It is configured, scheduled, and looped independently
- * (config repair.*, command saga-flow:repair, its own queue-looping lock).
- *
- * It only ever re-dispatches an existing job or re-wakes a flow — never creating
- * duplicate work or mutating a business result. Two automatic cases, both safe
- * under repeated passes thanks to the jobs' own idempotency (skip-set on settled
- * steps, terminal-run guard) and replay:
+ * The opt-in repair pass — the "doctor". Distinct from the expiration monitor
+ * (FlowMonitor): it recovers progress lost to a *dropped job*, not a passed deadline. It only ever
+ * re-dispatches an existing job or re-wakes a run, so it writes no step and no outcome of its own
+ * and cannot duplicate an ordinal — the run carries on normally from there, scheduling whatever
+ * comes next. R3 can still start a second execution of one step, since a reclaim window expiring
+ * does not prove the first worker is dead.
  *
  *   R1  a stuck sequential Pending action (its RunActionJob was lost) → re-dispatch.
- *   R2  a stuck Waiting run with nothing in flight (its resume was lost) → re-wake;
- *       replay then advances it or parks it again.
- *   R3  a stuck sequential Running action past its own reclaim window (opt-in via
- *       actions.reclaim.stale_running — a worker died mid-execution) → re-dispatch.
+ *   R2  a stuck Waiting run with nothing in flight (its resume was lost) → re-wake.
+ *   R3  a stuck sequential Running action past its own reclaim window → re-dispatch.
  *
- * Each repaired entity carries repair_attempts + repair_available_at so a pass is
- * throttled per entity (exponential backoff) and gives up after max_attempts —
- * saga-flow:kick is the manual escape hatch. Batch-bound work (compensations,
- * parallel actions) is out of scope even for R3: recovering them would mean
- * adding a job back into their Bus::batch, which needs the batch's id — not stored
- * anywhere in this package's tables, only recoverable by looking its deterministic
- * name up in Laravel's own job_batches table, a detail of the database batch driver
- * specifically and not guaranteed for every host.
+ * repair_attempts + repair_available_at throttle a pass per entity and give up after max_attempts.
+ * saga-flow:kick re-wakes a run by hand, which is the manual answer to R2; it does not reset a
+ * counter, so an action the doctor has given up on waits for a retry cycle to reschedule it.
+ * Batch-bound work (parallel actions, compensations) is out of scope even for R3: adding a job back
+ * into a Bus::batch needs an id this package does not store.
  */
 final readonly class FlowDoctor
 {

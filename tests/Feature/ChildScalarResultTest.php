@@ -104,8 +104,8 @@ it('rehydrates a model a child returned', function () {
 });
 
 // Pinning: a row written before the envelope was dropped keeps it, and the seam
-// resolves it as stored on every replay — the behaviour UPGRADING item 12
-// describes. Unwrapping it here would corrupt a child that legitimately
+// resolves it as stored on every replay — the behaviour UPGRADING.md describes
+// under the scalar result. Unwrapping it here would corrupt a child that legitimately
 // returned ['value' => ...].
 it('resolves a child stored with the old envelope exactly as it stands', function () {
     $run = SagaFlow::create(ChildThenSignalWorkflow::class)->runSync();

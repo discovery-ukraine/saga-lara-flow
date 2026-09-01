@@ -223,8 +223,11 @@ discarded (see [Events](./events.md#refused-outcome)):
 ],
 ```
 
-Seven reason codes to grep for. All but one carry the run id, row id, sequence and class; `expiry_failed`
-is about a run rather than a row, and carries the run id, its workflow class and the throw:
+Nine reason codes exist; the seven raised on the paths this page covers are below. The other two are
+`transition_lost`, which belongs to [run transitions](./queues-locks-idempotency.md), and
+`retry_policy_threw`, which belongs to [retry policies](./retry-on-signal.md). All but one of the
+seven carry the run id, row id, sequence and class; `expiry_failed` is about a run rather than a row,
+and carries the run id, its workflow class and the throw:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped. Listen for

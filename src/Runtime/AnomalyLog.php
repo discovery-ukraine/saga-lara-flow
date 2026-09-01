@@ -6,28 +6,15 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * The engine's second journal: what it absorbed while running.
+ * The engine's second journal: what it absorbed while running. EventLog records what
+ * happened to a run in business terms; this records the moments where the world turned
+ * out not to be what the engine assumed — a lost claim, a refused write, a batch already
+ * closed, a policy that threw. Each reason is a REASON_* constant below.
  *
- * EventLog records what happened to a run in business terms. This records the moments
- * where the world turned out not to be what the engine assumed — a claim lost to
- * whoever already owned the row, a claim the transaction that made it did not keep, an
- * outcome write refused because the row had changed hands, a step write refused because
- * the row had moved on since it was read, a batch already closed by a duplicate before
- * its own job reported, a run transition refused because the row had moved on, a retry
- * policy that threw, a rejection notice no listener could be given, an overdue run
- * whose rollback could not be planned. Most are ordinary consequences of at-least-once delivery and of nothing
- * serialising an operator against a worker; the claim that did not commit and the last
- * two are defects in the caller's own code, journalled here for the same reason as the
- * rest — the engine carried on, so nothing else records it.
- *
- * None of them fails a job. A refused transition also reaches its caller: the engine
- * absorbs it and stops, but FlowHandle lets it surface, because an operator whose
- * cancellation did not happen has to be told.
- *
- * Which is why they need a journal of their own: the job succeeds, flow_events stays
- * silent, and an operator investigating a step that ran twice would have nothing to go
- * on. They stay out of flow_events because an abandoned attempt changed nothing in the
- * run's history.
+ * They need a journal of their own because the job usually succeeds and flow_events stays
+ * silent: an abandoned attempt changed nothing in the run's history, so nothing else
+ * records it. A refused transition is the exception that can still surface — FlowHandle
+ * raises it, and a child-close job rethrows while the child it was sent to close is live.
  */
 final readonly class AnomalyLog
 {
