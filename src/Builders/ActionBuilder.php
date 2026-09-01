@@ -45,7 +45,8 @@ use Throwable;
 /**
  * Fluent builder for a single action step. run() is the replay seam: it identifies the
  * step by its (flow_run_id, sequence) ordinal and either returns the stored result,
- * rethrows the stored failure, or schedules the step and suspends the flow.
+ * rethrows the stored failure, or schedules the step — executing it inline in sync mode —
+ * and suspends the flow.
  * compensateWith() registers a compensation pushed onto the saga stack when the step
  * resolves Completed; the step's OWN failure does not trigger it unless
  * compensateStepOnSelfFailure() opts in. That and onCompensationFailure() resolve with
