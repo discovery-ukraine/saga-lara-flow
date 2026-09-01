@@ -2,6 +2,211 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.2.0 - 2026-09-01
+
+> ### ⚠️ Run `php artisan migrate` immediately after upgrading
+
+Four migrations ship with this release — `add_reclaim_stale_running_columns`,
+`index_signal_waits`, `unique_flow_tag_keys` and `add_expiry_backoff_to_flow_runs` — and the
+engine writes their columns from the moment it starts.
+
+```bash
+composer update discovery-ukraine/saga-lara-flow
+php artisan migrate
+
+```
+Deploy them together. They run from the package — do **not** `vendor:publish` them, or `migrate`
+would try both copies.
+
+**`unique_flow_tag_keys` deletes rows.** `flow_tags` uniqueness narrows from
+`(flow_run_id, key, value)` to `(flow_run_id, key)`: for each pair the row with the highest
+`updated_at` is kept — highest `id` breaking a tie — and the rest are deleted. Rolling the
+migration back restores the old constraint but cannot bring rows back. Count yours first — the
+query is in
+[UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md).
+
+The four sections that follow share one shape: the engine reported a state the run was not in, and
+nothing surfaced the difference. A rollback that came back short and called itself complete; a step
+that executed with no record that it had ever started; a step that ran under a run already being
+undone. Three of the defects below were found by running the suite on PostgreSQL for the first
+time.
+
+### Fixed: a rollback that comes back short now says so (#35, #48)
+
+`FlowHandle::compensate()` plans a rollback by replaying `handle()` in a collecting mode, and two
+seams let that plan end early while reporting it complete.
+
+`collectCompensations()` decided the stack was finished by catching `Throwable`, so a throw from
+anywhere in `handle()` — a builder argument, a workflow helper, a policy getter — truncated the plan
+at that point and the run still landed in `Cancelled` (#35). And a child that had already reached
+`Failed` or `Cancelled` was read as a live frontier, so a parent that carried on past one under
+`->continueParentOnFailure()` rolled back only the steps before it, and a compensation you never saw
+run stayed unapplied (#48).
+
+Six exception classes now end a plan. Any other throw surfaces out of `compensate()` with the run
+untouched, rather than rolling back a truncated plan and reporting it complete — the expiry sweep
+absorbs the same throw instead, journalling `expiry_failed`. A recorded child resolves during
+planning the way an ordinary replay resolves it. The planning replay also stopped writing on its way
+through: it no longer settles a spent optional step, and no longer dispatches a parallel block it
+had only reached in order to read.
+
+### Fixed: no step starts on a run that has ended or is rolling back (#13, #14, #30, #37, #53)
+
+Nothing between a run reaching a terminal state and a step executing asked whether the run was still
+alive. The claim looked only at the step's own row, and `retryAction()` could rewind a settled step
+back to `Pending` (#30). Parking a step for a signal-gated retry wrote a live `AwaitingRetry` step
+and an open wait onto a run that had already been cancelled, where nothing would ever settle either
+(#37). And a run in `Cancelling` — the state a rollback holds it in — still let a queued step be
+claimed and completed after the stack to undo had been planned, so that step was never compensated
+(#53).
+
+Claiming a step is now one atomic conditional write that folds in the run's own status (#13). A
+recorded outcome is never demoted, and five more recorder transitions write conditionally — a
+give-up, a park, a rewind, settling a parked step, and the queue's exhausted-attempts flag; one
+that loses writes nothing, journals `write_refused` and returns `false`. A finished run settles
+what it was holding: steps in `pending`, `running` or `awaiting_retry` become `cancelled`, as do
+open wait-markers (#14). Under `Cancelling`, a queued step, a doctor redispatch and a
+signal-gated retry are all refused; settling a row that had already started is unchanged.
+
+### Fixed: a step could execute on PostgreSQL with no record that it started (#41)
+
+`startAction()` writes the claim, the `action.started` row and the `ActionStarted` event in one
+transaction, so that a listener which throws rolls the claim back. On PostgreSQL a listener that
+runs a failing query and swallows it aborts the transaction instead: `COMMIT` becomes a rollback and
+reports success, `startAction()` returned `true`, and the step's body ran against a row still
+`pending` with `attempts = 0` and no `action.started` event. A replay would run it again.
+
+The claim is now verified after the transaction closes, and returns `false` — journalled as
+`claim_not_committed` — when it did not survive; `CompensationRecorder::startCompensation()` gets
+the same check. An Eloquent observer reaches the same window with no listener in sight, which is
+why the check is on the claim rather than on where the event fires. The PostgreSQL skip in
+`TransactionIntegrityTest` is gone.
+
+### Fixed: one run the sweep cannot expire no longer blocks the ones behind it (#52)
+
+`FlowMonitor::expireRuns()` reads one page of overdue runs, oldest first, and a run whose rollback
+it could not plan stayed overdue at the head of that page. Healthy overdue runs behind it were never
+inspected, on any sweep, however many ran — and the sweep reported `runs: 0`, which is also what an
+idle sweep reports.
+
+Such a run now steps aside for a widening window — `monitor.expiration.backoff`, 60 seconds doubling
+to an hour — counted in two new columns of its own, and the healthy run behind it expires on the
+next sweep. There is no attempt cap: the cause can be temporary, and the ceiling is what keeps a
+permanent one cheap.
+
+### Also fixed
+
+- **A run's relations read in a defined order (#44).** `actions()`, `compensations()`,
+  `sideEffects()` and `children()` by `sequence`, `events()` by `recorded_at`, `signals()` and
+  `tags()` by `id`. PostgreSQL returns rows in physical order and an updated row moves to the end of
+  the heap, so indexing into an unordered relation could hand back a different step than the one
+  meant. A read that appends its own order, or pages by id, now lands behind the default and needs
+  `reorder()`.
+- **The `database.table_prefix` ceiling is stated rather than discovered (#42).** Derived index
+  names carry the prefix; MySQL refuses an identifier past 64 characters and PostgreSQL truncates at
+  63 bytes onto a name the same table already has. The measured ceiling was **7** characters on
+  MySQL, against a default prefix of five, and either failure lands part-way through the initial
+  migration. Six indexes are now named explicitly, which lifts it to **24 bytes** — and the suite
+  installs the whole schema at exactly that, on all three drivers.
+- **A scalar workflow result is no longer wrapped (#25).** A result that serialized to a scalar was
+  stored as `{"value": ...}` with nothing to reverse it, so `$this->child(...)->run()` resolved the
+  envelope rather than what the child returned. Rows completed before the upgrade keep theirs, and a
+  parent replaying over such a child reads the wrapper every time — the UPGRADING item covers the
+  mixed period.
+
+### Added
+
+- **`RetryPolicy` (#16)** — `retryOnSignal()` accepts a policy object, and a `when:` predicate
+  decides whether *this* failure is worth parking. Every existing call site behaves identically.
+  [Retry on signal](https://sagalaraflow.dev/retry-on-signal)
+- **`ActionOutcomeRejected` and `CompensationOutcomeRejected` (#31)** — a worker that finishes a
+  step whose row has moved on has its write refused, and the payload was dropped with the model.
+  The events carry what the work produced: the recorded form of the result, or the throw the engine
+  does not rethrow. Nothing is stored and nothing about the run changes, so where it goes is yours
+  to decide. [Events](https://sagalaraflow.dev/events#refused-outcome)
+- **`reclaim`** (`actions.reclaim.stale_running`, `sagas.reclaim.stale_running`) — a `Running` row
+  becomes claimable again once its window has passed, which is how a worker killed mid-execution is
+  recognised. Off by default; per-step via `reclaimStaleAfter()` and `enableStaleReclaim()`, and per
+  compensation via `reclaimCompensationStaleAfter()` and `enableCompensationStaleReclaim()`. The
+  doctor gained a matching rule for sequential actions
+  (`repair.redispatch_stale_running_actions`); a parallel action or a compensation is bound to its
+  batch and is recovered only by that job being redelivered.
+- **`logging`** — `anomaly_level` (default `info`, `null` to silence) and `channel`. The package's
+  first logging: a second journal beside `flow_events` for the refusals nothing else records.
+  Writing is best-effort and never fails a job.
+  [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery)
+- **Two `FlowQuery` wait filters and `FlowHandle::tag()` / `withTags()` (#15)**, with the
+  `index_signal_waits` indexes that serve them. The tag uniqueness change in the banner arrives with
+  them: it is what makes writing a tag an update rather than a second row.
+- **`CompensationStepStarted`** marks one compensation beginning, distinct from
+  `CompensationStarted`, which marks a whole rollback once per run. `RunCompensationJob` also takes
+  its own queue lock, which compensations previously had none of.
+- **`FlowStatus::terminal()`** lists the four statuses a run never leaves, and `isTerminal()` reads
+  from it.
+
+### The suite runs on MySQL and PostgreSQL (#33, #39)
+
+CI ran on SQLite alone. The engine fences with conditional `UPDATE`s — the one form every supported
+driver performs atomically, `lockForUpdate()` compiling to nothing on SQLite — and SQLite is the
+driver that says least about whether they hold. The suite now also runs on MySQL, where a
+conditional `UPDATE` reports *changed* rows rather than found ones, and on PostgreSQL, where a
+failed statement poisons the transaction and `COMMIT` reports a rollback as success. The first
+PostgreSQL runs are what turned up #41, #42 and #44 above.
+
+### Behaviour changes
+
+They are in
+[UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md), split
+into **Action required** and **Behaviour changed** by whether they ask anything of you; every item
+under the first carries a likelihood marker. Two that are easy to miss:
+
+- **If you observe the package's Eloquent models** — every status write is now a conditional
+  `UPDATE`, so an observer on a swapped-in `models.flow_run`, `models.action_run` or
+  `models.compensation_run` no longer sees `updating`/`updated` for a transition. Most publish a
+  package event and a `flow_events` entry instead; four write no replacement at all, by design.
+- **If you `match` over the status enums** — `ActionStatus::Cancelled` is now written and
+  `SignalStatus::Cancelled` is new, so a `match` that was exhaustive needs the new arm.
+
+### Recommended
+
+- **Decide how a killed worker's step is recovered.** A row that is already `Running` is not picked
+  up by a redelivered job, so a worker killed mid-execution leaves a step nothing brings back —
+  replay parks the run, and `saga-flow:kick` does the same. Turn on `reclaim` (the step runs again),
+  or set `monitor.expiration.defaults.action` and schedule `saga-flow:monitor` (the step is marked
+  `Expired`), or accept that such a run waits for a human.
+- **Do not drive the engine inside a transaction of your own.** Rolling one back discards the
+  engine's records while the work those records describe has already happened, and a second
+  `compensate()` then runs the same compensations again. The engine cannot detect this from the
+  inside — its own `transaction()` is a savepoint in there — so the boundary is documented instead,
+  on [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency) and in the
+  README.
+- **Turn `repair.enabled` on in production.** Still off by default, and still what recovers a step
+  whose queue job was lost to a dying process.
+
+### Still open
+
+Named here so this release does not read wider than it is. Each carries its measurement in the
+issue:
+
+- **Under a rolling-back run**, the fence above covers a queued step, a doctor redispatch and a
+  signal-gated retry. A replay that outlived the rollback still starts child workflows and runs side
+  effects (#65), a signal is still accepted and can then never be consumed (#63), and a stale resume
+  can re-run a whole rollback so its compensations execute twice (#64).
+- **A rollback can still come back short** in narrower ways: a step that completes between the plan
+  and the transition (#62), a plan built from a lagging read replica (#60), and an `Expired` child,
+  which is still parked on as though it were in flight (#59).
+- **The planning replay still writes the run's tags**, deliberately: a workflow branching on its own
+  tag would otherwise plan a different stack from the one it built (#50).
+- **A conditional write fences against a cancellation that has committed**, not one still in flight
+  (#54).
+- **An action the doctor has given up on has no operator recovery.** `saga-flow:kick` re-wakes the
+  run but resets no counter, so the step stays out of reach until a retry cycle reschedules it
+  (#67).
+
+Thanks to @alex543644 for #15, and for the wait filters and tag writers that closed it.
+
+**Full Changelog**: https://github.com/discovery-ukraine/saga-lara-flow/compare/v1.1.1...v1.2.0
+
 ## v1.1.1 - 2026-08-24
 
 ### Documentation: deadlines and the expiration sweep
@@ -45,6 +250,7 @@ composer update discovery-ukraine/saga-lara-flow
 php artisan migrate
 
 
+
 ```
 Deploy the two together. See [UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md).
 
@@ -65,6 +271,7 @@ $this->action(ChargeCard::class, $orderId)
         only: [InsufficientBalanceException::class],  // null = park on any exception
     )
     ->run();
+
 
 
 ```
@@ -97,6 +304,7 @@ $this->tags([
     'attempt'  => 2,      // int values are cast to string
     'orders'   => null,   // a tag with no value
 ]);
+
 
 
 ```
@@ -239,6 +447,7 @@ fails partway through, registered compensations roll back the completed work in 
 composer require discovery-ukraine/saga-lara-flow
 php artisan vendor:publish --tag="saga-lara-flow-migrations"
 php artisan migrate
+
 
 
 
