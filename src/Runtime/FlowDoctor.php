@@ -20,9 +20,10 @@ use Throwable;
 /**
  * The opt-in repair pass — the "doctor". Distinct from the expiration monitor
  * (FlowMonitor): it recovers progress lost to a *dropped job*, not a passed deadline. It only ever
- * re-dispatches an existing job or re-wakes a run, so it creates no new step and no new result row
- * — but R3 can start a second execution of one step, since a reclaim window expiring does not
- * prove the first worker is dead.
+ * re-dispatches an existing job or re-wakes a run, so it writes no step and no outcome of its own
+ * and cannot duplicate an ordinal — the run carries on normally from there, scheduling whatever
+ * comes next. R3 can still start a second execution of one step, since a reclaim window expiring
+ * does not prove the first worker is dead.
  *
  *   R1  a stuck sequential Pending action (its RunActionJob was lost) → re-dispatch.
  *   R2  a stuck Waiting run with nothing in flight (its resume was lost) → re-wake.

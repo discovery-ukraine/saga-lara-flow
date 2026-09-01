@@ -2,12 +2,13 @@
 
 ## From 1.1.x to 1.2.0
 
-> ### ⚠️ Run `php artisan migrate` after upgrading  Four migrations ship with this release —
-> `add_reclaim_stale_running_columns`, `index_signal_waits`, `unique_flow_tag_keys` and
-> `add_expiry_backoff_to_flow_runs` — and the engine writes their columns from the moment it starts.
-> Deploy them together with the code. They run from the package — do **not** `vendor:publish` them,
-> or `migrate` would try both copies. `unique_flow_tag_keys` deletes rows; read its item below
-> before you run it.
+> ### ⚠️ Run `php artisan migrate` immediately after upgrading
+>
+> Four migrations ship with this release — `add_reclaim_stale_running_columns`,
+> `index_signal_waits`, `unique_flow_tag_keys` and `add_expiry_backoff_to_flow_runs` — and the
+> engine writes their columns from the moment it starts. Deploy them together with the code. They
+> run from the package — do **not** `vendor:publish` them, or `migrate` would try both copies.
+> `unique_flow_tag_keys` deletes rows; read its item below before you run it.
 
 ### Action required
 
@@ -97,7 +98,7 @@ WHERE status = 'waiting'
 
 Adjust the names for your `database.table_prefix`.
 
-#### A `FlowRun` relation now reads in a defined order
+#### `FlowRun` relations now read in a defined order
 
 **Likelihood of impact: low.** `actions()`, `compensations()`, `sideEffects()` and `children()` read
 by `sequence`, `events()` by `recorded_at`, `signals()` and `tags()` by `id`. A read that appends
