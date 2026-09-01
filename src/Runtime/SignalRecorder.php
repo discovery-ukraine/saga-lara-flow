@@ -195,19 +195,15 @@ final readonly class SignalRecorder
     }
 
     /**
-     * Move a wait-signal out of Waiting in a single conditional write, and sync the
-     * in-memory model to match when it lands. Returns false when the row is no longer
-     * Waiting: someone else moved it first and this caller must not write over them.
+     * Move a wait-signal out of Waiting in a single conditional write, and sync the in-memory
+     * model to match when it lands. Returns false when the row is no longer Waiting: someone
+     * else moved it first and this caller must not write over them.
      *
-     * The condition lives in the UPDATE itself: it is the only form every supported
-     * driver enforces atomically, since lockForUpdate() compiles to nothing on SQLite.
-     * The price is that these transitions raise no Eloquent model events, so an
-     * observer on a swapped-in models.flow_signal will not see them; flow_events and
-     * the package's own Laravel events still record every one.
-     *
-     * The model is re-read rather than filled from the values just written: those are
-     * already database-ready, and pushing an encoded JSON payload back through the
-     * casts would encode it twice.
+     * The condition lives in the UPDATE — the only form every supported driver enforces
+     * atomically — so these transitions raise no Eloquent model events. flow_events records
+     * every one that lands; a Laravel event accompanies only the paths documented as raising
+     * one, and a timeout deliberately raises none. The model is re-read rather than filled
+     * from the values just written, which are already database-ready.
      *
      * @param  array<string, mixed>  $values
      */

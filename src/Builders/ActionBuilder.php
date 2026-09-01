@@ -43,28 +43,14 @@ use InvalidArgumentException;
 use Throwable;
 
 /**
- * Fluent builder for a single action step. run() is the replay seam: it
- * identifies the step by its (flow_run_id, sequence) ordinal and either returns
- * the stored result, rethrows the stored failure, or schedules/executes the
- * step and suspends the flow.
- *
- * compensateWith() registers a compensation (a class or a closure) that is pushed
- * onto the saga stack when the step resolves Completed (deterministically on every
- * replay), so a later business failure rolls it back. By default the step's OWN
- * failure does not trigger its compensation (classic saga: only completed steps are
- * undone); compensateStepOnSelfFailure() opts a non-atomic step into being compensated when
- * it fails too — its compensation must then be idempotent and safe when the step did
- * nothing. onCompensationFailure() overrides the default Stop policy. All three
- * resolve with precedence action > group (saga()) > config.
- *
- * Constructed by the engine, and reachable for subclassing only by overriding
- * Workflow::action(): its method signatures are treated as internal.
- *
- * retryOnSignal() turns a failure into a wait: the step parks on a named signal, and
- * each delivery re-runs THIS step alone at the very same ordinal. The seam is the only
- * decision-maker, so nothing else resolves the row it reads back. Its policy may be
- * four arguments or a RetryPolicy object; either way nothing about it is persisted
- * beyond the signal name and the ceiling, and the decision is retaken on every replay.
+ * Fluent builder for a single action step. run() is the replay seam: it identifies the
+ * step by its (flow_run_id, sequence) ordinal and either returns the stored result,
+ * rethrows the stored failure, or schedules the step and suspends the flow.
+ * compensateWith() registers a compensation pushed onto the saga stack when the step
+ * resolves Completed; the step's OWN failure does not trigger it unless
+ * compensateStepOnSelfFailure() opts in. That and onCompensationFailure() resolve with
+ * precedence action > group (saga()) > config. Constructed by the engine, and reachable
+ * for subclassing only by overriding Workflow::action(): its signatures are internal.
  */
 class ActionBuilder
 {
@@ -242,27 +228,13 @@ class ActionBuilder
     }
 
     /**
-     * Wait for a named signal instead of failing this step. When the step gives up
-     * (its queue $tries are spent) the flow parks: the step lands AwaitingRetry, a
-     * wait-signal is recorded, and the run goes Waiting. Delivering $signal re-runs
-     * THIS step alone — the same (flow_run_id, sequence) ordinal, the same arguments,
-     * no new sequence — so replay and every downstream step stay deterministic. A
-     * failure of the retry parks again.
-     *
-     * $maxRetries caps the signal-gated cycles (null falls back to
-     * actions.retry_on_signal.max_retries, and null there means unbounded);
-     * $waitSeconds bounds ONE wait (null falls back to the configured default signal
-     * timeout);
-     * $only restricts the policy to the listed exception classes and their
-     * subclasses (null reacts to every failure);
-     * $when has the final say on a failure that passed $only, and returning false
-     * from it ends the policy for that failure. Once the budget is spent, the wait
-     * times out, the failure falls outside $only, or $when refuses it, the step
-     * fails exactly as it would have without this policy.
-     *
-     * A RetryPolicy passed as $signal carries all four itself, and combining it with
-     * any of them is refused. See RetryPolicy for which of its values survive a
-     * deploy and which do not.
+     * Wait for a named signal instead of failing this step. When the step gives up (its queue
+     * $tries are spent) the flow parks: the step lands AwaitingRetry, a wait-signal is
+     * recorded, and the run goes Waiting. Delivering $signal re-runs THIS step alone, at the
+     * same ordinal with the same arguments, so replay stays deterministic. $maxRetries caps
+     * the cycles, $waitSeconds bounds ONE wait, $only restricts the policy to exception
+     * classes and $when has the final say; once any refuses, the step fails as it would have
+     * without a policy. A RetryPolicy passed as $signal carries all four instead.
      *
      * @param  list<class-string<Throwable>>|null  $only
      * @param  ?Closure(RetryContext): bool  $when
@@ -698,16 +670,12 @@ class ActionBuilder
 
     /**
      * Write the parking — the wait-signal at this ordinal and the step's transition to
-     * AwaitingRetry — in one transaction, so a process that dies mid-parking leaves
-     * either all of it or none. Suspending stays outside: it throws, and a throw inside
-     * would roll the parking back.
+     * AwaitingRetry — in one transaction, so a process that dies mid-parking leaves either all
+     * of it or none. Suspending stays outside: it throws, and a throw inside would roll the
+     * parking back. $record is false when an open signal from an earlier pass was adopted.
      *
-     * $record is false when an open signal from an earlier pass was adopted.
-     *
-     * A parking that loses its fence — the row moved on, or the run finished — writes
-     * neither row, fires no ActionAwaitingRetry, and suspends like a won one. Whatever
-     * moved the row wrote where the step really is, and a run that ended has nothing
-     * left to resolve; either way this pass has no state left to decide from, and the
+     * A parking that loses its fence writes neither row, fires no ActionAwaitingRetry, and
+     * suspends like a won one: whatever moved the row wrote where the step really is, and the
      * suspension leaves no wait behind because none was recorded.
      *
      * @throws FlowSuspended

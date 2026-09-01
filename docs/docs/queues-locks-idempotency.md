@@ -150,11 +150,13 @@ between them for a condition to catch. That is what the lock is for.
 
 ## When a step is quietly skipped
 
-Three things can happen to a worker without failing its job: it loses the claim to whoever already
-owns the row, it finishes but has been superseded meanwhile so its outcome is rejected, or it
-finishes a parallel step whose batch a duplicate had already closed. All three are ordinary
-consequences of at-least-once delivery, and none of them leaves a trace in the run's history — so the
-package keeps a second journal for them:
+Several things can happen to a worker without failing its job: it loses the claim to whoever already
+owns the row, its claim turns out not to have survived its own transaction, it finishes but has been
+superseded meanwhile so its outcome is rejected, a write to the step is refused because the row
+moved on, or it finishes a parallel step whose batch a duplicate had already closed. Most are
+ordinary consequences of at-least-once delivery — a refused write can equally come from an operator
+or from terminal settlement — and none leaves a trace in the run's history, so the package keeps a
+second journal for them:
 
 ```php
 'logging' => [
@@ -176,9 +178,9 @@ written to `flow_events`, which records the run's business history — an abando
 nothing in it. See [Reclaim & recovery](./reclaim-and-recovery.md) for what each one means and what
 to do about it.
 
-The middle one is the only one that discards something the work produced, so it also raises an event
-carrying it — see [A refused outcome](./events.md#refused-outcome). `rejection_undelivered` is that
-hand-over failing, and the one way the payload is lost anyway.
+A rejected outcome is the only one that discards something the work produced, so it also raises an
+event carrying it — see [A refused outcome](./events.md#refused-outcome).
+`rejection_undelivered` is that hand-over failing, and the one way the payload is lost anyway.
 
 :::tip A lock TTL is not the same as reclaim
 `action_ttl_seconds` does not answer "when can a stuck `Running` step be retried". It governs a

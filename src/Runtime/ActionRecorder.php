@@ -143,37 +143,14 @@ final readonly class ActionRecorder
     }
 
     /**
-     * Atomically claim the row and move it to Running, returning false when the row
-     * is no longer claimable and the caller must not execute the step.
-     *
-     * The condition lives in the UPDATE itself — the same compare-and-swap shape as
-     * SignalRecorder::claimWaiting(), the only form every supported driver enforces
-     * atomically (lockForUpdate() compiles to nothing on SQLite). This transition
-     * therefore raises no Eloquent model events; ActionStarted and the action.started
-     * flow_events entry are the supported way to observe it.
-     *
-     * Claimable statuses are Pending, Failed, and Running past its reclaim deadline.
-     * Failed is not terminal here: it is what the row shows between two of the
-     * action's own native $tries, which Laravel redelivers as the very same job.
-     *
-     * `attempts` is incremented by the database, so two racing claims can never
-     * persist the same count, and the value a claim produces identifies it.
-     *
-     * $expectedRetryGeneration constrains retry_signal_attempts, folding a caller's
-     * stale-cycle check into this same atomic write so a cycle change landing after
-     * the row was read still loses the claim. Null imposes no constraint.
-     *
-     * The run's own state is folded in the same way, and for a reason the row cannot see
-     * on its own: terminal settlement leaves a Failed row — the state between two of the
-     * queue's own native tries — exactly as it found it, so without this a job already on
-     * the queue when the run was cancelled still claims it and runs the business logic.
-     * A run rolling back is fenced against too, and not because it has finished: it has
-     * already planned the stack it will undo, and a step starting now lands outside it.
-     *
-     * The claim and its two records share one transaction: a listener throwing on
-     * ActionStarted would otherwise leave the row Running with nothing executing it.
-     * A commit is not proof the claim survived one, so the row is read back afterwards
-     * — see claimSurvivedCommit().
+     * Atomically claim the row and move it to Running, returning false when the row is no
+     * longer claimable and the caller must not execute the step. Claimable statuses are
+     * Pending, Failed, and Running past its reclaim deadline — Failed is not terminal here, it
+     * is what the row shows between two of the action's own native $tries. The condition lives
+     * in the UPDATE, so this raises no Eloquent model events; ActionStarted and action.started
+     * are how to observe it. The run is fenced on mayStartWork() rather than on being
+     * unfinished: a run rolling back has already planned the stack it will undo, so a step
+     * starting now would land outside it.
      *
      * @throws Throwable
      */
@@ -244,27 +221,12 @@ final readonly class ActionRecorder
     }
 
     /**
-     * Whether the claim is on record now the transaction that made it has closed. A
-     * commit reporting success is not proof: PostgreSQL aborts a transaction on the
-     * first failed statement and turns the eventual COMMIT into a rollback, reporting
-     * success either way, so any caller code running inside it — a listener on
-     * ActionStarted, a model observer on the flow_events insert — that runs a failing
-     * query and swallows it discards the claim while the caller is told it holds one.
-     * The row is the only answer that covers every such shape: the claim is visible or
-     * it is not.
-     *
-     * Refusing a row a second worker legitimately took between the commit and this read
-     * is the same answer for the same reason — it is no longer ours to execute. The row
-     * is what answers, though, not a token: a claim of ours that rolled back and a second
-     * worker's claim that replaced it read alike, so a claim lost to that race is
-     * narrowed rather than caught. Telling those two apart needs a value per claim that a
-     * rollback cannot reproduce, which the schema does not carry.
-     *
-     * What the read proves is that the claim is visible on the connection that wrote it,
-     * which is durability only while the engine's transaction is the outermost one. A
-     * host transaction wrapped around a run can still discard every row the run recorded
-     * with its side effects already spent — on any driver, and whatever this check said —
-     * which is why the documentation asks hosts not to open one.
+     * Whether the claim is on record now the transaction that made it has closed. A commit
+     * reporting success is not proof: PostgreSQL aborts a transaction on the first failed
+     * statement and turns the eventual COMMIT into a rollback, so caller code inside it that
+     * swallows a failing query discards the claim while the caller is told it holds one. The
+     * row is what answers, not a token, so a claim lost to a second worker between commit and
+     * read is narrowed rather than caught.
      */
     private function claimSurvivedCommit(ActionRun $actionRun): bool
     {
@@ -445,27 +407,12 @@ final readonly class ActionRecorder
     }
 
     /**
-     * Persist the pending attribute changes only if the row is still the one the caller
-     * read and the run under it has not finished. The values come from getDirty(), so
-     * the model's own casts encode them exactly as save() would; $expected names the
-     * stored values the caller's decision rested on, and the run's liveness rides in the
-     * same statement rather than a read before it, so no row this pass already saw can
-     * move between the check and the write.
-     *
-     * It fences against what is committed, which is what terminal settlement leaves
-     * behind, and not against a transition still in flight — that one is invisible to a
-     * snapshot until it commits. The values are dirty attributes, so a caller with
-     * nothing to write would report a refusal it never made; every site reaches this
-     * with a change.
-     *
-     * Every $expected key that the write also sets names the value being REPLACED, so a
-     * matching row always changes — which keeps the count off the zero MySQL reports for
-     * an update that changed nothing and FlowStateMachine::write() has to disambiguate.
-     *
-     * $runFence is which boundary the run is held to, because the callers do not all ask
-     * the same thing: writing down what a step already did needs a run that has not
-     * finished, while a caller that starts the step again needs one that may still start
-     * work at all.
+     * Persist the pending attribute changes only if the row is still the one the caller read
+     * and the run under it passes $runFence. Every $expected key the write also sets names
+     * the value being REPLACED, so a matching row always changes — which keeps the count off
+     * the zero MySQL reports for an update that changed nothing. $runFence differs by caller:
+     * writing down what a step already did needs a run that has not finished, starting it
+     * again needs one that may still start work at all.
      *
      * @param  array<string, mixed|list<mixed>>  $expected
      * @param  array<string, mixed>  $context
