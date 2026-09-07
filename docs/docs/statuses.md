@@ -33,6 +33,13 @@ refused when it tries to claim the row, a signal-gated retry will not start anot
 already started is a different question and carries on as usual: a step past its own deadline is
 still expired, and the rollback's own compensations still run.
 
+It takes no [signal](./signals.md) either, for the same reason read from the other end: the resume a
+delivery queues cannot drive a rolling-back run, and terminal settlement closes wait-markers, not
+received rows, so the delivery would sit unread forever. Delivery is held to the three statuses
+`signalable()` names, decided on the run as the writing connection holds it. That is a check at
+delivery time, not a lock: a run that enters `Cancelling` immediately afterwards still takes the
+signal, which then stays a floating `Received` row like any other nobody consumed.
+
 ## `ActionStatus` — one step
 
 | Case | Meaning |
@@ -61,7 +68,8 @@ because nothing happened to the step — the run under it ended.
 | `Cancelled` | The run finished while the wait was still open. |
 
 A delivered signal that no `awaitSignal()` ever matched keeps its `Received` status for good — it
-records that a signal arrived and nobody used it.
+records that a signal arrived and nobody used it. Such a row can only come from a run that was
+still open to one: a delivery to a finished or rolling-back run writes nothing at all.
 
 ## What a finished run leaves behind
 

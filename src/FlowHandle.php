@@ -6,8 +6,9 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotCancelTerminalFlowException;
-use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
@@ -110,11 +111,13 @@ readonly class FlowHandle
     }
 
     /**
-     * Deliver an external signal to this run and wake it. Throws on a terminal run.
+     * Deliver an external signal to this run and wake it. Throws unless the run can
+     * still consume one: a finished run and a run rolling back are both refused.
      *
      * @param  array<int|string, mixed>  $payload
      *
-     * @throws CannotSignalTerminalFlowException
+     * @throws CannotSignalFlowException
+     * @throws FlowNotFoundException
      */
     public function signal(string $name, array $payload = []): FlowRun
     {
@@ -126,12 +129,11 @@ readonly class FlowHandle
     }
 
     /**
-     * Safe variant of signal(): swallows the terminal-run rejection and reports
-     * whether the signal was delivered. "IfRunning" means "unless the run has
-     * already finished" — a signal reaches any non-terminal run (Pending, Running,
-     * or Waiting, e.g. one parked on awaitSignal()), not only a Running one. (A
-     * missing run cannot reach here — loadFlow() throws FlowNotFoundException before
-     * a handle is created.)
+     * Safe variant of signal(): swallows the rejection and reports whether the signal
+     * was delivered. "IfRunning" means "unless the run is past taking one" — a signal
+     * reaches any run in Pending, Running or Waiting (e.g. one parked on
+     * awaitSignal()), not only a Running one — and a run pruned out from under the
+     * handle, which is past taking one for good.
      *
      * @param  array<int|string, mixed>  $payload
      */
@@ -141,7 +143,7 @@ readonly class FlowHandle
             $this->signal($name, $payload);
 
             return true;
-        } catch (CannotSignalTerminalFlowException) {
+        } catch (CannotSignalFlowException|FlowNotFoundException) {
             return false;
         }
     }

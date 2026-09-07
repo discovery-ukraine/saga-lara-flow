@@ -110,6 +110,15 @@ sets and are not interchangeable. `Cancelling` is **not** terminal — it is a r
 Swapping one boundary for the other changes public behaviour and needs its own exception and its own
 documentation.
 
+**Signal delivery is a check, not a fence.** `SignalDispatcher::deliver()` reads the run from the
+writer and refuses anything outside `signalable()`. That narrows the window; it does not close it. A
+run entering `Cancelling` in the moment after the read still takes the delivery, which then stays a
+floating `Received` row like any other nobody consumed — the documented outcome for a signal no
+`awaitSignal()` matched. This is the intended shape, **not an open defect**: do not file it as one,
+and do not widen the change to chase it. A real fence means conditional writes inside
+`SignalRecorder`, which the retry seam shares, bought for a window whose worst outcome is already
+documented behaviour.
+
 The one that decides a write is `mayStartWork()` versus `live()`: ask the narrower one wherever work
 would **begin** (the action claim, the repair rules that send another job, the retry that spends a
 signal to start a fresh cycle), and `live()` wherever a row already started is settled or written

@@ -1,5 +1,21 @@
 # Upgrading
 
+## From 1.2.x to 1.3.0
+
+### Behaviour changed
+
+Nothing below asks anything of you. Each links to the page that covers it.
+
+- **A signal is refused by a run that is rolling back.** Delivery is held to the three statuses
+  `signalable()` already named — `Pending`, `Running`, `Waiting` — so `Cancelling` raises
+  `CannotSignalCancellingFlowException` and writes nothing. It and
+  `CannotSignalTerminalFlowException` share a new parent, `CannotSignalFlowException`; catch that
+  to cover both, and `signalIfRunning()` already does.
+  [Signals](https://sagalaraflow.dev/signals)
+- **A signal to a run that has been pruned raises `FlowNotFoundException`** rather than writing a
+  row that references nothing. `signalIfRunning()` absorbs it and returns `false`, as it does every
+  other refusal. [Signals](https://sagalaraflow.dev/signals)
+
 ## From 1.1.x to 1.2.0
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading

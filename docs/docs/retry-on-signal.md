@@ -289,7 +289,8 @@ php artisan saga-flow:signal 01JABCDEF... balance-refilled
 ```
 
 Usually you do not have the run id at hand. Query for it with `whereAwaitingRetrySignal()`, and
-filter with `signalable()` (a parked run is `Waiting`, never `Running`):
+filter with `signalable()` — a parked run is `Waiting`, never `Running`, and delivery is held to
+the same three statuses the filter names:
 
 ```php
 SagaFlow::query()

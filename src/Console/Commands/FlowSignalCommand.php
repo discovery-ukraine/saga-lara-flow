@@ -2,7 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Console\Commands;
 
-use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
 use DiscoveryUkraine\SagaLaraFlow\FlowManager;
 use Illuminate\Console\Command;
@@ -48,10 +48,14 @@ class FlowSignalCommand extends Command
 
         try {
             $handle->signal($name, $payload);
-        } catch (CannotSignalTerminalFlowException) {
-            $this->warn("Flow run [{$handle->id()}] is terminal; signal [$name] not delivered.");
+        } catch (CannotSignalFlowException $refused) {
+            $this->warn($refused->getMessage());
 
             return self::SUCCESS;
+        } catch (FlowNotFoundException) {
+            $this->error("Flow run [{$handle->id()}] not found.");
+
+            return self::FAILURE;
         }
 
         $this->info("Signal [$name] delivered to flow run [{$handle->id()}].");
