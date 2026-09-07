@@ -355,9 +355,14 @@ Deliver a signal from anywhere via the handle:
 ```php
 SagaFlow::loadFlow($runId)->signal('approval', ['approved' => true]);
 
-// safe variant that returns false instead of throwing on a terminal run:
+// safe variant that returns false instead of throwing:
 SagaFlow::loadFlow($runId)->signalIfRunning('approval', ['approved' => true]);
 ```
+
+A signal is accepted only by a run that can still consume one — `Pending`, `Running` or `Waiting`.
+`signal()` throws `CannotSignalTerminalFlowException` on a finished run and
+`CannotSignalCancellingFlowException` on one that is rolling back; both extend
+`CannotSignalFlowException`. A refusal writes nothing.
 
 No `$runId`? Find the run by workflow and tag, then signal it. Use `signalable()` (alias `active()`),
 **not** `running()` — a flow parked on `awaitSignal()` is `Waiting`, not `Running`:
