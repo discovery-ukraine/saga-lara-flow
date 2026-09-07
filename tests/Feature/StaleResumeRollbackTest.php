@@ -96,6 +96,8 @@ it('decides on the status the writer holds, not the one the caller carries', fun
 });
 
 it('leaves a rolling-back run where a kick found it', function (): void {
+    config()->set('saga-lara-flow.models.flow_run', WriterRoutedFlowRun::class);
+
     useDatabaseQueue();
 
     $run = SagaFlow::create(StaleResumeWorkflow::class)->expiresAt(now()->addSeconds(30))->run();
@@ -105,14 +107,21 @@ it('leaves a rolling-back run where a kick found it', function (): void {
     $this->travel(60)->seconds();
     app(FlowMonitor::class)->sweep();
 
-    $rollingBack = FlowRun::query()->findOrFail($run->id);
+    $rollingBack = WriterRoutedFlowRun::query()->findOrFail($run->id);
 
     expect($rollingBack->status)->toBe(FlowStatus::Cancelling);
 
     $events = DB::connection('testing')->table('saga_flow_events')->count();
     $jobs = DB::connection('testing')->table('jobs')->count();
 
+    // A kick decides on the writer, so a caller holding a snapshot from before the sweep
+    // is not what tells it the run is still worth re-driving.
+    $rollingBack->status = FlowStatus::Waiting;
+
+    WriterRoutedFlowRun::reset();
+
     expect(app(FlowDoctor::class)->kick($rollingBack)->status)->toBe(FlowStatus::Cancelling)
+        ->and(WriterRoutedFlowRun::$writerReads)->toBe(1)
         ->and(DB::connection('testing')->table('saga_flow_events')->count())->toBe($events)
         ->and(DB::connection('testing')->table('jobs')->count())->toBe($jobs);
 

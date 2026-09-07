@@ -29,13 +29,13 @@ class FlowKickCommand extends Command
             return self::FAILURE;
         }
 
+        $run = $doctor->kick($run);
+
         if (! $run->status->canStartWork()) {
             $this->warn("Flow run [{$id}] is {$run->status->value}; nothing to re-drive.");
 
             return self::SUCCESS;
         }
-
-        $doctor->kick($run);
 
         $this->info("Flow run [{$id}] re-driven.");
 
