@@ -159,8 +159,8 @@ class FlowExecutor
     }
 
     /**
-     * Run the workflow's handle(). The runtime is unbound however the call leaves, so
-     * the throw an ending is read from is already outside the pass when it is caught.
+     * Run the workflow's handle(). The runtime is unbound however the call leaves, so it
+     * is already unbound by the time the caller reads the throw that ended the pass.
      *
      * @throws Throwable
      */
@@ -341,7 +341,9 @@ class FlowExecutor
     /**
      * Read the run as the writer holds it. Every caller of this decides something on the
      * answer — whether a pass may begin, or how a parent resolves this run as a child —
-     * and a lagging replica would answer with the state the read exists to replace.
+     * and a lagging replica would answer with the state the read exists to replace. A
+     * pruned row has no answer to give, so the caller's snapshot stands in; nothing acts
+     * on it that a fenced write would not refuse anyway.
      */
     private function reread(FlowRun $flowRun): FlowRun
     {
