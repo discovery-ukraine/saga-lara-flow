@@ -75,6 +75,10 @@ A sweep only ever looks at work belonging to a run that is still going. A run th
 and waits as it ends (see [statuses](./statuses.md)), and the scan skips whatever was left unsettled before that, so a
 batch is always filled with candidates a sweep can actually act on.
 
+A deadline is also enforced only once. The sweep moves a run it expires into `Cancelling`, and no pass is driven for a
+run there, so a job queued before the sweep — a resume owed to a wait it then expired — ends without re-entering
+expiration. The rollback the sweep planned is the only one, and each compensation on it runs once.
+
 ## A run the sweep cannot expire
 
 Expiring a run means replaying it to find what to undo, and that replay can throw — a workflow reading something that
@@ -164,6 +168,9 @@ To re-drive a single stuck run by hand:
 SagaFlow::kick($runId);          // or:
 // php artisan saga-flow:kick {run}
 ```
+
+A kick re-drives a run that may still start work. A run that has finished, or is rolling back, is left exactly as it
+was; the command reports its status instead of claiming a re-drive.
 
 ## Pruning
 

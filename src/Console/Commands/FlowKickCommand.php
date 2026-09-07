@@ -29,8 +29,8 @@ class FlowKickCommand extends Command
             return self::FAILURE;
         }
 
-        if ($run->isTerminal()) {
-            $this->warn("Flow run [{$id}] is terminal ({$run->status->value}); nothing to re-drive.");
+        if (! $run->status->canStartWork()) {
+            $this->warn("Flow run [{$id}] is {$run->status->value}; nothing to re-drive.");
 
             return self::SUCCESS;
         }

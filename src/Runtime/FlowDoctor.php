@@ -235,11 +235,11 @@ final readonly class FlowDoctor
      * the automatic pass, this is unthrottled and ignores positive-evidence — a human
      * decided the run is stuck. Works for Pending/Waiting/Running (a same-state
      * Running transition is an idempotent no-op and the run lock serializes against
-     * any live job); a terminal run is left untouched.
+     * any live job); a run that may not start work is left untouched.
      */
     public function kick(FlowRun $run): FlowRun
     {
-        if ($run->isTerminal()) {
+        if (! $run->status->canStartWork()) {
             return $run;
         }
 

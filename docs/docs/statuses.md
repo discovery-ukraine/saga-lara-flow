@@ -33,6 +33,15 @@ refused when it tries to claim the row, a signal-gated retry will not start anot
 already started is a different question and carries on as usual: a step past its own deadline is
 still expired, and the rollback's own compensations still run.
 
+Neither is the run itself driven. A pass begins only for a run in one of the three statuses
+`mayStartWork()` names, decided on the run as the writing connection holds it, and its deadline is
+weighed after that. A job that arrives for a run outside them — a redelivery, a resume queued while
+the run was still `Waiting`, a manual
+[`saga-flow:kick`](./expiration-and-monitoring.md#repair-the-doctor) — ends without entering the
+pass, and the executor hands its caller the run as the writer holds it rather than throwing. So a
+run is expired once: the rollback the sweep planned is the only one, and each compensation on it
+runs once.
+
 It takes no [signal](./signals.md) either, for the same reason read from the other end: the resume a
 delivery queues cannot drive a rolling-back run, and terminal settlement closes wait-markers, not
 received rows, so the delivery would sit unread forever. Delivery is held to the three statuses

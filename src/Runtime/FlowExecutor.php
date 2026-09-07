@@ -96,10 +96,22 @@ class FlowExecutor
     }
 
     /**
+     * The deadline is weighed after this check, never before: a run already rolling back
+     * would otherwise be expired a second time, and a second plan runs every
+     * compensation on it twice. Only the check reads from the writer; the pass goes on
+     * with the caller's snapshot, which is the value every transition below is fenced
+     * on, and a second driver holding a stale one must not match it.
+     *
      * @throws Throwable
      */
     private function driveInner(FlowRun $flowRun, RunMode $mode): FlowRun
     {
+        $current = $this->reread($flowRun);
+
+        if (! $current->status->canStartWork()) {
+            return $current;
+        }
+
         if ($this->isExpired($flowRun)) {
             return $this->expireRun($flowRun);
         }
@@ -110,21 +122,22 @@ class FlowExecutor
 
         $resuming ? $this->recorder->flowResumed($flowRun) : $this->recorder->flowStarted($flowRun);
 
+        return $this->replay($flowRun, $mode);
+    }
+
+    /**
+     * Replay handle() until the pass ends, interpreting what it throws.
+     *
+     * @throws Throwable
+     */
+    private function replay(FlowRun $flowRun, RunMode $mode): FlowRun
+    {
         while (true) {
             $this->runtime->bind($flowRun, $mode);
             $this->runtime->reset();
 
             try {
-                try {
-                    $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
-
-                    /** @var array<int, mixed> $arguments */
-                    $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
-
-                    $result = $this->callWithDependencies($workflow, 'handle', $arguments);
-                } finally {
-                    $this->runtime->clear();
-                }
+                $result = $this->callHandle($flowRun);
             } catch (FlowSuspended $suspended) {
                 if ($suspended->inlineResolved) {
                     continue; // Sync: the step ran inline; replay from the top.
@@ -142,6 +155,26 @@ class FlowExecutor
             }
 
             return $this->completeFlow($flowRun, $result);
+        }
+    }
+
+    /**
+     * Run the workflow's handle(). The runtime is unbound however the call leaves, so
+     * the throw an ending is read from is already outside the pass when it is caught.
+     *
+     * @throws Throwable
+     */
+    private function callHandle(FlowRun $flowRun): mixed
+    {
+        try {
+            $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
+
+            /** @var array<int, mixed> $arguments */
+            $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
+
+            return $this->callWithDependencies($workflow, 'handle', $arguments);
+        } finally {
+            $this->runtime->clear();
         }
     }
 
@@ -306,9 +339,9 @@ class FlowExecutor
     }
 
     /**
-     * Read the run as the winner of a refused transition left it. From the writer: the
-     * whole point of this read is the state that was just committed, and it is what a
-     * caller — a parent resolving this run as a child among them — decides on.
+     * Read the run as the writer holds it. Every caller of this decides something on the
+     * answer — whether a pass may begin, or how a parent resolves this run as a child —
+     * and a lagging replica would answer with the state the read exists to replace.
      */
     private function reread(FlowRun $flowRun): FlowRun
     {

@@ -4,7 +4,6 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
-use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -199,12 +198,14 @@ it('fences a child before planning the rollback it will act on', function () {
     app(StateMachine::class)->transition($child, FlowStatus::Cancelling);
 
     // This is what makes a plan made after the transition final, and a plan made
-    // before it a guess: nothing can drive a Cancelling run, so no further step can
+    // before it a guess: nothing drives a Cancelling run, so no further step can
     // complete under one. The close plans on this side of the fence for that reason
     // — the transition's own guard reads status alone, so a child resumed and
     // re-parked while an earlier plan was being made would still match it.
-    expect(fn () => app(FlowExecutor::class)->drive(SagaFlow::findRun($child->id), RunMode::Queued))
-        ->toThrow(InvalidTransitionException::class);
+    $driven = app(FlowExecutor::class)->drive(SagaFlow::findRun($child->id), RunMode::Queued);
+
+    expect($driven->status)->toBe(FlowStatus::Cancelling)
+        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelling);
 });
 
 it('retries a child close that failed after it had taken control', function () {
