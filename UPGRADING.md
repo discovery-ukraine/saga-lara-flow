@@ -15,6 +15,12 @@ Nothing below asks anything of you. Each links to the page that covers it.
 - **A signal to a run that has been pruned raises `FlowNotFoundException`** rather than writing a
   row that references nothing. `signalIfRunning()` absorbs it and returns `false`, as it does every
   other refusal. [Signals](https://sagalaraflow.dev/signals)
+- **A run that is rolling back is no longer driven.** A pass begins only for a run in one of the
+  three statuses `mayStartWork()` names, decided on the writing connection, and the deadline is
+  weighed after that. A resume queued before the sweep expired the run is turned away rather than
+  planning a second rollback, so each compensation runs once. `drive()` returns such a run as the
+  writer holds it instead of raising `InvalidTransitionException`, and `saga-flow:kick` reports it
+  rather than claiming a re-drive. [Statuses](https://sagalaraflow.dev/statuses)
 
 ## From 1.1.x to 1.2.0
 

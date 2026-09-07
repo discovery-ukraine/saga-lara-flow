@@ -603,6 +603,10 @@ it off the worker (`repair.queue_looping.enabled`), or kick a single run manuall
 `saga-flow:kick {run}` / `SagaFlow::kick($id)`. Each config key is documented in
 [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
+None of these drives a run that is rolling back or finished — a pass begins only for a run that may
+still start work, so a deadline is enforced once and each compensation on the rollback it planned
+runs once. See [Statuses](https://sagalaraflow.dev/statuses).
+
 ## Queues, locks & idempotency
 
 Every workflow and action runs as a queued job on the configured connection/queue. A run is driven

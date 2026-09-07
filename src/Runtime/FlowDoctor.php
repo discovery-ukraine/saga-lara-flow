@@ -235,19 +235,30 @@ final readonly class FlowDoctor
      * the automatic pass, this is unthrottled and ignores positive-evidence — a human
      * decided the run is stuck. Works for Pending/Waiting/Running (a same-state
      * Running transition is an idempotent no-op and the run lock serializes against
-     * any live job); a terminal run is left untouched.
+     * any live job); a run that may not start work is left untouched.
+     *
+     * Decided on the writer, and the run it decided on is what comes back: a lagging
+     * replica would answer with the status this read exists to replace, and an operator
+     * would be told a run was re-driven while it was rolling back.
      */
     public function kick(FlowRun $run): FlowRun
     {
-        if ($run->isTerminal()) {
-            return $run;
+        $current = $this->rereadFlow($run);
+
+        if (! $current->status->canStartWork()) {
+            return $current;
         }
 
-        $this->lifecycle->flowRewoken($run, 'manual');
+        $this->lifecycle->flowRewoken($current, 'manual');
 
-        $this->dispatchResume($run);
+        $this->dispatchResume($current);
 
-        return $run;
+        return $current;
+    }
+
+    private function rereadFlow(FlowRun $run): FlowRun
+    {
+        return $run->newQuery()->useWritePdo()->find($run->getKey()) ?? $run;
     }
 
     /**
