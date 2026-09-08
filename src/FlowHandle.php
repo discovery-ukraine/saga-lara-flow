@@ -42,9 +42,8 @@ readonly class FlowHandle
      */
     private function rejectWhileDeciding(string $operation): void
     {
-        // Asked of the executor, not of the container: FlowExecutor is a singleton
-        // holding a scoped runtime, and a queue worker forgets scoped instances
-        // between jobs — so a fresh resolve would answer for the wrong instance.
+        // Asked of the executor, not of the container: a pass is driven with a runtime
+        // the executor made for it, and one resolved here is bound to nothing.
         if (app(FlowExecutor::class)->isDecidingRun($this->flowRun->id)) {
             throw RetryPolicyReentryException::for($operation);
         }

@@ -38,10 +38,17 @@ class FlowExecutor
     use NormalizesExceptions;
     use ResolvesMethodDependencies;
 
+    /**
+     * The runtimes of the passes in flight, innermost last. A pass driven inside
+     * another gets one of its own.
+     *
+     * @var list<FlowRuntime>
+     */
+    private array $runtimes = [];
+
     public function __construct(
         private readonly StateMachine $stateMachine,
         private readonly FlowLifecycleRecorder $recorder,
-        private readonly FlowRuntime $runtime,
         private readonly TenancyManager $tenancy,
         private readonly Serializer $serializer,
         private readonly CompensationRecorder $compensationRecorder,
@@ -49,26 +56,54 @@ class FlowExecutor
     ) {}
 
     /**
+     * Run a pass on a runtime of its own, restoring the caller's when it leaves.
+     *
+     * @template TPass
+     *
+     * @param  callable(FlowRuntime): TPass  $pass
+     * @return TPass
+     *
+     * @throws Throwable
+     */
+    private function inOwnRuntime(callable $pass): mixed
+    {
+        $this->runtimes[] = $runtime = new FlowRuntime;
+
+        try {
+            return $pass($runtime);
+        } finally {
+            array_pop($this->runtimes);
+        }
+    }
+
+    /**
      * Whether the run currently deciding a retryOnSignal() predicate is this one.
-     * The executor answers because it owns the runtime a pass is driven with.
+     * The executor answers because it owns the runtime each pass is driven with — for
+     * every pass in flight, since an inner one is no reason to let a write into a run
+     * an outer one is deciding for.
      */
     public function isDecidingRun(string $flowRunId): bool
     {
-        return $this->runtime->isDecidingRun($flowRunId);
+        return array_any(
+            $this->runtimes,
+            fn (FlowRuntime $runtime): bool => $runtime->isDecidingRun($flowRunId),
+        );
     }
 
     /**
      * A retryOnSignal() predicate may read any run it likes, but it may not drive
-     * one — not even somebody else's. There is a single runtime behind this
-     * singleton, and a nested pass rebinds and resets the one the deciding pass is
-     * suspended inside: the outer run loses its saga stack, its ordinal counter and,
-     * once the nested pass clears up after itself, the run it was bound to.
+     * one — not even somebody else's. See RetryPolicyReentryException for why.
      *
      * @throws RetryPolicyReentryException
      */
     private function rejectWhileDeciding(): void
     {
-        if ($this->runtime->isDeciding()) {
+        $deciding = array_any(
+            $this->runtimes,
+            fn (FlowRuntime $runtime): bool => $runtime->isDeciding(),
+        );
+
+        if ($deciding) {
             throw RetryPolicyReentryException::for('a nested flow execution');
         }
     }
@@ -81,11 +116,11 @@ class FlowExecutor
         $this->rejectWhileDeciding();
 
         try {
-            return $this->tenancy->for(
+            return $this->inOwnRuntime(fn (FlowRuntime $runtime): FlowRun => $this->tenancy->for(
                 $flowRun,
                 $flowRun->workflow_class,
-                fn (): FlowRun => $this->driveInner($flowRun, $mode),
-            );
+                fn (): FlowRun => $this->driveInner($runtime, $flowRun, $mode),
+            ));
         } catch (ConcurrentFlowTransitionException) {
             // Somebody else owns this run now. Returning it rather than throwing lets
             // every caller do the right thing without knowing about the race: a job ends
@@ -104,7 +139,7 @@ class FlowExecutor
      *
      * @throws Throwable
      */
-    private function driveInner(FlowRun $flowRun, RunMode $mode): FlowRun
+    private function driveInner(FlowRuntime $runtime, FlowRun $flowRun, RunMode $mode): FlowRun
     {
         $current = $this->reread($flowRun);
 
@@ -122,7 +157,7 @@ class FlowExecutor
 
         $resuming ? $this->recorder->flowResumed($flowRun) : $this->recorder->flowStarted($flowRun);
 
-        return $this->replay($flowRun, $mode);
+        return $this->replay($runtime, $flowRun, $mode);
     }
 
     /**
@@ -130,14 +165,14 @@ class FlowExecutor
      *
      * @throws Throwable
      */
-    private function replay(FlowRun $flowRun, RunMode $mode): FlowRun
+    private function replay(FlowRuntime $runtime, FlowRun $flowRun, RunMode $mode): FlowRun
     {
         while (true) {
-            $this->runtime->bind($flowRun, $mode);
-            $this->runtime->reset();
+            $runtime->bind($flowRun, $mode);
+            $runtime->reset();
 
             try {
-                $result = $this->callHandle($flowRun);
+                $result = $this->callHandle($runtime, $flowRun);
             } catch (FlowSuspended $suspended) {
                 if ($suspended->inlineResolved) {
                     continue; // Sync: the step ran inline; replay from the top.
@@ -151,7 +186,7 @@ class FlowExecutor
                 // would roll back a run this pass no longer owns.
                 throw $lost;
             } catch (Throwable $exception) {
-                return $this->failAndCompensate($flowRun, $exception, $mode);
+                return $this->failAndCompensate($runtime, $flowRun, $exception, $mode);
             }
 
             return $this->completeFlow($flowRun, $result);
@@ -164,17 +199,17 @@ class FlowExecutor
      *
      * @throws Throwable
      */
-    private function callHandle(FlowRun $flowRun): mixed
+    private function callHandle(FlowRuntime $runtime, FlowRun $flowRun): mixed
     {
         try {
-            $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
+            $workflow = app()->make($flowRun->workflow_class, ['runtime' => $runtime]);
 
             /** @var array<int, mixed> $arguments */
             $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
 
             return $this->callWithDependencies($workflow, 'handle', $arguments);
         } finally {
-            $this->runtime->clear();
+            $runtime->clear();
         }
     }
 
@@ -198,11 +233,11 @@ class FlowExecutor
     {
         $this->rejectWhileDeciding();
 
-        return $this->tenancy->for(
+        return $this->inOwnRuntime(fn (FlowRuntime $runtime): array => $this->tenancy->for(
             $flowRun,
             $flowRun->workflow_class,
-            fn (): array => $this->collectCompensationsInner($flowRun),
-        );
+            fn (): array => $this->collectCompensationsInner($runtime, $flowRun),
+        ));
     }
 
     /**
@@ -220,9 +255,13 @@ class FlowExecutor
      *
      * @param  list<CompensationEntry>  $planned
      * @return list<CompensationEntry>
+     *
+     * @throws RetryPolicyReentryException
      */
     public function replanCompensations(FlowRun $flowRun, array $planned): array
     {
+        $this->rejectWhileDeciding();
+
         try {
             $replanned = $this->collectCompensations($flowRun);
         } catch (Throwable $replanning) {
@@ -294,18 +333,17 @@ class FlowExecutor
      *
      * @throws Throwable
      */
-    private function collectCompensationsInner(FlowRun $flowRun): array
+    private function collectCompensationsInner(FlowRuntime $runtime, FlowRun $flowRun): array
     {
-        $this->runtime->bind($flowRun, RunMode::Queued);
-        $this->runtime->reset();
-        $this->runtime->beginCollecting();
+        $runtime->bind($flowRun, RunMode::Queued);
+        $runtime->reset();
+        $runtime->beginCollecting();
 
-        // Every exit unbinds, including the ones that leave by throwing: the runtime
-        // is a singleton, and a pass that left it collecting would make the next
-        // ordinary drive of any run refuse to start work.
+        // Every exit unbinds, including the ones that leave by throwing, so nothing
+        // that escapes this pass can be read as though a run were still bound.
         try {
             try {
-                $workflow = app()->make($flowRun->workflow_class, ['runtime' => $this->runtime]);
+                $workflow = app()->make($flowRun->workflow_class, ['runtime' => $runtime]);
 
                 /** @var array<int, mixed> $arguments */
                 $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
@@ -326,10 +364,10 @@ class FlowExecutor
                 // has a run to retry the rollback on.
             }
 
-            return $this->runtime->sagaStack()->entries();
+            return $runtime->sagaStack()->entries();
         } finally {
-            $this->runtime->endCollecting();
-            $this->runtime->clear();
+            $runtime->endCollecting();
+            $runtime->clear();
         }
     }
 
@@ -362,13 +400,17 @@ class FlowExecutor
      *
      * @throws Throwable
      */
-    private function failAndCompensate(FlowRun $flowRun, Throwable $exception, RunMode $mode): FlowRun
-    {
+    private function failAndCompensate(
+        FlowRuntime $runtime,
+        FlowRun $flowRun,
+        Throwable $exception,
+        RunMode $mode
+    ): FlowRun {
         if ($exception instanceof HistoryContractMismatchException) {
             return $this->failFlow($flowRun, $exception);
         }
 
-        $entries = $this->runtime->sagaStack()->entries();
+        $entries = $runtime->sagaStack()->entries();
 
         if ($entries === []) {
             return $this->failFlow($flowRun, $exception);
@@ -411,12 +453,16 @@ class FlowExecutor
      * Shared by the monitor's sweep (FlowMonitor::expireRun) and the lazy drive check.
      *
      * Guarded separately from drive(), because the sweep reaches it directly: one run
-     * claimed by someone else in the meantime must not end the whole pass.
+     * claimed by someone else in the meantime must not end the whole pass. The re-entry
+     * refusal is raised here rather than left to the planning replay below, whose own
+     * wrapper would hand a predicate a planning fault to read as an ordinary failure.
      *
      * @throws Throwable
      */
     public function expireRun(FlowRun $flowRun): FlowRun
     {
+        $this->rejectWhileDeciding();
+
         try {
             return $this->expireRunInner($flowRun);
         } catch (ConcurrentFlowTransitionException) {

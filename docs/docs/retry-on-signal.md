@@ -200,8 +200,8 @@ would be left unclaimed and the next step would land in the wrong slot, and a ru
 be handed a live wait a moment later.
 
 Nor may it drive *any* run, its own or somebody else's — `runSync()` and `compensate()` are refused
-too. One runtime serves the whole process, so a nested pass would rewind the ordinal counter and
-empty the saga stack of the pass waiting on the answer. Reading other runs — their status, their
+too. The predicate is asked between a step's failure and the parking that answers for it, and a pass
+started there decides what that parking is written over. Reading other runs — their status, their
 history, their tags — stays fair game.
 
 The engine refuses every one of these with `RetryPolicyReentryException` before anything is

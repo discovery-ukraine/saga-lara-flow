@@ -27,7 +27,6 @@ use DiscoveryUkraine\SagaLaraFlow\Repositories\EloquentSignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
-use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Serialization\LaravelSerializer;
 use DiscoveryUkraine\SagaLaraFlow\States\FlowStateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
@@ -70,7 +69,6 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         $this->app->singleton(FlowManager::class);
         $this->app->alias(FlowManager::class, 'saga-flow');
 
-        $this->app->scoped(FlowRuntime::class);
         $this->app->scoped(TenancyManager::class);
         $this->app->singleton(FlowExecutor::class);
         $this->app->singleton(FlowMonitor::class);

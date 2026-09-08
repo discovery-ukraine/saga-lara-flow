@@ -26,6 +26,12 @@ public function handle(): array
 array. `run()` awaits the child and returns whatever the child's `handle()` returned, scalars
 included.
 
+It is also the only seam that runs another workflow from inside `handle()`. `SagaFlow::create(...)`
+there takes no ordinal, so the run it starts is recognized by nothing and the next replay starts
+another one. A step is free to start a run of its own — an action's body is recorded, so it executes
+once however the workflow is replayed — but `handle()` itself reaches another workflow through
+`child()`.
+
 ## Close policies
 
 `ChildClosePolicy` decides what happens to the child when the **parent** closes:
