@@ -33,6 +33,14 @@ Nothing below asks anything of you. Each links to the page that covers it.
   restored from the earlier one and journalled as `replan_incomplete`; a replay that throws is
   journalled as `replan_failed` and the rollback goes ahead on the plan in hand.
   [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
+- **A kick reaches the step, not just the run.** `saga-flow:kick` / `SagaFlow::kick()` now refills
+  the repair budget of the run and of every step it has not finished, and sends a fresh job for the
+  sequential step the run is parked on — the rows R1 and R3 read (`Pending`, or `Running` past its
+  reclaim deadline), without their throttle. The refilled rows are held off for `grace_seconds`, as
+  a freshly dispatched row is. `repair.max_attempts` therefore holds the automatic pass off rather
+  than ending a run's recovery. The claim still decides whether that job runs the
+  step, and a parallel block gets its budget back and nothing else.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
 
 ## From 1.1.x to 1.2.0
 
