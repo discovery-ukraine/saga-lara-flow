@@ -141,7 +141,8 @@ Every parameter:
 - **`batch_size`** — how many candidate entities one repair pass inspects at most. Only entities of runs that have not
   finished are counted against it.
 - **`max_attempts`** — per-entity cap. After this many repair attempts the doctor gives up on that entity and leaves it
-  alone. A kick refills that budget, so the cap holds the automatic pass off rather than ending the run's recovery.
+  alone. A kick refills that budget — held off for `grace_seconds` first, like any freshly dispatched row — so the cap
+  holds the automatic pass off rather than ending the run's recovery.
 - **`backoff`** — exponential backoff between repair attempts for a single entity, clamped between
   `base_seconds` and `max_seconds`. Prevents the doctor from hammering the same stuck entity.
 - **`redispatch_lost_actions`** — enable R1: re-dispatch a lost queue job for a stuck sequential

@@ -147,6 +147,10 @@ it('clears the run own repair budget so the doctor can wake it again', function 
     app(FlowDoctor::class)->kick($run->fresh());
 
     expect(SagaFlow::findRun($run->id)->repair_attempts)->toBe(0);
+
+    $this->travel((int) config('saga-lara-flow.repair.grace_seconds') + 1)->seconds();
+
+    expect(app(FlowDoctor::class)->repair()->rewokenFlows)->toBe(1);
 });
 
 it('leaves a Running step inside its reclaim window alone', function () {
@@ -227,4 +231,23 @@ it('answers with the budget the database holds, not the one it wrote', function 
     expect($stored->repair_attempts)->toBe((int) config('saga-lara-flow.repair.max_attempts'))
         ->and($kicked->repair_attempts)->toBe($stored->repair_attempts)
         ->and(file_get_contents($log))->toContain('claim_not_committed');
+});
+
+it('holds the kicked step off the automatic pass for the repair grace period', function () {
+    $run = kickReachStageStuckRun(OneActionWorkflow::class);
+
+    app(FlowDoctor::class)->kick($run);
+
+    $queued = kickReachJobCount();
+
+    // The row is old enough to be a candidate the moment its counter is refilled, and
+    // the generation token cannot tell two jobs of one cycle apart: a second job would
+    // be claimable the instant the kicked one leaves the row Failed between its own
+    // native tries.
+    expect(app(FlowDoctor::class)->repair()->redispatchedActions)->toBe(0)
+        ->and(kickReachJobCount())->toBe($queued);
+
+    $this->travel((int) config('saga-lara-flow.repair.grace_seconds') + 1)->seconds();
+
+    expect(app(FlowDoctor::class)->repair()->redispatchedActions)->toBe(1);
 });

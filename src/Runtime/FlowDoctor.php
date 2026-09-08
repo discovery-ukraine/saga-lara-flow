@@ -13,6 +13,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Queue\Events\Looping;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -324,11 +325,19 @@ final readonly class FlowDoctor
      * Refill the budget the automatic pass spent on this run and on the steps it has
      * not finished. A kick is somebody watching, which is what max_attempts stands in
      * for while nobody is.
+     *
+     * The refill carries the same hold ActionRecorder::retryAction() gives a rewound
+     * row, and for the same reason: the doctor holds a fresh row off by comparing
+     * created_at, which these passed long ago, so without one it would read the job
+     * this kick is about to send as lost and send a second — and the generation token
+     * cannot tell two jobs of one cycle apart.
      */
     private function clearRepairBudget(FlowRun $run): void
     {
+        $heldUntil = Carbon::now()->addSeconds((int) config('saga-lara-flow.repair.grace_seconds', 60));
+
         $run->repair_attempts = 0;
-        $run->repair_available_at = null;
+        $run->repair_available_at = $heldUntil;
         $run->save();
 
         $this->actionRunModel()::query()
@@ -338,7 +347,7 @@ final readonly class FlowDoctor
                 ActionStatus::Running,
                 ActionStatus::AwaitingRetry,
             ])
-            ->update(['repair_attempts' => 0, 'repair_available_at' => null]);
+            ->update(['repair_attempts' => 0, 'repair_available_at' => $heldUntil]);
     }
 
     /**
