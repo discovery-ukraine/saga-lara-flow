@@ -604,7 +604,10 @@ For runs whose progress was lost to a *dropped job* (rather than a deadline), th
 re-dispatch missing actions (`repair.redispatch_lost_actions`) and re-wake stuck waits
 (`repair.wake_stuck_flows`) — enable `repair.enabled` and either schedule `saga-flow:repair` or loop
 it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
-`saga-flow:kick {run}` / `SagaFlow::kick($id)`. Each config key is documented in
+`saga-flow:kick {run}` / `SagaFlow::kick($id)`. A kick refills the repair budget that
+`repair.max_attempts` caps and sends the sequential step the run is parked on its own job back, so
+the cap holds the automatic pass off rather than ending the run's recovery. Each config key is
+documented in
 [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
 None of these drives a run that is rolling back or finished — a pass begins only for a run that may
@@ -742,7 +745,7 @@ reaches somewhere you chose rather than nowhere. See
 | `saga-flow:show {run} {--compact}`                               | Inspect a run: header, actions, signals, compensations, history. |
 | `saga-flow:signal {run} {name} {--payload=}`                     | Deliver a JSON-payload signal and wake the run.                  |
 | `saga-flow:cancel {run} {--compensate}`                          | Cancel a non-terminal run; `--compensate` rolls back first.      |
-| `saga-flow:kick {run}`                                           | Manually re-drive a stuck run.                                   |
+| `saga-flow:kick {run}`                                           | Re-drive a stuck run and the step it is parked on.               |
 | `saga-flow:monitor`                                              | Expire overdue runs/actions and time out waits.                  |
 | `saga-flow:repair`                                               | Recover runs whose progress was lost to a dropped job.           |
 | `saga-flow:prune {--days=} {--before=} {--dry-run}`              | Delete old terminal runs and related rows.                       |

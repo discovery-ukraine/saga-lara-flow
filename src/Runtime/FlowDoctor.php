@@ -30,10 +30,10 @@ use Throwable;
  *   R3  a stuck sequential Running action past its own reclaim window → re-dispatch.
  *
  * repair_attempts + repair_available_at throttle a pass per entity and give up after max_attempts.
- * saga-flow:kick re-wakes a run by hand, which is the manual answer to R2; it does not reset a
- * counter, so an action the doctor has given up on waits for a retry cycle to reschedule it.
- * Batch-bound work (parallel actions, compensations) is out of scope even for R3: adding a job back
- * into a Bus::batch needs an id this package does not store.
+ * saga-flow:kick is the manual answer to all three: it refills that budget for the run and its
+ * unfinished steps and sends the sequential step its own job back. Batch-bound work (parallel
+ * actions, compensations) is out of scope even for R3 and for a kick: adding a job back into a
+ * Bus::batch needs an id this package does not store.
  */
 final readonly class FlowDoctor
 {
@@ -237,9 +237,14 @@ final readonly class FlowDoctor
      * Running transition is an idempotent no-op and the run lock serializes against
      * any live job); a run that may not start work is left untouched.
      *
+     * The resume alone cannot move a run parked on a recorded step: the replay it
+     * triggers meets that row and parks on it exactly as the pass that recorded it did.
+     *
      * Decided on the writer, and the run it decided on is what comes back: a lagging
      * replica would answer with the status this read exists to replace, and an operator
      * would be told a run was re-driven while it was rolling back.
+     *
+     * @throws Throwable
      */
     public function kick(FlowRun $run): FlowRun
     {
@@ -249,11 +254,118 @@ final readonly class FlowDoctor
             return $current;
         }
 
-        $this->lifecycle->flowRewoken($current, 'manual');
+        /** @var array{0: ?FlowRun, 1: ?ActionRun} $kicked */
+        $kicked = $this->connection()->transaction(function () use ($current): array {
+            $locked = $this->lockFlow($current->id);
 
-        $this->dispatchResume($current);
+            if ($locked === null || ! $locked->status->canStartWork()) {
+                return [$locked, null];
+            }
 
-        return $current;
+            $this->clearRepairBudget($locked);
+
+            $step = $this->openSequentialStep($locked);
+
+            // Last of all: the re-wake event runs host listeners, and one that swallows
+            // a failing query leaves the connection unable to answer anything more.
+            $this->lifecycle->flowRewoken($locked, 'manual');
+
+            return [$locked, $step];
+        });
+
+        [$locked, $step] = $kicked;
+
+        if ($locked === null || ! $locked->status->canStartWork()) {
+            return $locked ?? $current;
+        }
+
+        $kickedRun = $this->budgetSurvivedCommit($locked);
+
+        $this->dispatchResume($kickedRun);
+
+        if ($step !== null) {
+            // The writer already answered with this run; lazy-loading the relation
+            // would ask a replica which connection and queue the recovery lands on.
+            $step->setRelation('flowRun', $kickedRun);
+
+            $this->dispatchActionJob($step);
+        }
+
+        return $kickedRun;
+    }
+
+    /**
+     * The run as the writer holds it once the kick's transaction has closed. Mirrors
+     * ActionRecorder::claimSurvivedCommit(): a commit reporting success is not proof,
+     * and the re-wake event runs host listeners inside this one. Both jobs are sent
+     * either way — neither reads what it wrote — but a caller handed a model claiming a
+     * budget the database never took would read the run as reachable again.
+     */
+    private function budgetSurvivedCommit(FlowRun $run): FlowRun
+    {
+        $stored = $this->rereadFlow($run);
+
+        if ($stored->repair_attempts === 0) {
+            return $stored;
+        }
+
+        app(AnomalyLog::class)->log(AnomalyLog::REASON_CLAIM_NOT_COMMITTED, [
+            'entity' => 'flow',
+            'flow_run_id' => $run->id,
+            'workflow_class' => $run->workflow_class,
+            'status' => $stored->status->value,
+            'stored_repair_attempts' => $stored->repair_attempts,
+        ]);
+
+        return $stored;
+    }
+
+    /**
+     * Refill the budget the automatic pass spent on this run and on the steps it has
+     * not finished. A kick is somebody watching, which is what max_attempts stands in
+     * for while nobody is.
+     */
+    private function clearRepairBudget(FlowRun $run): void
+    {
+        $run->repair_attempts = 0;
+        $run->repair_available_at = null;
+        $run->save();
+
+        $this->actionRunModel()::query()
+            ->where('flow_run_id', $run->id)
+            ->whereIn('status', [
+                ActionStatus::Pending,
+                ActionStatus::Running,
+                ActionStatus::AwaitingRetry,
+            ])
+            ->update(['repair_attempts' => 0, 'repair_available_at' => null]);
+    }
+
+    /**
+     * The step a kick can put back on the queue itself: the rows R1 and R3 read, without
+     * their throttle.
+     *
+     * A Running row still inside its reclaim window is skipped rather than left to lose
+     * the claim: a second job for a row a live worker holds waits on that worker's lock,
+     * and the queue giving up on the wait is recorded against the row it is running.
+     */
+    private function openSequentialStep(FlowRun $run): ?ActionRun
+    {
+        return $this->actionRunModel()::query()
+            ->where('flow_run_id', $run->id)
+            ->whereNull('parallel_group')
+            ->where(function ($query): void {
+                $query
+                    ->where('status', ActionStatus::Pending)
+                    ->orWhere(function ($stale): void {
+                        $stale
+                            ->where('status', ActionStatus::Running)
+                            ->whereNotNull('reclaim_stale_at')
+                            ->where('reclaim_stale_at', '<=', now());
+                    });
+            })
+            ->orderBy('sequence')
+            ->first();
     }
 
     private function rereadFlow(FlowRun $run): FlowRun
@@ -293,10 +405,18 @@ final readonly class FlowDoctor
 
     private function lockAction(string $id): ?ActionRun
     {
+        return $this->actionRunModel()::query()->lockForUpdate()->find($id);
+    }
+
+    /**
+     * @return class-string<ActionRun>
+     */
+    private function actionRunModel(): string
+    {
         /** @var class-string<ActionRun> $model */
         $model = config('saga-lara-flow.models.action_run');
 
-        return $model::query()->lockForUpdate()->find($id);
+        return $model;
     }
 
     private function lockFlow(string $id): ?FlowRun

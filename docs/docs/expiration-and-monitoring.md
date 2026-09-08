@@ -141,7 +141,7 @@ Every parameter:
 - **`batch_size`** — how many candidate entities one repair pass inspects at most. Only entities of runs that have not
   finished are counted against it.
 - **`max_attempts`** — per-entity cap. After this many repair attempts the doctor gives up on that entity and leaves it
-  alone (re-drive it by hand with `saga-flow:kick`).
+  alone. A kick refills that budget, so the cap holds the automatic pass off rather than ending the run's recovery.
 - **`backoff`** — exponential backoff between repair attempts for a single entity, clamped between
   `base_seconds` and `max_seconds`. Prevents the doctor from hammering the same stuck entity.
 - **`redispatch_lost_actions`** — enable R1: re-dispatch a lost queue job for a stuck sequential
@@ -182,6 +182,13 @@ SagaFlow::kick($runId);          // or:
 
 A kick re-drives a run that may still start work. A run that has finished, or is rolling back, is left exactly as it
 was; the command reports its status instead of claiming a re-drive.
+
+It also refills the repair budget of the run and of every step it has not finished, and sends a fresh job for the
+sequential step the run is parked on — so a run stopped at a step the doctor gave up on moves again, rather than
+replaying up to that step and parking on it a second time. The step it reaches is the one R1 and R3 read, without their
+throttle: `Pending`, or `Running` past its [reclaim](./reclaim-and-recovery.md) deadline. A `Running` row still inside
+that window belongs to a worker that may be alive and is left to it. A parallel block gets its budget back and nothing
+else, for the same reason R1 and R3 leave batch-bound work alone.
 
 ## Pruning
 

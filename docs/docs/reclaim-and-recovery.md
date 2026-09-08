@@ -41,7 +41,8 @@ The claim accepts a row that is `Pending` — and, for an action, `Failed`, whic
 the action's own native `$tries`. A row already `Running` is accepted only once its reclaim deadline has passed, and
 with reclaim off there is no deadline, so it is never accepted. A worker killed mid-execution (an evicted pod, the OOM
 killer, a `SIGKILL` deploy) leaves its row `Running` for good: replay reads a `Running` step as still in flight and
-parks the run, `saga-flow:kick` does the same, and the run waits indefinitely.
+parks the run, and `saga-flow:kick` has no deadline to tell it apart from a row still being worked on, so it leaves it
+there too and the run waits indefinitely.
 
 What that buys is that the engine never re-executes a step on its own initiative:
 
@@ -132,12 +133,13 @@ defaults):
 ## What changes once it's on
 
 A `Running` row becomes claimable again once its deadline passes — but only when something actually *claims* it, which
-means one of two things: a redelivered queue job for that row, or the doctor (next section). Reclaim is otherwise
-passive; it does not go looking for stale rows.
+means one of three things: a redelivered queue job for that row, the doctor (next section), or `saga-flow:kick`.
+Reclaim is otherwise passive; it does not go looking for stale rows.
 
-`saga-flow:kick` is not one of those two. It re-wakes the run, and the replay it triggers reads a `Running` step as
-still in flight and parks the run again without reaching the claim. Kick recovers a run whose *resume* was lost, not a
-row whose *worker* was.
+A kick sends a fresh job for the sequential step its run is parked on, so it reaches the claim rather than only
+re-waking the run. It reads the same deadline R3 does and skips a `Running` row that has not passed it, which is why,
+with reclaim off, it recovers a run whose *resume* was lost but not a row whose *worker* was: no `Running` row carries
+a deadline then, so none is ever its candidate.
 
 ## The doctor's active side (R3)
 
