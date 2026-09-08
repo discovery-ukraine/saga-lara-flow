@@ -185,8 +185,9 @@ class FlowExecutor
      * no step; a workflow's own tag() calls still rewrite their rows, as they do on
      * every replay. Planned from three places — compensate(), the expiration sweep and
      * a parent closing a child — so a throw the replay did not expect is a fault, not a
-     * frontier: it leaves rather than shortening the stack behind the caller's back,
-     * and the two callers the operator did not ask for absorb it where it lands.
+     * frontier: it leaves rather than shortening the stack behind the caller's back.
+     * Where it lands is then the caller's to answer, and each of them plans twice:
+     * before taking control of the run, and again through replanCompensations().
      *
      * @return list<CompensationEntry>
      *
@@ -201,6 +202,66 @@ class FlowExecutor
             $flowRun->workflow_class,
             fn (): array => $this->collectCompensationsInner($flowRun),
         );
+    }
+
+    /**
+     * The plan a rollback acts on, made with the run already fenced: one drawn before
+     * the transition is older than the run it describes, and a step whose owed attempt
+     * landed in between belongs in the stack.
+     *
+     * The later plan is not always the longer one. An attempt that claimed a failed step
+     * in the same gap leaves it Running, and a compensation the first plan held for it
+     * — compensateStepOnSelfFailure() registers one — is not there to be read again. So
+     * it is adopted only when it covers every ordinal already planned; otherwise, as
+     * when the replay throws, the caller keeps what it has and the difference is
+     * journalled. Neither outcome unwinds less than the caller would have without it.
+     *
+     * @param  list<CompensationEntry>  $planned
+     * @return list<CompensationEntry>
+     */
+    public function replanCompensations(FlowRun $flowRun, array $planned): array
+    {
+        try {
+            $replanned = $this->collectCompensations($flowRun);
+        } catch (Throwable $replanning) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_REPLAN_FAILED, [
+                'entity' => 'flow',
+                'flow_run_id' => $flowRun->id,
+                'workflow_class' => $flowRun->workflow_class,
+                'status' => $flowRun->status->value,
+                'planned' => count($planned),
+                'exception' => $this->exceptionToArray($replanning),
+            ]);
+
+            return $planned;
+        }
+
+        $dropped = array_values(array_diff($this->ordinals($planned), $this->ordinals($replanned)));
+
+        if ($dropped === []) {
+            return $replanned;
+        }
+
+        app(AnomalyLog::class)->log(AnomalyLog::REASON_REPLAN_INCOMPLETE, [
+            'entity' => 'flow',
+            'flow_run_id' => $flowRun->id,
+            'workflow_class' => $flowRun->workflow_class,
+            'status' => $flowRun->status->value,
+            'planned' => count($planned),
+            'replanned' => count($replanned),
+            'dropped_sequences' => $dropped,
+        ]);
+
+        return $planned;
+    }
+
+    /**
+     * @param  list<CompensationEntry>  $entries
+     * @return list<int>
+     */
+    private function ordinals(array $entries): array
+    {
+        return array_map(static fn (CompensationEntry $entry): int => $entry->sequence, $entries);
     }
 
     /**
@@ -366,6 +427,9 @@ class FlowExecutor
             throw ExpirationNotPlannedException::for($flowRun, $planning);
         }
 
+        // Nothing to undo is finalized where the run stands rather than through
+        // Cancelling: a death between the two would leave it there, and a run in
+        // Cancelling is one this sweep, the doctor and drive() all pass over.
         if ($entries === []) {
             $flowRun->exception = $primary;
 
@@ -379,6 +443,8 @@ class FlowExecutor
         }
 
         $this->stateMachine->transition($flowRun, FlowStatus::Cancelling);
+
+        $entries = $this->replanCompensations($flowRun, $entries);
 
         $this->sagaRunner->rollback($flowRun, $entries, $primary, RunMode::Queued, FlowStatus::Expired);
 

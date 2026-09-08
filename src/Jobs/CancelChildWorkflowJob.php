@@ -99,6 +99,10 @@ class CancelChildWorkflowJob implements ShouldQueue
             // was fenced by an earlier attempt that then failed to plan: both plans
             // fail or neither does, so a retry recovers it once the replay can read
             // what it could not.
+            //
+            // The other two sites that plan twice keep the plan they made first and
+            // fall back to it, because nothing redelivers them. This one is a job, so
+            // throwing the first plan away is what leaves the retry a clean scene.
             if ($this->withCompensation) {
                 $executor->collectCompensations($child);
             }
