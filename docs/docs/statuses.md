@@ -33,6 +33,14 @@ refused when it tries to claim the row, a signal-gated retry will not start anot
 already started is a different question and carries on as usual: a step past its own deadline is
 still expired, and the rollback's own compensations still run.
 
+A step is not the only thing that begins, and the rest is reached from inside a pass rather than by
+a job of its own: a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md)
+both start work at an ordinal the run has not reached before. A pass still replaying when the
+rollback committed carries the run as it was before it, so both seams read the status from the
+writing connection and end the pass instead of starting anything. That is a check taken immediately
+before the work, not a lock — a run that enters `Cancelling` in the moment between them still starts
+that one.
+
 Neither is the run itself driven. A pass begins only for a run in one of the three statuses
 `mayStartWork()` names, decided on the run as the writing connection holds it, and its deadline is
 weighed after that. A job that arrives for a run outside them — a redelivery, a resume queued while

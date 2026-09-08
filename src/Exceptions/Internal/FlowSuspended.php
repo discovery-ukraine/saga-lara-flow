@@ -10,7 +10,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal;
 final class FlowSuspended extends InternalFlowControl
 {
     /**
-     * @param  string  $reason  What suspended the flow: 'action' | 'signal' | 'child' | 'parallel'.
+     * @param  string  $reason  What suspended the flow: 'action' | 'signal' | 'child' | 'parallel' | 'side_effect'.
      * @param  int  $sequence  The (flow_run_id, sequence) ordinal of the suspending step.
      * @param  array<string, mixed>  $context  Optional diagnostic context.
      * @param  bool  $inlineResolved  Sync mode: the step was executed inline and the loop should replay.

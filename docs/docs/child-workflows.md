@@ -64,3 +64,13 @@ A parent that carries on this way keeps collecting compensations, and a later ro
 child that has already finished is history the plan reads, not a frontier it stops at. A child still
 in flight is a frontier, so a rollback planned while one runs covers only the steps before it — the
 child rolls itself back through its own [close policy](#close-policies) instead.
+
+## A parent that is rolling back
+
+No child starts under a parent that is rolling back. The seam reads the parent's status from the
+connection that wrote it and ends the pass instead: a rollback plans the stack it will undo once, so
+a child started afterwards would run to completion outside that plan, and under the default
+`Abandon` policy nothing closes it. The child's run and its link are written together, so an ordinal
+that does not finish leaves behind no run without an owner. The `ChildWorkflowStarted` event and the
+child's own job both follow that commit and only once it is read back, so a listener never sees a
+child the write did not keep.

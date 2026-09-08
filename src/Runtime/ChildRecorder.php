@@ -25,7 +25,9 @@ final readonly class ChildRecorder
     ) {}
 
     /**
-     * Record the link for a newly started child and append the child.started event.
+     * Record the link for a newly started child and append the child.started event. The
+     * host hears about it from childStarted() below rather than here, so its listeners
+     * run outside the transaction these two writes share.
      */
     public function startChild(
         FlowRun $parent,
@@ -55,9 +57,15 @@ final readonly class ChildRecorder
             'child_workflow_class' => $child->workflow_class,
         ]);
 
-        event(new ChildWorkflowStarted($parent, $child));
-
         return $link;
+    }
+
+    /**
+     * Announce a child whose link is on record.
+     */
+    public function childStarted(FlowRun $parent, FlowRun $child): void
+    {
+        event(new ChildWorkflowStarted($parent, $child));
     }
 
     public function recordCompleted(FlowChild $link, FlowRun $child): void
