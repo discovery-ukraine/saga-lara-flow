@@ -97,11 +97,13 @@ only to find out whether one can be drawn at all: it writes nothing, so a run wh
 left exactly where it was found. The plan that is unwound is the one made afterwards, and it holds
 the step whose owed queue attempt completed while the first was being drawn.
 
-The later plan is adopted only when it covers every ordinal the earlier one held. It is not always
-the longer of the two — an attempt that claimed a failed step in the same gap leaves it `Running`,
-and what `compensateStepOnSelfFailure()` registers for a failed step is not what a replay reads off
-a running one. That is journalled as `replan_incomplete`, a replay that throws as `replan_failed`,
-and either way the rollback goes ahead on the plan already in hand.
+The later plan is not always the longer one. An attempt that claimed a failed step in the same gap
+leaves it `Running`, and what `compensateStepOnSelfFailure()` registers for a failed step is not
+what a replay reads off a running one — and a parallel block can lose an ordinal that way while
+finding another in the same pass. So an ordinal the later plan is missing is restored from the
+earlier one rather than the later plan being discarded, and the difference is journalled as
+`replan_incomplete`. A replay that throws leaves nothing to merge and is journalled as
+`replan_failed`; the rollback then goes ahead on the plan already in hand.
 
 Settling what already started is the other question, and it carries on: a step past its own deadline
 is still expired, and the rollback's own compensations still run. See
@@ -126,7 +128,7 @@ say. The plan is then incomplete, so
 `compensate()` surfaces the throw and leaves the run as it found it, rather than unwinding part of
 it and reporting a finished rollback. Fix the cause and call it again. That is the plan drawn before
 the run is moved; a throw from the one made after it is journalled instead, because by then the run
-has been taken and there is already a plan to unwind.
+has been taken and there is a plan to unwind either way.
 
 :::warning Not inside a transaction of your own
 The compensations execute before your transaction closes, so a rollback afterwards discards the

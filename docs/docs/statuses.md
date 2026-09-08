@@ -36,9 +36,9 @@ still expired, and the rollback's own compensations still run.
 The plan it unwinds is made once the run is here, which is what makes "afterwards" mean afterwards:
 a step whose owed queue attempt completed while an earlier plan was being drawn is in it. That
 earlier plan is drawn before anything is written, so a run whose rollback cannot be planned at all
-is left where it was found rather than stranded mid-rollback. It is also what the engine falls back
-on, and says so in the journal, when the second plan cannot be trusted over it — the replay threw,
-or it came back without an ordinal the first one held.
+is left where it was found rather than stranded mid-rollback. It is also what fills the gaps in the
+later one, and the journal says so: an ordinal the second plan came back without is restored from
+the first, and a second replay that throws leaves the first standing on its own.
 
 A step is not the only thing that begins, and the rest is reached from inside a pass rather than by
 a job of its own: a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md)

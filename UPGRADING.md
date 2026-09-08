@@ -29,9 +29,9 @@ Nothing below asks anything of you. Each links to the page that covers it.
   [Child workflows](https://sagalaraflow.dev/child-workflows)
 - **The rollback that is unwound is planned with the run already in `Cancelling`.** A step whose
   owed queue attempt completed while an earlier plan was being drawn is compensated rather than left
-  applied under a run reporting a complete unwind. The later plan is adopted only when it covers
-  every ordinal the earlier one held; a replay that throws is journalled as `replan_failed` and one
-  that came back short as `replan_incomplete`, and the rollback goes ahead on the plan in hand.
+  applied under a run reporting a complete unwind. An ordinal the later plan came back without is
+  restored from the earlier one and journalled as `replan_incomplete`; a replay that throws is
+  journalled as `replan_failed` and the rollback goes ahead on the plan in hand.
   [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
 
 ## From 1.1.x to 1.2.0

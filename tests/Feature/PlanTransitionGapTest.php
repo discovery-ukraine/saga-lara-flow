@@ -75,6 +75,27 @@ final class PlanGapPaymentWorkflow extends Workflow
 }
 
 /**
+ * A parallel block whose first member compensates its own failure and whose second is
+ * still in flight: the one shape where a later plan can lose an ordinal and find
+ * another in the same pass.
+ */
+final class PlanGapParallelWorkflow extends Workflow
+{
+    public function handle(): void
+    {
+        $this->parallel()
+            ->action(PlanGapPaymentAction::class, 'order-1')
+            ->compensateStepOnSelfFailure()
+            ->compensateWith(UndoAction::class, 'p')
+            ->action(MakeValueAction::class, 'h')
+            ->compensateWith(UndoAction::class, 'h')
+            ->run();
+
+        $this->awaitSignal('go');
+    }
+}
+
+/**
  * The payment step registers a compensation even for its own failure, so the first plan
  * holds an entry a later one loses the moment an attempt claims that row.
  */
@@ -160,7 +181,7 @@ it('compensates a step that completed while a manual rollback was being planned'
         ->and(FlowRun::query()->findOrFail($run->id)->status)->toBe(FlowStatus::Cancelled);
 });
 
-it('keeps the plan it holds when the second one drops an entry from it', function (): void {
+it('restores an entry the second plan dropped from the first', function (): void {
     useDatabaseQueue();
     logToFile($log = sys_get_temp_dir().'/plan-gap-short-'.uniqid().'.log');
     app()->bind(StateMachine::class, RaceOnTransition::class);
@@ -184,6 +205,39 @@ it('keeps the plan it holds when the second one drops an entry from it', functio
         ->and(FlowRun::query()->findOrFail($run->id)->status)->toBe(FlowStatus::Expired)
         ->and(substr_count($lines, '"reason":"replan_incomplete"'))->toBe(1)
         ->and($lines)->toContain('"dropped_sequences":[1]');
+});
+
+it('keeps an ordinal the second plan lost without losing the one it found', function (): void {
+    useDatabaseQueue();
+    app()->bind(StateMachine::class, RaceOnTransition::class);
+
+    $run = SagaFlow::create(PlanGapParallelWorkflow::class)->expiresAt(now()->addSeconds(30))->run();
+
+    // Only the block's first member has run, and it owes the queue another try; the
+    // second is still queued, so the first plan holds the self-failure entry alone.
+    workOneJob();
+    workOneJob();
+
+    $failed = ActionRun::query()->where('flow_run_id', $run->id)->where('sequence', 0)->firstOrFail();
+    $inFlight = ActionRun::query()->where('flow_run_id', $run->id)->where('sequence', 1)->firstOrFail();
+
+    expect($failed->status)->toBe(ActionStatus::Failed)
+        ->and($inFlight->status)->toBe(ActionStatus::Pending);
+
+    RaceOnTransition::$race = function () use ($failed, $inFlight): void {
+        app(ActionRecorder::class)->startAction($failed->fresh());
+        app(ActionDispatcher::class)->execute($inFlight->fresh());
+    };
+
+    $this->travel(60)->seconds();
+    app(FlowMonitor::class)->sweep();
+    drainQueue();
+
+    $log = CompensationLog::all();
+    sort($log);
+
+    expect($log)->toBe(['undo:h', 'undo:p'])
+        ->and(FlowRun::query()->findOrFail($run->id)->status)->toBe(FlowStatus::Expired);
 });
 
 it('rolls back with the plan it holds when the second one throws', function (): void {

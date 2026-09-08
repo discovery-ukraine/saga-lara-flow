@@ -212,10 +212,11 @@ class FlowExecutor
      *
      * The later plan is not always the longer one. An attempt that claimed a failed step
      * in the same gap leaves it Running, and a compensation the first plan held for it
-     * — compensateStepOnSelfFailure() registers one — is not there to be read again. So
-     * it is adopted only when it covers every ordinal already planned; otherwise, as
-     * when the replay throws, the caller keeps what it has and the difference is
-     * journalled. Neither outcome unwinds less than the caller would have without it.
+     * — compensateStepOnSelfFailure() registers one — is not there to be read again. A
+     * parallel block can lose an ordinal that way and gain another in the same pass, so
+     * an ordinal missing from the later plan is restored from the earlier one rather
+     * than the whole plan being taken from it. Only a replay that throws falls back
+     * wholesale, having left nothing to merge.
      *
      * @param  list<CompensationEntry>  $planned
      * @return list<CompensationEntry>
@@ -253,7 +254,30 @@ class FlowExecutor
             'dropped_sequences' => $dropped,
         ]);
 
-        return $planned;
+        return $this->merge($planned, $replanned);
+    }
+
+    /**
+     * Both plans list their ordinals ascending, which is the order the stack is unwound
+     * in reverse and the order a parallel block's members sit adjacent in, so keying by
+     * ordinal and sorting restores a stack either one on its own would have produced.
+     * The later reading of an ordinal wins: it is the one taken under the fence.
+     *
+     * @param  list<CompensationEntry>  $planned
+     * @param  list<CompensationEntry>  $replanned
+     * @return list<CompensationEntry>
+     */
+    private function merge(array $planned, array $replanned): array
+    {
+        $merged = [];
+
+        foreach ([...$planned, ...$replanned] as $entry) {
+            $merged[$entry->sequence] = $entry;
+        }
+
+        ksort($merged);
+
+        return array_values($merged);
     }
 
     /**
