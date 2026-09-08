@@ -33,6 +33,13 @@ refused when it tries to claim the row, a signal-gated retry will not start anot
 already started is a different question and carries on as usual: a step past its own deadline is
 still expired, and the rollback's own compensations still run.
 
+The plan it unwinds is made once the run is here, which is what makes "afterwards" mean afterwards:
+a step whose owed queue attempt completed while an earlier plan was being drawn is in it. That
+earlier plan is drawn before anything is written, so a run whose rollback cannot be planned at all
+is left where it was found rather than stranded mid-rollback. It is also what fills the gaps in the
+later one, and the journal says so: an ordinal the second plan came back without is restored from
+the first, and a second replay that throws leaves the first standing on its own.
+
 A step is not the only thing that begins, and the rest is reached from inside a pass rather than by
 a job of its own: a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md)
 both start work at an ordinal the run has not reached before. A pass still replaying when the

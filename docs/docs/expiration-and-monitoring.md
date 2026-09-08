@@ -101,6 +101,17 @@ many of them there are they cannot queue ahead of a run that has been overdue lo
 the next open window. Nothing resets the count, so a run that has been failing since Tuesday says so. Fixing the
 workflow is still the actual remedy — see [Reclaim & recovery](./reclaim-and-recovery.md).
 
+All of that concerns the plan drawn before the run is moved. A run with something to undo is moved, and then the plan
+is drawn again: that second one is what the rollback unwinds, and it holds the step whose owed attempt completed while
+the first was being drawn. A second plan that came back without an ordinal the first had takes that ordinal from it and
+journals `replan_incomplete`; a replay that throws journals `replan_failed` and leaves the first plan standing. Neither
+is surfaced — the run has been taken, so the rollback goes ahead rather than stopping in `Cancelling` with nothing to
+move it on.
+
+A run the first plan found nothing to undo on is not moved at all; it expires where the sweep found it. A step that
+completes in that gap is therefore still applied under a run reported expired, which is worth knowing if your workflow
+carries exactly one compensatable step.
+
 ## Repair (the doctor)
 
 Separate from expiration: the **doctor** recovers a run whose progress was lost to a *dropped job* — an action that

@@ -185,8 +185,10 @@ class FlowExecutor
      * no step; a workflow's own tag() calls still rewrite their rows, as they do on
      * every replay. Planned from three places — compensate(), the expiration sweep and
      * a parent closing a child — so a throw the replay did not expect is a fault, not a
-     * frontier: it leaves rather than shortening the stack behind the caller's back,
-     * and the two callers the operator did not ask for absorb it where it lands.
+     * frontier: it leaves rather than shortening the stack behind the caller's back.
+     * Where it lands is then the caller's to answer, and each of them plans twice —
+     * once before taking control of the run and once after: the sweep and compensate()
+     * through replanCompensations(), a child close by calling this again itself.
      *
      * @return list<CompensationEntry>
      *
@@ -201,6 +203,90 @@ class FlowExecutor
             $flowRun->workflow_class,
             fn (): array => $this->collectCompensationsInner($flowRun),
         );
+    }
+
+    /**
+     * The plan a rollback acts on, made with the run already fenced: one drawn before
+     * the transition is older than the run it describes, and a step whose owed attempt
+     * landed in between belongs in the stack.
+     *
+     * The later plan is not always the longer one. An attempt that claimed a failed step
+     * in the same gap leaves it Running, and a compensation the first plan held for it
+     * — compensateStepOnSelfFailure() registers one — is not there to be read again. A
+     * parallel block can lose an ordinal that way and gain another in the same pass, so
+     * an ordinal missing from the later plan is restored from the earlier one rather
+     * than the whole plan being taken from it. Only a replay that throws falls back
+     * wholesale, having left nothing to merge.
+     *
+     * @param  list<CompensationEntry>  $planned
+     * @return list<CompensationEntry>
+     */
+    public function replanCompensations(FlowRun $flowRun, array $planned): array
+    {
+        try {
+            $replanned = $this->collectCompensations($flowRun);
+        } catch (Throwable $replanning) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_REPLAN_FAILED, [
+                'entity' => 'flow',
+                'flow_run_id' => $flowRun->id,
+                'workflow_class' => $flowRun->workflow_class,
+                'status' => $flowRun->status->value,
+                'planned' => count($planned),
+                'exception' => $this->exceptionToArray($replanning),
+            ]);
+
+            return $planned;
+        }
+
+        $dropped = array_values(array_diff($this->ordinals($planned), $this->ordinals($replanned)));
+
+        if ($dropped === []) {
+            return $replanned;
+        }
+
+        app(AnomalyLog::class)->log(AnomalyLog::REASON_REPLAN_INCOMPLETE, [
+            'entity' => 'flow',
+            'flow_run_id' => $flowRun->id,
+            'workflow_class' => $flowRun->workflow_class,
+            'status' => $flowRun->status->value,
+            'planned' => count($planned),
+            'replanned' => count($replanned),
+            'dropped_sequences' => $dropped,
+        ]);
+
+        return $this->merge($planned, $replanned);
+    }
+
+    /**
+     * Both plans list their ordinals ascending, which is the order the stack is unwound
+     * in reverse and the order a parallel block's members sit adjacent in, so keying by
+     * ordinal and sorting restores a stack either one on its own would have produced.
+     * The later reading of an ordinal wins: it is the one taken under the fence.
+     *
+     * @param  list<CompensationEntry>  $planned
+     * @param  list<CompensationEntry>  $replanned
+     * @return list<CompensationEntry>
+     */
+    private function merge(array $planned, array $replanned): array
+    {
+        $merged = [];
+
+        foreach ([...$planned, ...$replanned] as $entry) {
+            $merged[$entry->sequence] = $entry;
+        }
+
+        ksort($merged);
+
+        return array_values($merged);
+    }
+
+    /**
+     * @param  list<CompensationEntry>  $entries
+     * @return list<int>
+     */
+    private function ordinals(array $entries): array
+    {
+        return array_map(static fn (CompensationEntry $entry): int => $entry->sequence, $entries);
     }
 
     /**
@@ -366,6 +452,9 @@ class FlowExecutor
             throw ExpirationNotPlannedException::for($flowRun, $planning);
         }
 
+        // Nothing to undo is finalized where the run stands rather than through
+        // Cancelling: a death between the two would leave it there, and a run in
+        // Cancelling is one this sweep, the doctor and drive() all pass over.
         if ($entries === []) {
             $flowRun->exception = $primary;
 
@@ -379,6 +468,8 @@ class FlowExecutor
         }
 
         $this->stateMachine->transition($flowRun, FlowStatus::Cancelling);
+
+        $entries = $this->replanCompensations($flowRun, $entries);
 
         $this->sagaRunner->rollback($flowRun, $entries, $primary, RunMode::Queued, FlowStatus::Expired);
 

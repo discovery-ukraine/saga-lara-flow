@@ -195,6 +195,8 @@ readonly class FlowHandle
 
         app(StateMachine::class)->transition($this->flowRun, FlowStatus::Cancelling);
 
+        $entries = app(FlowExecutor::class)->replanCompensations($this->flowRun, $entries);
+
         app(SagaRunner::class)->rollback(
             $this->flowRun,
             $entries,

@@ -611,7 +611,9 @@ None of these drives a run that is rolling back or finished — a pass begins on
 still start work, so a deadline is enforced once and each compensation on the rollback it planned
 runs once. A pass already replaying when the rollback commits starts nothing further either: its
 next step is refused at the claim, and a child workflow or side effect at an ordinal it has not
-reached before ends the pass instead. See [Statuses](https://sagalaraflow.dev/statuses).
+reached before ends the pass instead. The plan that is unwound is drawn once the run is already
+rolling back, so a step whose owed attempt completed while an earlier plan was being drawn is
+compensated too. See [Statuses](https://sagalaraflow.dev/statuses).
 
 ## Queues, locks & idempotency
 

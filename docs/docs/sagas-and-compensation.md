@@ -86,11 +86,24 @@ To have such a compensation retried rather than only reported, enable `sagas.rec
 ## While a rollback runs
 
 A run rolling back is in `Cancelling`, which is not terminal — and nothing new begins under it. The
-plan was drawn once, so anything started afterwards would finish outside it: its compensation in no
-stack, never run, under a run reporting a complete unwind. That covers a step whose job arrives to
-claim its row, a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md) a
+plan is settled by then, so anything started afterwards would finish outside it: its compensation in
+no stack, never run, under a run reporting a complete unwind. That covers a step whose job arrives
+to claim its row, a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md) a
 pass still replaying reaches for the first time, and a replacement the
 [doctor](./expiration-and-monitoring.md#repair-the-doctor) would otherwise send.
+
+That is what moving the run first is for. A plan is drawn before the move as well, but
+only to find out whether one can be drawn at all: it writes nothing, so a run whose replay throws is
+left exactly where it was found. The plan that is unwound is the one made afterwards, and it holds
+the step whose owed queue attempt completed while the first was being drawn.
+
+The later plan is not always the longer one. An attempt that claimed a failed step in the same gap
+leaves it `Running`, and what `compensateStepOnSelfFailure()` registers for a failed step is not
+what a replay reads off a running one — and a parallel block can lose an ordinal that way while
+finding another in the same pass. So an ordinal the later plan is missing is restored from the
+earlier one rather than the later plan being discarded, and the difference is journalled as
+`replan_incomplete`. A replay that throws leaves nothing to merge and is journalled as
+`replan_failed`; the rollback then goes ahead on the plan already in hand.
 
 Settling what already started is the other question, and it carries on: a step past its own deadline
 is still expired, and the rollback's own compensations still run. See
@@ -113,7 +126,9 @@ signal timeout or an awaited child's failure or cancellation already in the run'
 else is a fault, not an ending: an argument expression reading a record that has since been deleted,
 say. The plan is then incomplete, so
 `compensate()` surfaces the throw and leaves the run as it found it, rather than unwinding part of
-it and reporting a finished rollback. Fix the cause and call it again.
+it and reporting a finished rollback. Fix the cause and call it again. That is the plan drawn before
+the run is moved; a throw from the one made after it is journalled instead, because by then the run
+has been taken and there is a plan to unwind either way.
 
 :::warning Not inside a transaction of your own
 The compensations execute before your transaction closes, so a rollback afterwards discards the

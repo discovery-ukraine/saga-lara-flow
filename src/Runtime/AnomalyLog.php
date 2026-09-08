@@ -32,6 +32,10 @@ final readonly class AnomalyLog
 
     public const string REASON_EXPIRY_FAILED = 'expiry_failed';
 
+    public const string REASON_REPLAN_FAILED = 'replan_failed';
+
+    public const string REASON_REPLAN_INCOMPLETE = 'replan_incomplete';
+
     public const string REASON_WRITE_REFUSED = 'write_refused';
 
     public const string REASON_REJECTION_UNDELIVERED = 'rejection_undelivered';

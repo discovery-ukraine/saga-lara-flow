@@ -21,13 +21,18 @@ Nothing below asks anything of you. Each links to the page that covers it.
   planning a second rollback, so each compensation runs once. `drive()` returns such a run as the
   writer holds it instead of raising `InvalidTransitionException`, and `saga-flow:kick` reports it
   rather than claiming a re-drive. [Statuses](https://sagalaraflow.dev/statuses)
-
 - **A replay that outlived a rollback starts no child and calls no side-effect factory.** Both seams
   read the run's status from the writing connection before they begin, and end the pass when it is
   no longer one of the three statuses `mayStartWork()` names. A child's run and its link are written
   in one transaction; the `ChildWorkflowStarted` event and the child's job both follow that commit,
   so a listener now runs outside that transaction rather than inside it.
   [Child workflows](https://sagalaraflow.dev/child-workflows)
+- **The rollback that is unwound is planned with the run already in `Cancelling`.** A step whose
+  owed queue attempt completed while an earlier plan was being drawn is compensated rather than left
+  applied under a run reporting a complete unwind. An ordinal the later plan came back without is
+  restored from the earlier one and journalled as `replan_incomplete`; a replay that throws is
+  journalled as `replan_failed` and the rollback goes ahead on the plan in hand.
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
 
 ## From 1.1.x to 1.2.0
 
