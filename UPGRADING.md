@@ -22,6 +22,13 @@ Nothing below asks anything of you. Each links to the page that covers it.
   writer holds it instead of raising `InvalidTransitionException`, and `saga-flow:kick` reports it
   rather than claiming a re-drive. [Statuses](https://sagalaraflow.dev/statuses)
 
+- **A replay that outlived a rollback starts no child and calls no side-effect factory.** Both seams
+  read the run's status from the writing connection before they begin, and end the pass when it is
+  no longer one of the three statuses `mayStartWork()` names. A child's run and its link are written
+  in one transaction; the `ChildWorkflowStarted` event and the child's job both follow that commit,
+  so a listener now runs outside that transaction rather than inside it.
+  [Child workflows](https://sagalaraflow.dev/child-workflows)
+
 ## From 1.1.x to 1.2.0
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading

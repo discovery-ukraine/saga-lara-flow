@@ -93,7 +93,9 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
   events the engine fires inside its own transactions run there.
 - **A transaction that runs caller code must verify its own outcome.** The commit reporting success
   is the caller's word for it, and the paragraph above is why that word is worth nothing. Read the
-  row back afterwards and act on what it says — see `ActionRecorder::claimSurvivedCommit()`. Moving
+  row back afterwards and act on what it says — see `ActionRecorder::claimSurvivedCommit()` and
+  `ChildWorkflowManager::requireStartSurvivedCommit()`, which is why a child is announced and
+  dispatched only after its link is read back. Moving
   the event out of the transaction is not the same fix: a model observer on a row the transaction
   writes runs there whatever the event does, which is what `TransactionIntegrityTest`'s observer
   case pins. What such a read proves is visibility on the writing connection, which equals
@@ -118,6 +120,15 @@ floating `Received` row like any other nobody consumed — the documented outcom
 and do not widen the change to chase it. A real fence means conditional writes inside
 `SignalRecorder`, which the retry seam shares, bought for a window whose worst outcome is already
 documented behaviour.
+
+**So is a seam that starts work.** `StartWorkGuard` reads the run's status from the writer before a
+child workflow or a side effect begins, because a pass that outlived a rollback holds an instance
+from before it. Same shape, same limit: the child's two writes are only fenced against a status read
+a moment earlier inside their own transaction, and a side-effect factory has no durable write to
+fence at all — its row is written after the call returns. A run entering `Cancelling` between the
+read and the work still starts that one. Intended, **not an open defect**. A real fence for the
+factory means a start-marker row before every side effect on the hot replay path, which is a design
+decision of its own rather than this one's price.
 
 The one that decides a write is `mayStartWork()` versus `live()`: ask the narrower one wherever work
 would **begin** (the action claim, the repair rules that send another job, the retry that spends a

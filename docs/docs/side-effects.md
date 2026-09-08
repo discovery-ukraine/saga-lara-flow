@@ -40,3 +40,9 @@ across replays.
 By default a side-effect reuse only dispatches the `SideEffectReused` event (no extra `flow_events`
 row), keeping the event log bounded. Enable `history.record_side_effect_reuse` if you need a full
 audit trail of every reuse. See also [Determinism rules](./determinism-rules.md).
+
+A factory is not called once the run is rolling back. It is your code — an HTTP call, a charge, an
+id handed out — and the recorded row is the only durable trace of it, so there is nothing to hold it
+back after the fact; the seam reads the run's status from the connection that wrote it and ends the
+pass first. That is a check taken immediately before the call, not a lock: a rollback committing in
+the moment between the two does not reach back into a factory already running.

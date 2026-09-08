@@ -458,6 +458,10 @@ public function handle(): void
 ```
 
 The first execution records the value; every later replay of the run returns the same stored value.
+A factory is not called once the run is rolling back: the seam reads the run's status from the
+connection that wrote it and ends the pass first, so host code does not run outside a plan that is
+already being unwound. The same holds for a child workflow started at a new ordinal. See
+[Statuses](https://sagalaraflow.dev/statuses).
 
 ## Parallel actions
 
@@ -605,7 +609,9 @@ it off the worker (`repair.queue_looping.enabled`), or kick a single run manuall
 
 None of these drives a run that is rolling back or finished — a pass begins only for a run that may
 still start work, so a deadline is enforced once and each compensation on the rollback it planned
-runs once. See [Statuses](https://sagalaraflow.dev/statuses).
+runs once. A pass already replaying when the rollback commits starts nothing further either: its
+next step is refused at the claim, and a child workflow or side effect at an ordinal it has not
+reached before ends the pass instead. See [Statuses](https://sagalaraflow.dev/statuses).
 
 ## Queues, locks & idempotency
 

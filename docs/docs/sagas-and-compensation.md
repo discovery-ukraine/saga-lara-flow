@@ -83,6 +83,19 @@ before the live worker recorded its success — see
 To have such a compensation retried rather than only reported, enable `sagas.reclaim.stale_running`
 — see [Reclaim & recovery](./reclaim-and-recovery.md).
 
+## While a rollback runs
+
+A run rolling back is in `Cancelling`, which is not terminal — and nothing new begins under it. The
+plan was drawn once, so anything started afterwards would finish outside it: its compensation in no
+stack, never run, under a run reporting a complete unwind. That covers a step whose job arrives to
+claim its row, a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md) a
+pass still replaying reaches for the first time, and a replacement the
+[doctor](./expiration-and-monitoring.md#repair-the-doctor) would otherwise send.
+
+Settling what already started is the other question, and it carries on: a step past its own deadline
+is still expired, and the rollback's own compensations still run. See
+[Statuses](./statuses.md) for the boundary in full.
+
 ## Manual compensation
 
 You can trigger a rollback from outside the workflow through the handle:

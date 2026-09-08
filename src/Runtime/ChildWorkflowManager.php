@@ -41,6 +41,8 @@ readonly class ChildWorkflowManager
         private FlowSuspender $suspender,
         private Serializer $serializer,
         private FlowExecutor $executor,
+        private StartWorkGuard $startWork,
+        private AnomalyLog $anomalies,
     ) {}
 
     /**
@@ -80,9 +82,7 @@ readonly class ChildWorkflowManager
         }
 
         // First encounter: create and start the child, then suspend the parent.
-        $child = $this->createChild($parent, $workflowClass, $arguments, $closePolicy);
-
-        $this->recorder->startChild($parent, $child, $sequence, $closePolicy, $continueParentOnFailure);
+        $child = $this->startChild($parent, $workflowClass, $arguments, $closePolicy, $sequence, $continueParentOnFailure);
 
         if ($runtime->mode() === RunMode::Sync) {
             $driven = $this->executor->drive($child, RunMode::Sync);
@@ -140,6 +140,88 @@ readonly class ChildWorkflowManager
             // Still in flight (Pending/Running/Waiting): park until it finalizes.
             default => $this->suspender->suspend('child', $sequence),
         };
+    }
+
+    /**
+     * The parent is asked inside the same transaction as the two writes, so a check lost to
+     * a rollback takes both down rather than leaving a FlowRun nobody owns. The host hears
+     * about the child, and its job goes out, only once that transaction is on record.
+     *
+     * @param  array<int, mixed>  $arguments
+     *
+     * @throws FlowSuspended
+     * @throws Throwable
+     */
+    private function startChild(
+        FlowRun $parent,
+        string $workflowClass,
+        array $arguments,
+        ChildClosePolicy $closePolicy,
+        int $sequence,
+        bool $continueParentOnFailure,
+    ): FlowRun {
+        $child = $parent->getConnection()->transaction(function () use (
+            $parent,
+            $workflowClass,
+            $arguments,
+            $closePolicy,
+            $sequence,
+            $continueParentOnFailure,
+        ): FlowRun {
+            $this->startWork->expect($parent, 'child', $sequence);
+
+            $child = $this->createChild($parent, $workflowClass, $arguments, $closePolicy);
+
+            $this->recorder->startChild($parent, $child, $sequence, $closePolicy, $continueParentOnFailure);
+
+            return $child;
+        });
+
+        $this->requireStartSurvivedCommit($parent, $child, $sequence);
+
+        $this->recorder->childStarted($parent, $child);
+
+        return $child;
+    }
+
+    /**
+     * Whether the link is on record now the transaction that wrote it has closed. Mirrors
+     * ActionRecorder::claimSurvivedCommit(): a commit reporting success is not proof, since
+     * a model observer on either row can run a failing query and swallow it, which on
+     * PostgreSQL turns the eventual COMMIT into a rollback.
+     *
+     * Neither row survives such a rollback, so nothing is half-written and no child is
+     * announced or driven that the writes did not keep. The ordinal is simply not reached
+     * and the parent parks on one it comes back to — which without this read it would do
+     * with nothing anywhere to say why.
+     *
+     * @throws FlowSuspended
+     */
+    private function requireStartSurvivedCommit(FlowRun $parent, FlowRun $child, int $sequence): void
+    {
+        /** @var class-string<FlowChild> $model */
+        $model = config('saga-lara-flow.models.flow_child');
+
+        $onRecord = $model::query()
+            ->useWritePdo()
+            ->where('parent_flow_run_id', $parent->id)
+            ->where('child_flow_run_id', $child->id)
+            ->where('sequence', $sequence)
+            ->exists();
+
+        if ($onRecord) {
+            return;
+        }
+
+        $this->anomalies->log(AnomalyLog::REASON_CLAIM_NOT_COMMITTED, [
+            'entity' => 'child',
+            'flow_run_id' => $parent->id,
+            'child_flow_run_id' => $child->id,
+            'sequence' => $sequence,
+            'child_workflow_class' => $child->workflow_class,
+        ]);
+
+        $this->suspender->suspend('child', $sequence);
     }
 
     /**
