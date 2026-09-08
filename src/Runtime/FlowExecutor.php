@@ -186,8 +186,9 @@ class FlowExecutor
      * every replay. Planned from three places — compensate(), the expiration sweep and
      * a parent closing a child — so a throw the replay did not expect is a fault, not a
      * frontier: it leaves rather than shortening the stack behind the caller's back.
-     * Where it lands is then the caller's to answer, and each of them plans twice:
-     * before taking control of the run, and again through replanCompensations().
+     * Where it lands is then the caller's to answer, and each of them plans twice —
+     * once before taking control of the run and once after: the sweep and compensate()
+     * through replanCompensations(), a child close by calling this again itself.
      *
      * @return list<CompensationEntry>
      *
