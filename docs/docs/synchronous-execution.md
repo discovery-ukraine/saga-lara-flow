@@ -21,6 +21,12 @@ $run->result;   // the value handle() returned
 The queued and synchronous paths are guaranteed to reach the **same** final database state — the only
 difference is *who* drives the steps (your worker vs. the current process).
 
+A `runSync()` reached while another run is being driven — an action whose body starts a saga of its
+own — is driven on replay state of its own, so the run that owns the step keeps its ordinals and its
+compensation stack while the inner one runs. From inside `handle()`, reach another workflow through
+[`child()`](./child-workflows.md) instead: `runSync()` there takes no ordinal and starts a run the
+next replay cannot recognize.
+
 :::warning Do not call `runSync()` inside a transaction of your own
 A step's body runs while your transaction is still open, so a rollback afterwards — yours, or one a
 failed statement forced on you — discards every row the run recorded while the work those rows

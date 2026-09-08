@@ -41,6 +41,12 @@ Nothing below asks anything of you. Each links to the page that covers it.
   than ending a run's recovery. The claim still decides whether that job runs the
   step, and a parallel block gets its budget back and nothing else.
   [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
+- **A run driven while another is being driven gets replay state of its own.** An action whose body
+  starts a saga, or a `runSync()` written inside `handle()`, no longer rewinds the ordinal counter,
+  empties the compensation stack or unbinds the run of the pass that reached it. `FlowRuntime` is no
+  longer registered in the container — the executor makes one for every pass — so resolving it
+  yourself answers with an instance no pass is driven with.
+  [Synchronous execution](https://sagalaraflow.dev/synchronous-execution)
 
 ## From 1.1.x to 1.2.0
 

@@ -249,11 +249,11 @@ Two things about *when* this throws:
 - **It surfaces on replay, not the instant the action fails.** In queued mode the action runs in its
   own job, off the `handle()` stack, and retries per `$tries`. Once it ultimately fails the engine
   re-drives `handle()` from the top and the failed step replays as a throw — that is where your
-  `try/catch` catches it. In **sync** mode the step runs inline and `run()` re-throws the action's
-  **raw** exception (not `ActionFailedException`), so catch the concrete type you expect.
+  `try/catch` catches it. In **sync** mode the step runs inline and `run()` re-throws the action's **raw** exception
+  (not `ActionFailedException`), so catch the concrete type you expect.
 - **Use `try/catch` for local branching** — "if `ChargeCard` fails, try PayPal instead". For a
-  cross-cutting "report whenever *any* workflow fails", listen to the `FlowFailed` event
-  ([Events](#events)) instead: it fires once on the terminal transition — on both the direct-fail and
+  cross-cutting "report whenever *any* workflow fails", listen to the `FlowFailed` event ([Events](#events)) instead: it
+  fires once on the terminal transition — on both the direct-fail and
   the fail-after-compensation paths, and regardless of sync/queued. If you do report from inside a
   `catch` in `handle()`, **re-throw** afterwards so the engine still fails and compensates the run;
   swallowing the exception lets `handle()` run on past a step that has no result.
@@ -364,8 +364,8 @@ A signal is accepted only by a run that can still consume one — `Pending`, `Ru
 `CannotSignalCancellingFlowException` on one that is rolling back; both extend
 `CannotSignalFlowException`. A refusal writes nothing.
 
-No `$runId`? Find the run by workflow and tag, then signal it. Use `signalable()` (alias `active()`),
-**not** `running()` — a flow parked on `awaitSignal()` is `Waiting`, not `Running`:
+No `$runId`? Find the run by workflow and tag, then signal it. Use `signalable()` (alias `active()`), **not**
+`running()` — a flow parked on `awaitSignal()` is `Waiting`, not `Running`:
 
 ```php
 SagaFlow::query()
@@ -524,6 +524,10 @@ it). A failing child throws `ChildWorkflowFailedException` (or `ChildWorkflowCan
 unless you call `->continueParentOnFailure()`. The default close policy is configurable
 (`children.default_close_policy`) or per class via `#[ChildPolicy]`.
 
+`child()` is also the only seam that runs another workflow from inside `handle()`.
+`SagaFlow::create(...)` there takes no ordinal, so the run it starts is recognized by nothing, and
+the next replay starts another one.
+
 ## Tags & querying
 
 Attach searchable key/value tags at creation, from inside the workflow, or from outside through a
@@ -601,8 +605,8 @@ signal delivered after its deadline but before the next sweep is still accepted.
 expanded in [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
 For runs whose progress was lost to a *dropped job* (rather than a deadline), the **doctor** can
-re-dispatch missing actions (`repair.redispatch_lost_actions`) and re-wake stuck waits
-(`repair.wake_stuck_flows`) — enable `repair.enabled` and either schedule `saga-flow:repair` or loop
+re-dispatch missing actions (`repair.redispatch_lost_actions`) and re-wake stuck waits (`repair.wake_stuck_flows`) —
+enable `repair.enabled` and either schedule `saga-flow:repair` or loop
 it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
 `saga-flow:kick {run}` / `SagaFlow::kick($id)`. A kick refills the repair budget that
 `repair.max_attempts` caps and sends the sequential step the run is parked on its own job back, so

@@ -398,12 +398,9 @@ it('refuses a predicate that tags the run it is deciding for', function () {
 it('holds the re-entry guard when the container forgets its scoped instances', function () {
     DeclinableChargeAction::reset(failures: 99, code: 503);
 
-    // What a queue worker does between jobs: FlowExecutor is a singleton and keeps
-    // the runtime it was built with, while a fresh resolve now answers for another
-    // instance. The guard has to read the one the pass is actually driven with.
-    $held = (fn () => $this->runtime)->call(app(FlowExecutor::class));
+    // What a queue worker does between jobs. The guard has to read the runtime the
+    // pass is actually driven with, and the container never holds that one.
     app()->forgetScopedInstances();
-    expect(app(FlowRuntime::class))->not->toBe($held);
 
     $run = SagaFlow::create(SelfCancellingRetryWorkflow::class)->withArguments('order-19')->runSync();
 
