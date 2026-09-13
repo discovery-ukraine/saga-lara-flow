@@ -56,7 +56,7 @@ it('forgets what an earlier pass raised on reset', function () {
     expect($runtime->raised($raised))->toBeFalse();
 });
 
-it('does not hold a throw a workflow caught and dropped', function () {
+it('lets go of a throw nothing else is holding', function () {
     $runtime = new FlowRuntime;
 
     $ending = $runtime->raising(ActionFailedException::forAction('App\\Actions\\Charge', 1, 'declined'));
