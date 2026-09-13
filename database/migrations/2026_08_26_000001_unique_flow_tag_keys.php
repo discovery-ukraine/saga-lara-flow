@@ -100,9 +100,10 @@ return new class extends Migration
 
     /**
      * The unique this migration owns, under the name the driver actually stored —
-     * PostgreSQL truncates an identifier past 63 bytes. Both the name and the shape
-     * have to match: a host index over the same columns may be partial or
-     * functional and is not ours to drop, and a differently shaped index holding
+     * PostgreSQL truncates an identifier past 63 bytes, and only that exact truncation
+     * stands in for the full name: any other shorter name is a host's. Both the name
+     * and the shape have to match: a host index over the same columns may be partial
+     * or functional and is not ours to drop, and a differently shaped index holding
      * the name must make the create fail loudly rather than leave the table with no
      * unique at all.
      *
@@ -110,11 +111,17 @@ return new class extends Migration
      */
     private function existing(string $wanted, array $columns): ?string
     {
-        foreach (Schema::connection($this->getConnection())->getIndexes($this->table()) as $index) {
+        $schema = Schema::connection($this->getConnection());
+
+        $truncated = $schema->getConnection()->getDriverName() === 'pgsql' && strlen($wanted) > 63
+            ? substr($wanted, 0, 63)
+            : null;
+
+        foreach ($schema->getIndexes($this->table()) as $index) {
             $name = (string) $index['name'];
 
             $sameName = strcasecmp($name, $wanted) === 0
-                || (strlen($name) < strlen($wanted) && str_starts_with(strtolower($wanted), strtolower($name)));
+                || ($truncated !== null && strcasecmp($name, $truncated) === 0);
 
             if ($sameName && $index['columns'] === $columns && $index['unique']) {
                 return $name;

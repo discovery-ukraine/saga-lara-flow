@@ -119,10 +119,11 @@ return new class extends Migration
 
     /**
      * The reclaim_stale_at index this migration owns, under the name the driver
-     * actually stored. The name is the derived one exactly, or — past 63 bytes — the
-     * 63 bytes PostgreSQL truncates it to; any other shorter name is a host's. The
-     * column and the shape have to match too: a host index over the same column under
-     * another name, or a unique one, is not ours to count as created or to drop.
+     * actually stored. The name is the derived one exactly, or — on PostgreSQL, past 63
+     * bytes — the 63 bytes it truncates that to. Any other shorter name is a host's,
+     * including those 63 bytes on MySQL or SQLite, which store a 64-byte name whole.
+     * The column and the shape have to match too: a host index over the same column
+     * under another name, or a unique one, is not ours to count as created or to drop.
      */
     private function ownedIndex(string $table): ?string
     {
@@ -132,12 +133,13 @@ return new class extends Migration
         // The name Blueprint derives for $table->index('reclaim_stale_at').
         $derivedFrom = $connection->getConfig('prefix_indexes') ? $connection->getTablePrefix().$table : $table;
         $wanted = str_replace(['-', '.'], '_', strtolower($derivedFrom.'_reclaim_stale_at_index'));
+        $truncated = $connection->getDriverName() === 'pgsql' && strlen($wanted) > 63 ? substr($wanted, 0, 63) : null;
 
         foreach ($schema->getIndexes($table) as $index) {
             $stored = (string) $index['name'];
 
             $sameName = strcasecmp($stored, $wanted) === 0
-                || (strlen($wanted) > 63 && strcasecmp($stored, substr($wanted, 0, 63)) === 0);
+                || ($truncated !== null && strcasecmp($stored, $truncated) === 0);
 
             if ($sameName && $index['columns'] === ['reclaim_stale_at'] && ! $index['unique']) {
                 return $stored;

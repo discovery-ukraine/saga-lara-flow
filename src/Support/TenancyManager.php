@@ -4,7 +4,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Support;
 
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
-use Illuminate\Contracts\Container\BindingResolutionException;
+use Throwable;
 
 /**
  * Runs a run's business code (workflow/action/compensation) inside the tenant it
@@ -39,31 +39,30 @@ class TenancyManager
     {
         $auto = $this->autoEnabled($autoClass);
 
-        // Every hook is resolved before any is called or the context is touched. A
-        // broken one then refuses the step before it runs — not after it has recorded
-        // its work, with the worker still inside the run's tenant.
-        if ($auto) {
-            $this->hook('capture');
-            $this->hook('restore');
-            $this->hook('end');
-        }
+        // Every hook is resolved once, before any is called or the context is touched,
+        // and these are the instances called. A broken one then refuses the step before
+        // it runs, and nothing resolved afresh can fail after the step has recorded its
+        // work, with the worker still inside the run's tenant.
+        $capture = $auto ? $this->hook('capture') : null;
+        $restore = $auto ? $this->hook('restore') : null;
+        $end = $auto ? $this->hook('end') : null;
 
-        $previous = $auto ? $this->capture() : null;
+        $previous = $capture !== null ? $capture() : null;
 
         $heldContext = $this->current;
         $this->current = $flowRun->tenancy_context;
 
         try {
             // Inside the bracket: a restore that fails part of the way still reverts.
-            if ($auto) {
-                $this->restore($flowRun);
+            if ($restore !== null) {
+                $restore($flowRun->tenancy_context ?? []);
             }
 
             return $callback();
         } finally {
             try {
                 if ($auto) {
-                    $this->end($previous);
+                    $this->revert($end, $restore, $previous);
                 }
             } finally {
                 $this->current = $heldContext;
@@ -118,17 +117,7 @@ class TenancyManager
     {
         $end = $this->hook('end');
 
-        if ($end !== null) {
-            $end($previous);
-
-            return;
-        }
-
-        $restore = $this->hook('restore');
-
-        if ($restore !== null) {
-            $restore($previous ?? []);
-        }
+        $this->revert($end, $end === null ? $this->hook('restore') : null, $previous);
     }
 
     /**
@@ -144,6 +133,22 @@ class TenancyManager
     }
 
     /**
+     * @param  array<int|string, mixed>|null  $previous
+     */
+    private function revert(?callable $end, ?callable $restore, ?array $previous): void
+    {
+        if ($end !== null) {
+            $end($previous);
+
+            return;
+        }
+
+        if ($restore !== null) {
+            $restore($previous ?? []);
+        }
+    }
+
+    /**
      * The tenancy.$name hook as something to call, or null when it is turned off.
      * Besides a plain callable, the hook may name an invokable class, or a [class,
      * method] pair whose method is not static; either is resolved from the container.
@@ -152,7 +157,9 @@ class TenancyManager
      *
      * Only null turns a hook off. Anything else that cannot be called is refused: a
      * mistyped class skipped as if it were absent would run the step in whatever
-     * tenant the worker is already in.
+     * tenant the worker is already in. So is a class that cannot be built, whatever
+     * the container or the constructor throws — calling the hook, later, is where the
+     * host's own exceptions surface.
      *
      * @throws InvalidTenancyHookException
      */
@@ -177,7 +184,7 @@ class TenancyManager
                 && is_string($hook[1] ?? null) && class_exists($hook[0])) {
                 $resolved = [app($hook[0]), $hook[1]];
             }
-        } catch (BindingResolutionException $e) {
+        } catch (Throwable $e) {
             throw InvalidTenancyHookException::for($name, $hook, $e);
         }
 

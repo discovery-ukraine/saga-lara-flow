@@ -188,6 +188,54 @@ it('creates its own reclaim index beside a host index on the same column, and dr
     expect(Schema::hasIndex('saga_compensation_runs', $owned))->toBeTrue();
 });
 
+it('counts the first 63 bytes of its reclaim index name as its own only where PostgreSQL truncated it', function (): void {
+    // The documented ceiling: a 24-byte prefix takes the derived name to 64 bytes,
+    // which MySQL and SQLite store whole.
+    config()->set('saga-lara-flow.database.table_prefix', 'saga_twenty_four_bytes__');
+
+    foreach ($this->packageMigrations() as $path) {
+        (include $path)->up();
+    }
+
+    $table = 'saga_twenty_four_bytes__compensation_runs';
+    $owned = $table.'_reclaim_stale_at_index';
+    $host = substr($owned, 0, 63);
+
+    expect(strlen($owned))->toBe(64);
+
+    Schema::table($table, function (Blueprint $blueprint) use ($owned, $host): void {
+        $blueprint->dropIndex($owned);
+        $blueprint->index('reclaim_stale_at', $host);
+    });
+
+    (include __DIR__.'/../../database/migrations/2026_08_25_000000_add_reclaim_stale_running_columns.php')->up();
+
+    expect(Schema::hasIndex($table, $owned))->toBeTrue()
+        ->and(Schema::hasIndex($table, $host))->toBeTrue();
+})->skip(fn () => TestCase::driver() === 'pgsql', 'PostgreSQL stores both names as the same 63 bytes.');
+
+it('does not mistake a host index named as a prefix of its own for the wait or tag index', function (): void {
+    Schema::table('saga_flow_signals', function (Blueprint $table): void {
+        $table->dropIndex('saga_flow_signals_status_name_run_index');
+        $table->index(['status', 'name', 'flow_run_id'], 'saga_flow_signals_status_name_run');
+    });
+
+    Schema::table('saga_flow_tags', function (Blueprint $table): void {
+        $table->dropUnique('saga_flow_tags_flow_run_id_key_unique');
+        $table->unique(['flow_run_id', 'key'], 'saga_flow_tags_flow_run_id_key');
+    });
+
+    // The reconciliation migration runs both of these for a host that recorded them by
+    // hand, so a host index must not stand in for the package's own.
+    (include __DIR__.'/../../database/migrations/2026_08_26_000000_index_signal_waits.php')->up();
+    (include __DIR__.'/../../database/migrations/2026_08_26_000001_unique_flow_tag_keys.php')->up();
+
+    expect(Schema::hasIndex('saga_flow_signals', 'saga_flow_signals_status_name_run_index'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_flow_signals', 'saga_flow_signals_status_name_run'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_flow_tags', 'saga_flow_tags_flow_run_id_key_unique'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_flow_tags', 'saga_flow_tags_flow_run_id_key'))->toBeTrue();
+});
+
 it('rolls back a column migration that was only partly applied', function (): void {
     Schema::table('saga_flow_runs', fn (Blueprint $table) => $table->dropColumn('expiry_available_at'));
 

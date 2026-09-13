@@ -68,21 +68,27 @@ return new class extends Migration
     /**
      * The index this migration owns, under the name the driver actually stored —
      * PostgreSQL truncates an identifier past 63 bytes, which a long table prefix
-     * reaches. Null when it is absent, and also when the name belongs to something
-     * shaped differently: creating ours then fails loudly instead of quietly
-     * standing down.
+     * reaches. Only that exact truncation stands in for the full name: any other
+     * shorter name is a host's. Null when it is absent, and also when the name belongs
+     * to something shaped differently: creating ours then fails loudly instead of
+     * quietly standing down.
      *
      * @param  list<string>  $columns
      */
     private function existing(string $table, array $columns, string $name): ?string
     {
-        $wanted = strtolower($this->prefix().$name);
+        $schema = Schema::connection($this->getConnection());
 
-        foreach (Schema::connection($this->getConnection())->getIndexes($this->prefix().$table) as $index) {
+        $wanted = strtolower($this->prefix().$name);
+        $truncated = $schema->getConnection()->getDriverName() === 'pgsql' && strlen($wanted) > 63
+            ? substr($wanted, 0, 63)
+            : null;
+
+        foreach ($schema->getIndexes($this->prefix().$table) as $index) {
             $stored = (string) $index['name'];
 
             $sameName = strcasecmp($stored, $wanted) === 0
-                || (strlen($stored) < strlen($wanted) && str_starts_with($wanted, strtolower($stored)));
+                || ($truncated !== null && strcasecmp($stored, $truncated) === 0);
 
             if ($sameName && $index['columns'] === $columns && ! $index['unique']) {
                 return $stored;

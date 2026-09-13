@@ -13,6 +13,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentAwaitWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantHooks;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantSpy;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UnbuildableTenantHook;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(function () {
@@ -158,7 +159,38 @@ it('refuses a tenancy hook it cannot call instead of skipping it', function (mix
     'a class that is not invokable' => [TenantSpy::class],
     'a method that does not exist' => [[TenantHooks::class, 'captur']],
     'a class the container cannot build' => [AbstractTenantHook::class],
+    'a class whose constructor throws' => [UnbuildableTenantHook::class],
 ])->throws(InvalidTenancyHookException::class);
+
+it('calls the hooks it checked before the step, not ones resolved again after it', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restore']);
+    config()->set('saga-lara-flow.tenancy.end', [TenantHooks::class, 'end']);
+
+    // A binding that builds a fresh hook every time, and can build only two: one
+    // resolution each for restore and end, and no more.
+    $built = 0;
+
+    app()->bind(TenantHooks::class, function () use (&$built): TenantHooks {
+        if (++$built > 2) {
+            throw new RuntimeException('hook binding exhausted');
+        }
+
+        return new TenantHooks;
+    });
+
+    $tenancy = app(TenancyManager::class);
+
+    $ambient = $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        fn () => TenantSpy::$current,
+    );
+
+    expect($ambient)->toBe('acme')
+        ->and(TenantSpy::$current)->toBeNull()
+        ->and($built)->toBe(2);
+});
 
 it('refuses a broken end hook before the step runs, leaving the worker where it was', function () {
     config()->set('saga-lara-flow.tenancy.auto', true);
