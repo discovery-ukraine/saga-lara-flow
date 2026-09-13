@@ -2,7 +2,9 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Support;
 
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use Throwable;
 
 /**
  * Runs a run's business code (workflow/action/compensation) inside the tenant it
@@ -35,24 +37,36 @@ class TenancyManager
      */
     public function for(FlowRun $flowRun, ?string $autoClass, callable $callback): mixed
     {
+        $auto = $this->autoEnabled($autoClass);
+
+        // Every hook is resolved once, before any is called or the context is touched,
+        // and these are the instances called. A broken one then refuses the step before
+        // it runs, and nothing resolved afresh can fail after the step has recorded its
+        // work, with the worker still inside the run's tenant.
+        $capture = $auto ? $this->hook('capture') : null;
+        $restore = $auto ? $this->hook('restore') : null;
+        $end = $auto ? $this->hook('end') : null;
+
+        $previous = $this->captureWith($capture);
+
         $heldContext = $this->current;
         $this->current = $flowRun->tenancy_context;
 
-        $auto = $this->autoEnabled($autoClass);
-        $previous = $auto ? $this->capture() : null;
-
-        if ($auto) {
-            $this->restore($flowRun);
-        }
-
         try {
-            return $callback();
-        } finally {
-            if ($auto) {
-                $this->end($previous);
+            // Inside the bracket: a restore that fails part of the way still reverts.
+            if ($restore !== null) {
+                $restore($flowRun->tenancy_context ?? []);
             }
 
-            $this->current = $heldContext;
+            return $callback();
+        } finally {
+            try {
+                if ($auto) {
+                    $this->revert($end, $restore, $previous);
+                }
+            } finally {
+                $this->current = $heldContext;
+            }
         }
     }
 
@@ -86,9 +100,9 @@ class TenancyManager
      */
     public function restore(FlowRun $flowRun): void
     {
-        $restore = config('saga-lara-flow.tenancy.restore');
+        $restore = $this->hook('restore');
 
-        if (is_callable($restore)) {
+        if ($restore !== null) {
             $restore($flowRun->tenancy_context ?? []);
         }
     }
@@ -101,19 +115,9 @@ class TenancyManager
      */
     public function end(?array $previous): void
     {
-        $end = config('saga-lara-flow.tenancy.end');
+        $end = $this->hook('end');
 
-        if (is_callable($end)) {
-            $end($previous);
-
-            return;
-        }
-
-        $restore = config('saga-lara-flow.tenancy.restore');
-
-        if (is_callable($restore)) {
-            $restore($previous ?? []);
-        }
+        $this->revert($end, $end === null ? $this->hook('restore') : null, $previous);
     }
 
     /**
@@ -123,8 +127,80 @@ class TenancyManager
      */
     public function capture(): ?array
     {
-        $capture = config('saga-lara-flow.tenancy.capture');
+        return $this->captureWith($this->hook('capture'));
+    }
 
-        return is_callable($capture) ? $capture() : null;
+    /**
+     * Typed on purpose: a hook that returns anything but an array fails here, before
+     * a tenant is entered, rather than on the way out of a step that already ran.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    private function captureWith(?callable $capture): ?array
+    {
+        return $capture !== null ? $capture() : null;
+    }
+
+    /**
+     * @param  array<int|string, mixed>|null  $previous
+     */
+    private function revert(?callable $end, ?callable $restore, ?array $previous): void
+    {
+        if ($end !== null) {
+            $end($previous);
+
+            return;
+        }
+
+        if ($restore !== null) {
+            $restore($previous ?? []);
+        }
+    }
+
+    /**
+     * The tenancy.$name hook as something to call, or null when it is turned off.
+     * Besides a plain callable, the hook may name an invokable class, or a [class,
+     * method] pair whose method is not static; either is resolved from the container.
+     * Those two forms are what lets a host run config:cache, which cannot store a
+     * closure.
+     *
+     * Only null turns a hook off. Anything else that cannot be called is refused: a
+     * mistyped class skipped as if it were absent would run the step in whatever
+     * tenant the worker is already in. So is a class that cannot be built, whatever
+     * the container or the constructor throws — calling the hook, later, is where the
+     * host's own exceptions surface.
+     *
+     * @throws InvalidTenancyHookException
+     */
+    private function hook(string $name): ?callable
+    {
+        $hook = config("saga-lara-flow.tenancy.{$name}");
+
+        if ($hook === null) {
+            return null;
+        }
+
+        if (is_callable($hook)) {
+            return $hook;
+        }
+
+        $resolved = null;
+
+        try {
+            if (is_string($hook) && class_exists($hook)) {
+                $resolved = app($hook);
+            } elseif (is_array($hook) && count($hook) === 2 && is_string($hook[0] ?? null)
+                && is_string($hook[1] ?? null) && class_exists($hook[0])) {
+                $resolved = [app($hook[0]), $hook[1]];
+            }
+        } catch (Throwable $e) {
+            throw InvalidTenancyHookException::for($name, $hook, $e);
+        }
+
+        if (! is_callable($resolved)) {
+            throw InvalidTenancyHookException::for($name, $hook);
+        }
+
+        return $resolved;
     }
 }

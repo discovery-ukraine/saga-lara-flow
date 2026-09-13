@@ -302,7 +302,10 @@ return [
     |--------------------------------------------------------------------------
     | Multi-tenancy / Octane hooks
     |--------------------------------------------------------------------------
-    | Callables resolved from the container or plain closures.
+    | Each hook is an invokable class name, or a [Class::class, 'method'] pair,
+    | resolved from the container — give the full namespace, this file imports
+    | nothing. Only null turns a hook off; one that cannot be called throws. A
+    | closure works too, but `php artisan config:cache` cannot store one.
     */
     'tenancy' => [
         // Auto capture/restore around workflow & action handle(). Off by default —
@@ -310,8 +313,8 @@ return [
         // When off, the run's tenant is still captured at creation and readable via
         // SagaFlow::tenancyContext() so host code can enter/leave tenancy itself.
         'auto' => false,
-        'capture' => null, // fn (): array $context — snapshot the current tenant
-        'restore' => null, // fn (array $context): void — enter the run's tenant
-        'end' => null,     // fn (?array $previous): void — optional explicit revert
+        'capture' => null, // (): array $context — snapshot the current tenant
+        'restore' => null, // (array $context): void — enter the run's tenant
+        'end' => null,     // (?array $previous): void — optional explicit revert
     ],
 ];

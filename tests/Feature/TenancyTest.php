@@ -1,13 +1,19 @@
 <?php
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\AbstractTenantHook;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\AutoActionWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CaptureTenant;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentAwaitWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantHooks;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantSpy;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UnbuildableTenantHook;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(function () {
@@ -119,6 +125,128 @@ it('lets a #[Tenancy(auto: true)] action override the config default of off', fu
     $result = firstActionResult($run->id);
 
     expect($result['ambient'])->toBe('acme'); // restored via the attribute
+});
+
+it('resolves an invokable class and a [class, method] pair from the container', function () {
+    // The forms config:cache can store — a closure in the config makes it refuse.
+    config()->set('saga-lara-flow.tenancy.capture', CaptureTenant::class);
+    config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restore']);
+
+    useDatabaseQueue();
+    config()->set('saga-lara-flow.tenancy.auto', true);
+
+    TenantSpy::$current = 'acme';
+    $run = SagaFlow::create(TenantWorkflow::class)->run();
+
+    TenantSpy::reset();
+
+    drainQueue();
+
+    expect($run->tenancy_context)->toBe(['tenant' => 'acme'])
+        ->and(firstActionResult($run->id)['ambient'])->toBe('acme')
+        ->and(TenantSpy::$current)->toBeNull();
+});
+
+it('refuses a tenancy hook it cannot call instead of skipping it', function (mixed $hook) {
+    Queue::fake();
+
+    config()->set('saga-lara-flow.tenancy.capture', $hook);
+
+    SagaFlow::create(TenantWorkflow::class)->run();
+})->with([
+    // What an unqualified SagaTenancy::class becomes in a config file with no import.
+    'a class that does not exist' => ['SagaTenancy'],
+    'a class that is not invokable' => [TenantSpy::class],
+    'a method that does not exist' => [[TenantHooks::class, 'captur']],
+    'a class the container cannot build' => [AbstractTenantHook::class],
+    'a class whose constructor throws' => [UnbuildableTenantHook::class],
+])->throws(InvalidTenancyHookException::class);
+
+it('refuses a capture hook that returns no array before the step enters the tenant', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.capture', fn () => 'acme');
+
+    $tenancy = app(TenancyManager::class);
+    $ran = false;
+
+    expect(fn () => $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        function () use (&$ran): void {
+            $ran = true;
+        },
+    ))->toThrow(TypeError::class);
+
+    expect($ran)->toBeFalse()
+        ->and(TenantSpy::$current)->toBeNull()
+        ->and($tenancy->context())->toBeNull();
+});
+
+it('calls the hooks it checked before the step, not ones resolved again after it', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restore']);
+    config()->set('saga-lara-flow.tenancy.end', [TenantHooks::class, 'end']);
+
+    // A binding that builds a fresh hook every time, and can build only two: one
+    // resolution each for restore and end, and no more.
+    $built = 0;
+
+    app()->bind(TenantHooks::class, function () use (&$built): TenantHooks {
+        if (++$built > 2) {
+            throw new RuntimeException('hook binding exhausted');
+        }
+
+        return new TenantHooks;
+    });
+
+    $tenancy = app(TenancyManager::class);
+
+    $ambient = $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        fn () => TenantSpy::$current,
+    );
+
+    expect($ambient)->toBe('acme')
+        ->and(TenantSpy::$current)->toBeNull()
+        ->and($built)->toBe(2);
+});
+
+it('refuses a broken end hook before the step runs, leaving the worker where it was', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.end', [TenantHooks::class, 'finsh']);
+
+    $tenancy = app(TenancyManager::class);
+    $ran = false;
+
+    expect(fn () => $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        function () use (&$ran): void {
+            $ran = true;
+        },
+    ))->toThrow(InvalidTenancyHookException::class);
+
+    expect($ran)->toBeFalse()
+        ->and(TenantSpy::$current)->toBeNull()
+        ->and($tenancy->context())->toBeNull();
+});
+
+it('reverts the tenant and forgets the run context when restore fails part of the way', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restoreThenFail']);
+    config()->set('saga-lara-flow.tenancy.end', [TenantHooks::class, 'end']);
+
+    $tenancy = app(TenancyManager::class);
+
+    expect(fn () => $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        fn () => null,
+    ))->toThrow(RuntimeException::class, 'tenant database unavailable');
+
+    expect(TenantSpy::$current)->toBeNull()
+        ->and($tenancy->context())->toBeNull();
 });
 
 it('is a no-op with no tenancy hooks configured', function () {

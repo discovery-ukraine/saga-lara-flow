@@ -29,12 +29,21 @@ reverts afterwards, so nothing leaks between runs on a shared Octane or queue wo
 ```php
 // config/saga-lara-flow.php
 'tenancy' => [
-    'auto'    => false,                                    // opt into auto restore/revert
-    'capture' => fn (): array => ['tenant' => tenant()?->getTenantKey()],
-    'restore' => fn (array $c): void => tenancy()->initialize($c['tenant']),
-    'end'     => null,                                     // optional explicit revert (else restore-previous)
+    'auto'    => false,                          // opt into auto restore/revert
+    'capture' => [\App\Tenancy\SagaTenancy::class, 'capture'],
+    'restore' => [\App\Tenancy\SagaTenancy::class, 'restore'],
+    'end'     => null,                           // optional explicit revert (else restore-previous)
 ],
 ```
+
+Each hook is an invokable class name or a `[Class::class, 'method']` pair, resolved from the
+container when the engine calls it. Write the class with its full namespace: the config file
+imports nothing, so a bare `SagaTenancy::class` names a class that does not exist. A hook that
+cannot be called throws `InvalidTenancyHookException` rather than being skipped — only `null` turns
+a hook off.
+
+A closure works too, but `php artisan config:cache` refuses a config that holds one — so keep
+closures out of any config you cache.
 
 ## Per-class override
 
@@ -62,12 +71,28 @@ example, to open and close the context around only part of a step.
 ## Host integration example (stancl/tenancy)
 
 ```php
-'capture' => fn () => tenant() ? ['tenant' => tenant()->getTenantKey()] : ['tenant' => null],
-'restore' => function (array $c): void {
-    $c['tenant'] === null
-        ? tenancy()->end()
-        : tenancy()->initialize($c['tenant']);
-},
+namespace App\Tenancy;
+
+final class SagaTenancy
+{
+    /**
+     * @return array{tenant: int|string|null}
+     */
+    public function capture(): array
+    {
+        return ['tenant' => tenant()?->getTenantKey()];
+    }
+
+    /**
+     * @param  array{tenant?: int|string|null}  $context
+     */
+    public function restore(array $context): void
+    {
+        ($context['tenant'] ?? null) === null
+            ? tenancy()->end()
+            : tenancy()->initialize($context['tenant']);
+    }
+}
 ```
 
 :::note

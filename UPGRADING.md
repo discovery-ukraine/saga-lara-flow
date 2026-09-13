@@ -48,6 +48,25 @@ Nothing below asks anything of you. Each links to the page that covers it.
   yourself answers with an instance no pass is driven with.
   [Synchronous execution](https://sagalaraflow.dev/synchronous-execution)
 
+## From 1.2.0 to 1.2.1
+
+Run `php artisan migrate`. Three things are worth knowing:
+
+- **A `migrate` that failed part of the way through can now simply be run again.** The column
+  migrations add only what is missing, and every migration names the package's connection, so on
+  PostgreSQL a failure rolls its own changes back.
+- **A migration you recorded by hand gets finished.** If you inserted migration rows to get past
+  `column … already exists`, leave them: the new `reconcile_partially_applied_migrations` fills in
+  every column and index those migrations had not reached. On a complete schema it changes nothing.
+- **Tenancy hooks can be named by class, and a broken one now throws.** A closure in
+  `tenancy.capture`, `restore` or `end` makes `php artisan config:cache` refuse the config. Name an
+  invokable class or a `[Class::class, 'method']` pair with its full namespace instead; the engine
+  resolves it from the container. A hook that is set but cannot be called — a missing class, a
+  misspelled method, a class the container cannot build — used to be skipped silently, running the
+  step outside the run's tenant; it now throws `InvalidTenancyHookException`, before the step runs.
+  Only `null` turns a hook off.
+  [Octane & multi-tenancy](https://sagalaraflow.dev/octane-and-multi-tenancy)
+
 ## From 1.1.x to 1.2.0
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading
