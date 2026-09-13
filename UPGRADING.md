@@ -47,6 +47,16 @@ Nothing below asks anything of you. Each links to the page that covers it.
   longer registered in the container — the executor makes one for every pass — so resolving it
   yourself answers with an instance no pass is driven with.
   [Synchronous execution](https://sagalaraflow.dev/synchronous-execution)
+- **A business exception your own code raises now surfaces instead of shortening a rollback plan.**
+  The replay that rebuilds a compensation stack ends only where one of the engine's seams raises
+  `ActionFailedException`, `FlowExpiredException`, `AwaitSignalTimeoutException`,
+  `ChildWorkflowFailedException` or `ChildWorkflowCancelledException` off the run's history. A
+  workflow raising one of those classes itself is a fault like any other throw: planning stops and
+  the throw surfaces, rather than the stack being cut there and unwound as a complete rollback.
+  `compensate()` leaves the run untouched, the expiration sweep reports
+  `ExpirationNotPlannedException`, and a second plan is journalled as `replan_failed` and unwound on
+  the plan in hand.
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
 
 ## From 1.2.0 to 1.2.1
 

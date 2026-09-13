@@ -717,6 +717,9 @@ stancl/tenancy integration example.
 - ✅ Do wrap any nondeterminism (`now()`, random, UUIDs, direct DB/HTTP reads) in `sideEffect()`.
 - ❌ Don't branch on ambient state that can change between replays (wall-clock time, `rand()`,
   external reads) outside a `sideEffect()`.
+- ❌ Don't raise the engine's own business exceptions (`ActionFailedException`,
+  `AwaitSignalTimeoutException`, …) yourself — a rollback is planned by replaying `handle()`, and
+  only a seam that read the run's history may end that replay with one.
 - ❌ Don't catch the engine's control-flow exceptions (`FlowSuspended`) as if they were errors.
 
 Break a rule and the history contract guard raises `HistoryContractMismatchException` when the

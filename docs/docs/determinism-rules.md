@@ -27,6 +27,12 @@ recorded results for completed operations and only executes the next un-run one.
 - ❌ Drive another workflow from inside `handle()` with `SagaFlow::create(...)->runSync()` or
   `->run()`. Those calls take no ordinal, so nothing recognizes the run one of them started, and the
   next replay starts another. [`child()`](./child-workflows.md) is the seam that records it.
+- ❌ Raise the engine's business exceptions yourself — `ActionFailedException`,
+  `FlowExpiredException`, `AwaitSignalTimeoutException`, `ChildWorkflowFailedException`,
+  `ChildWorkflowCancelledException`. A rollback is planned by replaying `handle()`, and that replay
+  ends where a seam raises one of them off the run's history. One raised anywhere else is a fault:
+  the plan is abandoned and the throw surfaces to whoever asked for the rollback. Raise an exception
+  of your own instead.
 - ❌ Catch the engine's control-flow exceptions (`FlowSuspended` / `InternalFlowControl`) as if they
   were errors. If you use a broad `catch (\Throwable $e)`, re-throw them:
 

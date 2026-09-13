@@ -6,6 +6,8 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\MissingFlowContextException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use Throwable;
+use WeakMap;
 
 /**
  * Per-execution state for the workflow being driven: the current run, the run
@@ -29,10 +31,37 @@ final class FlowRuntime
 
     private bool $deciding = false;
 
+    /**
+     * @var WeakMap<Throwable, true>
+     */
+    private WeakMap $raised;
+
     public function __construct(
         private readonly StepSequence $sequence = new StepSequence,
         private readonly SagaStack $sagaStack = new SagaStack,
-    ) {}
+    ) {
+        $this->raised = new WeakMap;
+    }
+
+    /**
+     * Record a throw this pass is raising, and hand it back to be thrown.
+     *
+     * @template TThrow of Throwable
+     *
+     * @param  TThrow  $ending
+     * @return TThrow
+     */
+    public function raising(Throwable $ending): Throwable
+    {
+        $this->raised[$ending] = true;
+
+        return $ending;
+    }
+
+    public function raised(Throwable $ending): bool
+    {
+        return isset($this->raised[$ending]);
+    }
 
     public function bind(FlowRun $flowRun, RunMode $mode): void
     {
@@ -146,6 +175,7 @@ final class FlowRuntime
         $this->sagaGroup = 0;
         $this->collecting = false;
         $this->deciding = false;
+        $this->raised = new WeakMap;
     }
 
     /**

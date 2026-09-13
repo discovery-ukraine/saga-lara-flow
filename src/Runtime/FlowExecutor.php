@@ -219,7 +219,7 @@ class FlowExecutor
      * live frontier. Every seam is guarded, so the pass starts no work and settles
      * no step; a workflow's own tag() calls still rewrite their rows, as they do on
      * every replay. Planned from three places — compensate(), the expiration sweep and
-     * a parent closing a child — so a throw the replay did not expect is a fault, not a
+     * a parent closing a child — so a throw no seam of its own raised is a fault, not a
      * frontier: it leaves rather than shortening the stack behind the caller's back.
      * Where it lands is then the caller's to answer, and each of them plans twice —
      * once before taking control of the run and once after: the sweep and compensate()
@@ -342,6 +342,10 @@ class FlowExecutor
         // Every exit unbinds, including the ones that leave by throwing, so nothing
         // that escapes this pass can be read as though a run were still bound.
         try {
+            // Only the throws below end the pass. Swallowing any other hands back a stack
+            // truncated at that point, for compensate() to unwind and report as a complete
+            // rollback. It leaves here instead, before the run has been touched, so the
+            // operator sees the cause and still has a run to retry the rollback on.
             try {
                 $workflow = app()->make($flowRun->workflow_class, ['runtime' => $runtime]);
 
@@ -349,19 +353,15 @@ class FlowExecutor
                 $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
 
                 $this->callWithDependencies($workflow, 'handle', $arguments);
-            } catch (InternalFlowControl|ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowCancelledException) {
-                // The six classes that end a replay: the frontier, and a step failure,
-                // an expiry, a signal timeout or an awaited child's terminal outcome
-                // already recorded in this run's history. Membership is all this tests —
-                // a caller raising one of these itself is read as an ending too, which
-                // is why the set only grows for a throw the engine itself replays.
-                //
-                // Nothing else ends it. A throw from a builder argument, a workflow
-                // helper or anything else the replay runs is a fault, and swallowing it
-                // hands back a stack truncated at that point for compensate() to roll
-                // back and report as a complete unwind. It leaves here instead, before
-                // the run has been touched, so the operator sees the cause and still
-                // has a run to retry the rollback on.
+            } catch (InternalFlowControl) {
+                // The frontier: a seam that cannot be resolved from history yet.
+            } catch (ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowCancelledException $ending) {
+                // Each of these ends the pass only when one of its own seams raised it
+                // off this run's history. All five are public classes a workflow can
+                // build, so the class alone says nothing about who raised it.
+                if (! $runtime->raised($ending)) {
+                    throw $ending;
+                }
             }
 
             return $runtime->sagaStack()->entries();
