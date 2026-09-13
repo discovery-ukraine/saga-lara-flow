@@ -62,10 +62,30 @@ return new class extends Migration
 
     /**
      * Removes only what is there, so it can also undo a run that died part of the way.
+     *
+     * Dropping a column takes every index over it along — MySQL and PostgreSQL do so
+     * silently. So before anything is dropped, an index that covers one of these
+     * columns and is not this migration's own stops the rollback: it is the host's to
+     * remove, not ours to lose.
      */
     public function down(): void
     {
         $schema = Schema::connection($this->getConnection());
+
+        foreach (self::COLUMNS as $name => $columns) {
+            $table = $this->prefix().$name;
+            $owned = $this->ownedIndex($table);
+
+            foreach ($schema->getIndexes($table) as $index) {
+                if ((string) $index['name'] !== $owned && ! $index['primary']
+                    && array_intersect($index['columns'], $columns) !== []) {
+                    throw new RuntimeException(
+                        "Index [{$index['name']}] on [{$table}] covers a column this rollback would drop, and "
+                        .'the package did not create it. Drop it first, or it would go with the column.'
+                    );
+                }
+            }
+        }
 
         foreach (self::COLUMNS as $name => $columns) {
             $table = $this->prefix().$name;
@@ -99,9 +119,10 @@ return new class extends Migration
 
     /**
      * The reclaim_stale_at index this migration owns, under the name the driver
-     * actually stored — PostgreSQL truncates an identifier past 63 bytes. The name,
-     * the column and the shape all have to match: a host index over the same column
-     * under another name, or a unique one, is not ours to count as created or to drop.
+     * actually stored. The name is the derived one exactly, or — past 63 bytes — the
+     * 63 bytes PostgreSQL truncates it to; any other shorter name is a host's. The
+     * column and the shape have to match too: a host index over the same column under
+     * another name, or a unique one, is not ours to count as created or to drop.
      */
     private function ownedIndex(string $table): ?string
     {
@@ -116,7 +137,7 @@ return new class extends Migration
             $stored = (string) $index['name'];
 
             $sameName = strcasecmp($stored, $wanted) === 0
-                || (strlen($stored) < strlen($wanted) && str_starts_with($wanted, strtolower($stored)));
+                || (strlen($wanted) > 63 && strcasecmp($stored, substr($wanted, 0, 63)) === 0);
 
             if ($sameName && $index['columns'] === ['reclaim_stale_at'] && ! $index['unique']) {
                 return $stored;

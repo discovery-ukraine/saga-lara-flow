@@ -4,6 +4,8 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\AbstractTenantHook;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\AutoActionWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CaptureTenant;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
@@ -155,7 +157,45 @@ it('refuses a tenancy hook it cannot call instead of skipping it', function (mix
     'a class that does not exist' => ['SagaTenancy'],
     'a class that is not invokable' => [TenantSpy::class],
     'a method that does not exist' => [[TenantHooks::class, 'captur']],
+    'a class the container cannot build' => [AbstractTenantHook::class],
 ])->throws(InvalidTenancyHookException::class);
+
+it('refuses a broken end hook before the step runs, leaving the worker where it was', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.end', [TenantHooks::class, 'finsh']);
+
+    $tenancy = app(TenancyManager::class);
+    $ran = false;
+
+    expect(fn () => $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        function () use (&$ran): void {
+            $ran = true;
+        },
+    ))->toThrow(InvalidTenancyHookException::class);
+
+    expect($ran)->toBeFalse()
+        ->and(TenantSpy::$current)->toBeNull()
+        ->and($tenancy->context())->toBeNull();
+});
+
+it('reverts the tenant and forgets the run context when restore fails part of the way', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restoreThenFail']);
+    config()->set('saga-lara-flow.tenancy.end', [TenantHooks::class, 'end']);
+
+    $tenancy = app(TenancyManager::class);
+
+    expect(fn () => $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        fn () => null,
+    ))->toThrow(RuntimeException::class, 'tenant database unavailable');
+
+    expect(TenantSpy::$current)->toBeNull()
+        ->and($tenancy->context())->toBeNull();
+});
 
 it('is a no-op with no tenancy hooks configured', function () {
     config()->set('saga-lara-flow.tenancy.capture', null);

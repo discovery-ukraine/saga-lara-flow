@@ -14,8 +14,9 @@ Run `php artisan migrate`. Three things are worth knowing:
   `tenancy.capture`, `restore` or `end` makes `php artisan config:cache` refuse the config. Name an
   invokable class or a `[Class::class, 'method']` pair with its full namespace instead; the engine
   resolves it from the container. A hook that is set but cannot be called — a missing class, a
-  misspelled method — used to be skipped silently, running the step outside the run's tenant; it
-  now throws `InvalidTenancyHookException`. Only `null` turns a hook off.
+  misspelled method, a class the container cannot build — used to be skipped silently, running the
+  step outside the run's tenant; it now throws `InvalidTenancyHookException`, before the step runs.
+  Only `null` turns a hook off.
   [Octane & multi-tenancy](https://sagalaraflow.dev/octane-and-multi-tenancy)
 
 ## From 1.1.x to 1.2.0

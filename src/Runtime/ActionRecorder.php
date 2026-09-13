@@ -20,6 +20,7 @@ use DiscoveryUkraine\SagaLaraFlow\Events\OptionalActionFailed;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -416,7 +417,7 @@ final readonly class ActionRecorder
      *
      * @param  array<string, mixed|list<mixed>>  $expected
      * @param  array<string, mixed>  $context
-     * @param  (Closure(Builder<FlowRun>): void)|null  $runFence
+     * @param  (Closure(Builder<Model>): void)|null  $runFence
      */
     private function writeFenced(
         ActionRun $actionRun,

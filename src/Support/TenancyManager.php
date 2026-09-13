@@ -4,6 +4,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Support;
 
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use Illuminate\Contracts\Container\BindingResolutionException;
 
 /**
  * Runs a run's business code (workflow/action/compensation) inside the tenant it
@@ -36,24 +37,37 @@ class TenancyManager
      */
     public function for(FlowRun $flowRun, ?string $autoClass, callable $callback): mixed
     {
+        $auto = $this->autoEnabled($autoClass);
+
+        // Every hook is resolved before any is called or the context is touched. A
+        // broken one then refuses the step before it runs — not after it has recorded
+        // its work, with the worker still inside the run's tenant.
+        if ($auto) {
+            $this->hook('capture');
+            $this->hook('restore');
+            $this->hook('end');
+        }
+
+        $previous = $auto ? $this->capture() : null;
+
         $heldContext = $this->current;
         $this->current = $flowRun->tenancy_context;
 
-        $auto = $this->autoEnabled($autoClass);
-        $previous = $auto ? $this->capture() : null;
-
-        if ($auto) {
-            $this->restore($flowRun);
-        }
-
         try {
-            return $callback();
-        } finally {
+            // Inside the bracket: a restore that fails part of the way still reverts.
             if ($auto) {
-                $this->end($previous);
+                $this->restore($flowRun);
             }
 
-            $this->current = $heldContext;
+            return $callback();
+        } finally {
+            try {
+                if ($auto) {
+                    $this->end($previous);
+                }
+            } finally {
+                $this->current = $heldContext;
+            }
         }
     }
 
@@ -156,11 +170,15 @@ class TenancyManager
 
         $resolved = null;
 
-        if (is_string($hook) && class_exists($hook)) {
-            $resolved = app($hook);
-        } elseif (is_array($hook) && count($hook) === 2 && is_string($hook[0] ?? null)
-            && is_string($hook[1] ?? null) && class_exists($hook[0])) {
-            $resolved = [app($hook[0]), $hook[1]];
+        try {
+            if (is_string($hook) && class_exists($hook)) {
+                $resolved = app($hook);
+            } elseif (is_array($hook) && count($hook) === 2 && is_string($hook[0] ?? null)
+                && is_string($hook[1] ?? null) && class_exists($hook[0])) {
+                $resolved = [app($hook[0]), $hook[1]];
+            }
+        } catch (BindingResolutionException $e) {
+            throw InvalidTenancyHookException::for($name, $hook, $e);
         }
 
         if (! is_callable($resolved)) {

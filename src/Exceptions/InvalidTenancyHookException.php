@@ -2,6 +2,8 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Exceptions;
 
+use Throwable;
+
 /**
  * A tenancy hook is configured but names nothing that can be called. It is refused
  * rather than skipped: a skipped restore would run the step in whatever tenant the
@@ -9,7 +11,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Exceptions;
  */
 class InvalidTenancyHookException extends FlowException
 {
-    public static function for(string $name, mixed $hook): self
+    public static function for(string $name, mixed $hook, ?Throwable $previous = null): self
     {
         $given = match (true) {
             is_string($hook) => "[{$hook}]",
@@ -22,7 +24,8 @@ class InvalidTenancyHookException extends FlowException
 
         return new self(
             "The tenancy.{$name} hook {$given} cannot be called. Name an invokable class or a "
-            ."[Class::class, 'method'] pair with its full namespace, or set the hook to null to turn it off."
+            ."[Class::class, 'method'] pair with its full namespace, or set the hook to null to turn it off.",
+            previous: $previous,
         );
     }
 }

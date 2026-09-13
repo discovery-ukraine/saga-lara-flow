@@ -154,19 +154,28 @@ it('creates its own reclaim index beside a host index on the same column, and dr
     $migration = include __DIR__.'/../../database/migrations/2026_08_25_000000_add_reclaim_stale_running_columns.php';
     $owned = 'saga_compensation_runs_reclaim_stale_at_index';
 
-    Schema::table('saga_compensation_runs', function (Blueprint $table) use ($owned): void {
+    // A shorter name that the owned one starts with is still the host's: only
+    // PostgreSQL's truncation at 63 bytes stands in for the full name.
+    $host = 'saga_compensation_runs_reclaim_stale';
+
+    Schema::table('saga_compensation_runs', function (Blueprint $table) use ($owned, $host): void {
         $table->dropIndex($owned);
-        $table->index('reclaim_stale_at', 'host_reclaim_lookup');
+        $table->index('reclaim_stale_at', $host);
     });
 
     $migration->up();
 
     expect(Schema::hasIndex('saga_compensation_runs', $owned))->toBeTrue()
-        ->and(Schema::hasIndex('saga_compensation_runs', 'host_reclaim_lookup'))->toBeTrue();
+        ->and(Schema::hasIndex('saga_compensation_runs', $host))->toBeTrue();
 
-    // SQLite will not drop a column a host index still covers; that one is the host's
-    // to remove.
-    Schema::table('saga_compensation_runs', fn (Blueprint $table) => $table->dropIndex('host_reclaim_lookup'));
+    // Dropping the column would take the host index with it on MySQL and PostgreSQL,
+    // so the rollback stops before it changes anything.
+    expect(fn () => $migration->down())->toThrow(RuntimeException::class, $host);
+
+    expect(Schema::hasIndex('saga_compensation_runs', $owned))->toBeTrue()
+        ->and(Schema::hasColumn('saga_compensation_runs', 'reclaim_stale_at'))->toBeTrue();
+
+    Schema::table('saga_compensation_runs', fn (Blueprint $table) => $table->dropIndex($host));
 
     $migration->down();
     $migration->down();

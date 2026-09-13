@@ -78,7 +78,10 @@ class FlowRun extends Model
      * its rows is exactly what a rollback needs. Whether work may BEGIN is the other
      * question — mayStartWork() below.
      *
-     * @param  Builder<FlowRun>  $query
+     * Typed over any model because whereHas() hands its constraint the related query
+     * as Builder<Model>.
+     *
+     * @param  Builder<Model>  $query
      */
     public static function live(Builder $query): void
     {
@@ -92,7 +95,7 @@ class FlowRun extends Model
      * delivery to start a fresh cycle — and never where a row already started is being
      * settled or written down.
      *
-     * @param  Builder<FlowRun>  $query
+     * @param  Builder<Model>  $query
      */
     public static function mayStartWork(Builder $query): void
     {
