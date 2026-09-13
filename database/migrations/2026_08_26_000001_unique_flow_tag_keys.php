@@ -54,7 +54,7 @@ return new class extends Migration
      */
     private function collapseDuplicateTagKeys(): void
     {
-        $connection = DB::connection($this->connection());
+        $connection = DB::connection($this->getConnection());
 
         while (true) {
             $duplicates = $connection->table($this->table())
@@ -95,7 +95,7 @@ return new class extends Migration
 
     private function change(Closure $change): void
     {
-        Schema::connection($this->connection())->table($this->table(), $change);
+        Schema::connection($this->getConnection())->table($this->table(), $change);
     }
 
     /**
@@ -110,7 +110,7 @@ return new class extends Migration
      */
     private function existing(string $wanted, array $columns): ?string
     {
-        foreach (Schema::connection($this->connection())->getIndexes($this->table()) as $index) {
+        foreach (Schema::connection($this->getConnection())->getIndexes($this->table()) as $index) {
             $name = (string) $index['name'];
 
             $sameName = strcasecmp($name, $wanted) === 0
@@ -142,7 +142,12 @@ return new class extends Migration
         return (string) config('saga-lara-flow.database.table_prefix', '').'flow_tags';
     }
 
-    private function connection(): ?string
+    /**
+     * The migrator opens its transaction on the connection a migration names. Left
+     * unnamed, that is the default connection while the uniques go to the package's
+     * own, and a failure there rolls nothing back.
+     */
+    public function getConnection(): ?string
     {
         return config('saga-lara-flow.database.connection');
     }

@@ -125,10 +125,12 @@ be overridden per builder call or per attribute — precedence is **action/build
 ```php
 'tenancy' => [
     'auto' => false,
-    'capture' => null, // fn (): array
-    'restore' => null, // fn (array $context): void
-    'end' => null,     // fn (?array $previous): void
+    'capture' => null, // (): array
+    'restore' => null, // (array $context): void
+    'end' => null,     // (?array $previous): void
 ],
 ```
 
-Callable hooks for Octane / multi-tenant safety — see [Octane & multi-tenancy](./octane-and-multi-tenancy.md).
+Hooks for Octane / multi-tenant safety, each an invokable class name or a `[Class::class, 'method']`
+pair resolved from the container — see [Octane & multi-tenancy](./octane-and-multi-tenancy.md). A
+closure also works, but `php artisan config:cache` refuses a config that holds one.

@@ -1,11 +1,14 @@
 <?php
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\AutoActionWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CaptureTenant;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\OneActionWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentAwaitWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantHooks;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantSpy;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TenantWorkflow;
 use Illuminate\Support\Facades\Queue;
@@ -120,6 +123,39 @@ it('lets a #[Tenancy(auto: true)] action override the config default of off', fu
 
     expect($result['ambient'])->toBe('acme'); // restored via the attribute
 });
+
+it('resolves an invokable class and a [class, method] pair from the container', function () {
+    // The forms config:cache can store — a closure in the config makes it refuse.
+    config()->set('saga-lara-flow.tenancy.capture', CaptureTenant::class);
+    config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restore']);
+
+    useDatabaseQueue();
+    config()->set('saga-lara-flow.tenancy.auto', true);
+
+    TenantSpy::$current = 'acme';
+    $run = SagaFlow::create(TenantWorkflow::class)->run();
+
+    TenantSpy::reset();
+
+    drainQueue();
+
+    expect($run->tenancy_context)->toBe(['tenant' => 'acme'])
+        ->and(firstActionResult($run->id)['ambient'])->toBe('acme')
+        ->and(TenantSpy::$current)->toBeNull();
+});
+
+it('refuses a tenancy hook it cannot call instead of skipping it', function (mixed $hook) {
+    Queue::fake();
+
+    config()->set('saga-lara-flow.tenancy.capture', $hook);
+
+    SagaFlow::create(TenantWorkflow::class)->run();
+})->with([
+    // What an unqualified SagaTenancy::class becomes in a config file with no import.
+    'a class that does not exist' => ['SagaTenancy'],
+    'a class that is not invokable' => [TenantSpy::class],
+    'a method that does not exist' => [[TenantHooks::class, 'captur']],
+])->throws(InvalidTenancyHookException::class);
 
 it('is a no-op with no tenancy hooks configured', function () {
     config()->set('saga-lara-flow.tenancy.capture', null);

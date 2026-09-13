@@ -15,7 +15,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        $schema = Schema::connection($this->connection());
+        $schema = Schema::connection($this->getConnection());
 
         $prefix = $this->prefix();
 
@@ -155,7 +155,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        $schema = Schema::connection($this->connection());
+        $schema = Schema::connection($this->getConnection());
         $prefix = $this->prefix();
 
         foreach ([
@@ -172,7 +172,12 @@ return new class extends Migration
         }
     }
 
-    private function connection(): ?string
+    /**
+     * The migrator opens its transaction on the connection a migration names. Left
+     * unnamed, that is the default connection while the tables go to the package's
+     * own, and a failure there rolls nothing back.
+     */
+    public function getConnection(): ?string
     {
         return config('saga-lara-flow.database.connection');
     }

@@ -62,7 +62,7 @@ return new class extends Migration
 
     private function change(string $table, Closure $change): void
     {
-        Schema::connection($this->connection())->table($this->prefix().$table, $change);
+        Schema::connection($this->getConnection())->table($this->prefix().$table, $change);
     }
 
     /**
@@ -78,7 +78,7 @@ return new class extends Migration
     {
         $wanted = strtolower($this->prefix().$name);
 
-        foreach (Schema::connection($this->connection())->getIndexes($this->prefix().$table) as $index) {
+        foreach (Schema::connection($this->getConnection())->getIndexes($this->prefix().$table) as $index) {
             $stored = (string) $index['name'];
 
             $sameName = strcasecmp($stored, $wanted) === 0
@@ -92,7 +92,12 @@ return new class extends Migration
         return null;
     }
 
-    private function connection(): ?string
+    /**
+     * The migrator opens its transaction on the connection a migration names. Left
+     * unnamed, that is the default connection while the indexes go to the package's
+     * own, and a failure there rolls nothing back.
+     */
+    public function getConnection(): ?string
     {
         return config('saga-lara-flow.database.connection');
     }

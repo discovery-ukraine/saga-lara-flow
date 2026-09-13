@@ -87,6 +87,111 @@ it('rolls the retry-on-signal columns back down again', function (): void {
     expect(Schema::hasColumn('saga_action_runs', 'retry_signal'))->toBeTrue();
 });
 
+// The migrator wraps a migration in a transaction on the connection the migration
+// names. One that names none gets the default connection's transaction while its DDL
+// goes to the package's own, so a host with a dedicated connection was left holding
+// the columns of a migration that failed and was never recorded.
+it('names the package connection to the migrator, so its transaction wraps the change', function (): void {
+    config()->set('saga-lara-flow.database.connection', 'testing');
+
+    foreach (glob(__DIR__.'/../../database/migrations/*.php') ?: [] as $path) {
+        expect((include $path)->getConnection())->toBe('testing', basename($path));
+    }
+});
+
+it('re-runs each column migration cleanly over a schema that already has its work', function (): void {
+    // What a host is left with when a migrate applied the DDL but never recorded the
+    // migration: MySQL commits every ALTER on its own.
+    foreach ([
+        '2026_08_21_000000_add_retry_on_signal_to_action_runs',
+        '2026_08_25_000000_add_reclaim_stale_running_columns',
+        '2026_08_31_000000_add_expiry_backoff_to_flow_runs',
+    ] as $name) {
+        (include __DIR__."/../../database/migrations/{$name}.php")->up();
+    }
+
+    expect(Schema::hasColumn('saga_action_runs', 'retry_signal'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_action_runs', ['reclaim_stale_at']))->toBeTrue()
+        ->and(Schema::hasColumn('saga_compensation_runs', 'attempts'))->toBeTrue()
+        ->and(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue();
+});
+
+it('adds only what a partly applied column migration is still missing', function (): void {
+    Schema::table('saga_action_runs', fn (Blueprint $table) => $table->dropColumn('queue_attempts_exhausted'));
+    Schema::table('saga_compensation_runs', fn (Blueprint $table) => $table->dropIndex(['reclaim_stale_at']));
+    Schema::table('saga_flow_runs', fn (Blueprint $table) => $table->dropColumn('expiry_available_at'));
+
+    (include __DIR__.'/../../database/migrations/2026_08_21_000000_add_retry_on_signal_to_action_runs.php')->up();
+    (include __DIR__.'/../../database/migrations/2026_08_25_000000_add_reclaim_stale_running_columns.php')->up();
+    (include __DIR__.'/../../database/migrations/2026_08_31_000000_add_expiry_backoff_to_flow_runs.php')->up();
+
+    expect(Schema::hasColumn('saga_action_runs', 'queue_attempts_exhausted'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_compensation_runs', ['reclaim_stale_at']))->toBeTrue()
+        ->and(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue();
+});
+
+it('fills in what a migration recorded by hand never applied', function (): void {
+    $initial = include __DIR__.'/../../database/migrations/2026_07_02_000000_create_saga_lara_flow_initial_tables.php';
+    $initial->down();
+
+    $this->artisan('migrate')->assertSuccessful();
+
+    // A host that got past a failed migrate by inserting the migration rows itself:
+    // Laravel will not run those migrations again, whatever they left undone.
+    Schema::table('saga_action_runs', fn (Blueprint $table) => $table->dropColumn('queue_attempts_exhausted'));
+    Schema::table('saga_compensation_runs', fn (Blueprint $table) => $table->dropIndex(['reclaim_stale_at']));
+    Schema::table('saga_flow_runs', fn (Blueprint $table) => $table->dropColumn('expiry_available_at'));
+    DB::table('migrations')->where('migration', '2026_09_13_000000_reconcile_partially_applied_migrations')->delete();
+
+    $this->artisan('migrate')->assertSuccessful();
+
+    expect(Schema::hasColumn('saga_action_runs', 'queue_attempts_exhausted'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_compensation_runs', 'saga_compensation_runs_reclaim_stale_at_index'))->toBeTrue()
+        ->and(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue();
+});
+
+it('creates its own reclaim index beside a host index on the same column, and drops only its own', function (): void {
+    $migration = include __DIR__.'/../../database/migrations/2026_08_25_000000_add_reclaim_stale_running_columns.php';
+    $owned = 'saga_compensation_runs_reclaim_stale_at_index';
+
+    Schema::table('saga_compensation_runs', function (Blueprint $table) use ($owned): void {
+        $table->dropIndex($owned);
+        $table->index('reclaim_stale_at', 'host_reclaim_lookup');
+    });
+
+    $migration->up();
+
+    expect(Schema::hasIndex('saga_compensation_runs', $owned))->toBeTrue()
+        ->and(Schema::hasIndex('saga_compensation_runs', 'host_reclaim_lookup'))->toBeTrue();
+
+    // SQLite will not drop a column a host index still covers; that one is the host's
+    // to remove.
+    Schema::table('saga_compensation_runs', fn (Blueprint $table) => $table->dropIndex('host_reclaim_lookup'));
+
+    $migration->down();
+    $migration->down();
+
+    expect(Schema::hasIndex('saga_compensation_runs', $owned))->toBeFalse()
+        ->and(Schema::hasColumn('saga_compensation_runs', 'reclaim_stale_at'))->toBeFalse();
+
+    $migration->up();
+
+    expect(Schema::hasIndex('saga_compensation_runs', $owned))->toBeTrue();
+});
+
+it('rolls back a column migration that was only partly applied', function (): void {
+    Schema::table('saga_flow_runs', fn (Blueprint $table) => $table->dropColumn('expiry_available_at'));
+
+    $migration = include __DIR__.'/../../database/migrations/2026_08_31_000000_add_expiry_backoff_to_flow_runs.php';
+    $migration->down();
+
+    expect(Schema::hasColumn('saga_flow_runs', 'expiry_attempts'))->toBeFalse();
+
+    $migration->up();
+
+    expect(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue();
+});
+
 it('indexes the wait lookups and narrows the tag key unique', function (): void {
     $columns = fn (string $table) => collect(Schema::getIndexes($table))->pluck('columns');
     $uniques = fn (string $table) => collect(Schema::getIndexes($table))

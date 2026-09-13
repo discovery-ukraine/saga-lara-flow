@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Support;
 
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTenancyHookException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 
 /**
@@ -86,9 +87,9 @@ class TenancyManager
      */
     public function restore(FlowRun $flowRun): void
     {
-        $restore = config('saga-lara-flow.tenancy.restore');
+        $restore = $this->hook('restore');
 
-        if (is_callable($restore)) {
+        if ($restore !== null) {
             $restore($flowRun->tenancy_context ?? []);
         }
     }
@@ -101,17 +102,17 @@ class TenancyManager
      */
     public function end(?array $previous): void
     {
-        $end = config('saga-lara-flow.tenancy.end');
+        $end = $this->hook('end');
 
-        if (is_callable($end)) {
+        if ($end !== null) {
             $end($previous);
 
             return;
         }
 
-        $restore = config('saga-lara-flow.tenancy.restore');
+        $restore = $this->hook('restore');
 
-        if (is_callable($restore)) {
+        if ($restore !== null) {
             $restore($previous ?? []);
         }
     }
@@ -123,8 +124,49 @@ class TenancyManager
      */
     public function capture(): ?array
     {
-        $capture = config('saga-lara-flow.tenancy.capture');
+        $capture = $this->hook('capture');
 
-        return is_callable($capture) ? $capture() : null;
+        return $capture !== null ? $capture() : null;
+    }
+
+    /**
+     * The tenancy.$name hook as something to call, or null when it is turned off.
+     * Besides a plain callable, the hook may name an invokable class, or a [class,
+     * method] pair whose method is not static; either is resolved from the container.
+     * Those two forms are what lets a host run config:cache, which cannot store a
+     * closure.
+     *
+     * Only null turns a hook off. Anything else that cannot be called is refused: a
+     * mistyped class skipped as if it were absent would run the step in whatever
+     * tenant the worker is already in.
+     *
+     * @throws InvalidTenancyHookException
+     */
+    private function hook(string $name): ?callable
+    {
+        $hook = config("saga-lara-flow.tenancy.{$name}");
+
+        if ($hook === null) {
+            return null;
+        }
+
+        if (is_callable($hook)) {
+            return $hook;
+        }
+
+        $resolved = null;
+
+        if (is_string($hook) && class_exists($hook)) {
+            $resolved = app($hook);
+        } elseif (is_array($hook) && count($hook) === 2 && is_string($hook[0] ?? null)
+            && is_string($hook[1] ?? null) && class_exists($hook[0])) {
+            $resolved = [app($hook[0]), $hook[1]];
+        }
+
+        if (! is_callable($resolved)) {
+            throw InvalidTenancyHookException::for($name, $hook);
+        }
+
+        return $resolved;
     }
 }

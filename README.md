@@ -141,7 +141,8 @@ Every setting lives in `config/saga-lara-flow.php`. The most common ones:
 - **Monitor.** `monitor.expiration.defaults` set implicit deadlines (seconds) for `run` / `action` /
   `signal` — `null` means no default. See [Expiration & monitoring](#expiration--monitoring).
 - **Sagas / parallel / children.** Default compensation, failure, and close policies.
-- **Tenancy.** `tenancy.*` callable hooks — see [Octane & multi-tenancy](#octane--multi-tenancy).
+- **Tenancy.** `tenancy.*` hooks, named by class so `config:cache` works — see
+  [Octane & multi-tenancy](#octane--multi-tenancy).
 
 ## Your first workflow
 
@@ -669,11 +670,16 @@ reverts afterwards, so nothing leaks between runs on a shared Octane or queue wo
 // config/saga-lara-flow.php
 'tenancy' => [
     'auto'    => false,
-    'capture' => fn (): array => ['tenant' => tenant()?->getTenantKey()],
-    'restore' => fn (array $c): void => tenancy()->initialize($c['tenant']),
+    'capture' => [\App\Tenancy\SagaTenancy::class, 'capture'],
+    'restore' => [\App\Tenancy\SagaTenancy::class, 'restore'],
     'end'     => null, // optional explicit revert; otherwise the previous context is restored
 ],
 ```
+
+Each hook is an invokable class name or a `[Class::class, 'method']` pair, resolved from the
+container — write the class with its full namespace, since the config file imports nothing. A hook
+that cannot be called throws `InvalidTenancyHookException`; only `null` turns one off. A closure
+works too, but `php artisan config:cache` refuses a config that holds one.
 
 See the [multi-tenancy docs](https://sagalaraflow.dev/octane-and-multi-tenancy) for a full
 stancl/tenancy integration example.
