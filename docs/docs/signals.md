@@ -63,16 +63,23 @@ use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 SagaFlow::loadFlow($runId)->signal('approval', ['approved' => true]);
 ```
 
-`signal()` throws `CannotSignalTerminalFlowException` if the run has already finished. Use the safe
-variant to no-op instead:
+A signal is accepted only by a run that can still consume one: `Pending`, `Running` or `Waiting`.
+`signal()` throws `CannotSignalTerminalFlowException` on a finished run and
+`CannotSignalCancellingFlowException` on one that is rolling back; both extend
+`CannotSignalFlowException`, so a single `catch` covers every refusal. Nothing is written on a
+refusal — no signal row, no event, no resume job. A run
+[pruned](./expiration-and-monitoring.md#pruning) out from under the handle raises
+`FlowNotFoundException` rather than writing a row that references nothing. Use the safe variant to
+no-op instead:
 
 ```php
 $delivered = SagaFlow::loadFlow($runId)->signalIfRunning('approval', ['approved' => true]);
-// $delivered === false on a terminal run
+// false on a terminal run, one that is rolling back, and one that has been pruned
 ```
 
-`signalIfRunning()` means *"unless the run has already finished"* — it delivers to **any
-non-terminal run**, not only a `Running` one.
+`signalIfRunning()` means *"unless the run is past taking one"* — it delivers to **any run in
+`Pending`, `Running` or `Waiting`**, not only a `Running` one, and returns `false` for every reason
+`signal()` would raise.
 
 Neither may be called inside a `DB::transaction()` of your own: a rollback afterwards takes the
 delivery with it, the wait stays open, and nothing tells you. See
@@ -92,8 +99,8 @@ SagaFlow::query()
     ?->signal('owner-synced');
 ```
 
-Use `signalable()` (alias `active()`), **not** `running()`. A signal is accepted by any
-non-terminal run — `Pending`, `Running`, or `Waiting` — and a flow parked on `awaitSignal()` sits in
+Use `signalable()` (alias `active()`), **not** `running()`. It names the same three statuses
+delivery accepts — `Pending`, `Running`, or `Waiting` — and a flow parked on `awaitSignal()` sits in
 **`Waiting`**, not `Running`. Filtering by `running()` would silently miss exactly the run you are
 trying to wake.
 

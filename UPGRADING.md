@@ -1,5 +1,53 @@
 # Upgrading
 
+## From 1.2.x to 1.3.0
+
+### Behaviour changed
+
+Nothing below asks anything of you. Each links to the page that covers it.
+
+- **A signal is refused by a run that is rolling back.** Delivery is held to the three statuses
+  `signalable()` already named — `Pending`, `Running`, `Waiting` — so `Cancelling` raises
+  `CannotSignalCancellingFlowException` and writes nothing. It and
+  `CannotSignalTerminalFlowException` share a new parent, `CannotSignalFlowException`; catch that
+  to cover both, and `signalIfRunning()` already does.
+  [Signals](https://sagalaraflow.dev/signals)
+- **A signal to a run that has been pruned raises `FlowNotFoundException`** rather than writing a
+  row that references nothing. `signalIfRunning()` absorbs it and returns `false`, as it does every
+  other refusal. [Signals](https://sagalaraflow.dev/signals)
+- **A run that is rolling back is no longer driven.** A pass begins only for a run in one of the
+  three statuses `mayStartWork()` names, decided on the writing connection, and the deadline is
+  weighed after that. A resume queued before the sweep expired the run is turned away rather than
+  planning a second rollback, so each compensation runs once. `drive()` returns such a run as the
+  writer holds it instead of raising `InvalidTransitionException`, and `saga-flow:kick` reports it
+  rather than claiming a re-drive. [Statuses](https://sagalaraflow.dev/statuses)
+- **A replay that outlived a rollback starts no child and calls no side-effect factory.** Both seams
+  read the run's status from the writing connection before they begin, and end the pass when it is
+  no longer one of the three statuses `mayStartWork()` names. A child's run and its link are written
+  in one transaction; the `ChildWorkflowStarted` event and the child's job both follow that commit,
+  so a listener now runs outside that transaction rather than inside it.
+  [Child workflows](https://sagalaraflow.dev/child-workflows)
+- **The rollback that is unwound is planned with the run already in `Cancelling`.** A step whose
+  owed queue attempt completed while an earlier plan was being drawn is compensated rather than left
+  applied under a run reporting a complete unwind. An ordinal the later plan came back without is
+  restored from the earlier one and journalled as `replan_incomplete`; a replay that throws is
+  journalled as `replan_failed` and the rollback goes ahead on the plan in hand.
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
+- **A kick reaches the step, not just the run.** `saga-flow:kick` / `SagaFlow::kick()` now refills
+  the repair budget of the run and of every step it has not finished, and sends a fresh job for the
+  sequential step the run is parked on — the rows R1 and R3 read (`Pending`, or `Running` past its
+  reclaim deadline), without their throttle. The refilled rows are held off for `grace_seconds`, as
+  a freshly dispatched row is. `repair.max_attempts` therefore holds the automatic pass off rather
+  than ending a run's recovery. The claim still decides whether that job runs the
+  step, and a parallel block gets its budget back and nothing else.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
+- **A run driven while another is being driven gets replay state of its own.** An action whose body
+  starts a saga, or a `runSync()` written inside `handle()`, no longer rewinds the ordinal counter,
+  empties the compensation stack or unbinds the run of the pass that reached it. `FlowRuntime` is no
+  longer registered in the container — the executor makes one for every pass — so resolving it
+  yourself answers with an instance no pass is driven with.
+  [Synchronous execution](https://sagalaraflow.dev/synchronous-execution)
+
 ## From 1.2.0 to 1.2.1
 
 Run `php artisan migrate`. Three things are worth knowing:

@@ -75,6 +75,10 @@ A sweep only ever looks at work belonging to a run that is still going. A run th
 and waits as it ends (see [statuses](./statuses.md)), and the scan skips whatever was left unsettled before that, so a
 batch is always filled with candidates a sweep can actually act on.
 
+A deadline is also enforced only once. The sweep moves a run it expires into `Cancelling`, and no pass is driven for a
+run there, so a job queued before the sweep — a resume owed to a wait it then expired — ends without re-entering
+expiration. The rollback the sweep planned is the only one, and each compensation on it runs once.
+
 ## A run the sweep cannot expire
 
 Expiring a run means replaying it to find what to undo, and that replay can throw — a workflow reading something that
@@ -96,6 +100,17 @@ query. A held-off run rejoins the queue on the time its window opens rather than
 many of them there are they cannot queue ahead of a run that has been overdue longer than they have waited. There is **no attempt cap**: the cause is often temporary, so a run that becomes plannable again is expired on
 the next open window. Nothing resets the count, so a run that has been failing since Tuesday says so. Fixing the
 workflow is still the actual remedy — see [Reclaim & recovery](./reclaim-and-recovery.md).
+
+All of that concerns the plan drawn before the run is moved. A run with something to undo is moved, and then the plan
+is drawn again: that second one is what the rollback unwinds, and it holds the step whose owed attempt completed while
+the first was being drawn. A second plan that came back without an ordinal the first had takes that ordinal from it and
+journals `replan_incomplete`; a replay that throws journals `replan_failed` and leaves the first plan standing. Neither
+is surfaced — the run has been taken, so the rollback goes ahead rather than stopping in `Cancelling` with nothing to
+move it on.
+
+A run the first plan found nothing to undo on is not moved at all; it expires where the sweep found it. A step that
+completes in that gap is therefore still applied under a run reported expired, which is worth knowing if your workflow
+carries exactly one compensatable step.
 
 ## Repair (the doctor)
 
@@ -126,7 +141,8 @@ Every parameter:
 - **`batch_size`** — how many candidate entities one repair pass inspects at most. Only entities of runs that have not
   finished are counted against it.
 - **`max_attempts`** — per-entity cap. After this many repair attempts the doctor gives up on that entity and leaves it
-  alone (re-drive it by hand with `saga-flow:kick`).
+  alone. A kick refills that budget — held off for `grace_seconds` first, like any freshly dispatched row — so the cap
+  holds the automatic pass off rather than ending the run's recovery.
 - **`backoff`** — exponential backoff between repair attempts for a single entity, clamped between
   `base_seconds` and `max_seconds`. Prevents the doctor from hammering the same stuck entity.
 - **`redispatch_lost_actions`** — enable R1: re-dispatch a lost queue job for a stuck sequential
@@ -164,6 +180,16 @@ To re-drive a single stuck run by hand:
 SagaFlow::kick($runId);          // or:
 // php artisan saga-flow:kick {run}
 ```
+
+A kick re-drives a run that may still start work. A run that has finished, or is rolling back, is left exactly as it
+was; the command reports its status instead of claiming a re-drive.
+
+It also refills the repair budget of the run and of every step it has not finished, and sends a fresh job for the
+sequential step the run is parked on — so a run stopped at a step the doctor gave up on moves again, rather than
+replaying up to that step and parking on it a second time. The step it reaches is the one R1 and R3 read, without their
+throttle: `Pending`, or `Running` past its [reclaim](./reclaim-and-recovery.md) deadline. A `Running` row still inside
+that window belongs to a worker that may be alive and is left to it. A parallel block gets its budget back and nothing
+else, for the same reason R1 and R3 leave batch-bound work alone.
 
 ## Pruning
 

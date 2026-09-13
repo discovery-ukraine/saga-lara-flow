@@ -30,7 +30,7 @@ class ResumeWorkflowJob implements ShouldQueue
     {
         $flowRun = $repository->find($this->flowRunId);
 
-        if ($flowRun === null || $flowRun->isTerminal()) {
+        if ($flowRun === null || ! $flowRun->status->canStartWork()) {
             return;
         }
 

@@ -24,6 +24,7 @@ readonly class SideEffectStore
         private SideEffectRecorder $recorder,
         private Serializer $serializer,
         private FlowSuspender $suspender,
+        private StartWorkGuard $startWork,
     ) {}
 
     /**
@@ -55,6 +56,9 @@ readonly class SideEffectStore
 
             return $this->serializer->deserialize($existing->value);
         }
+
+        // Before the call, never after it: a factory that has run cannot be taken back.
+        $this->startWork->expect($flowRun, 'side_effect', $sequence);
 
         $sideEffectResult = $sideEffectCallback();
 

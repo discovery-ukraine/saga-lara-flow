@@ -8,13 +8,14 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 
 /**
- * Per-execution, scoped state for the workflow being driven: the current run,
- * the run mode, and the step sequence. Holds NO static mutable state so that
- * two runs driven back-to-back in the same process (Octane, sync queue) never
- * leak context into one another.
+ * Per-execution state for the workflow being driven: the current run, the run
+ * mode, and the step sequence. Holds NO static mutable state, and the executor
+ * makes one for every pass it drives, so neither two runs driven back-to-back in
+ * the same process (Octane, sync queue) nor a pass driven inside another leak
+ * context into one another.
  *
- * One instance is bound per drive() pass; reset() zeroes the sequence at the
- * start of every replay and clear() wipes it in the executor's "finally" block.
+ * reset() zeroes the sequence at the start of every replay; clear() unbinds the
+ * run in the executor's "finally" block.
  */
 final class FlowRuntime
 {
@@ -118,8 +119,7 @@ final class FlowRuntime
     }
 
     /**
-     * Whether any retryOnSignal() decision is in flight. Reads on other runs are
-     * fine during one; driving the engine is not, because there is one runtime.
+     * Whether a retryOnSignal() decision is in flight on this pass.
      */
     public function isDeciding(): bool
     {

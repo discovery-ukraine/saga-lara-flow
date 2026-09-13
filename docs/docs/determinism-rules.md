@@ -24,6 +24,9 @@ recorded results for completed operations and only executes the next un-run one.
   DB/HTTP reads — outside a `sideEffect()`.
 - ❌ Reorder, add, or remove already-recorded steps in a version that has in-flight runs (see
   [Versioning](./versioning.md)).
+- ❌ Drive another workflow from inside `handle()` with `SagaFlow::create(...)->runSync()` or
+  `->run()`. Those calls take no ordinal, so nothing recognizes the run one of them started, and the
+  next replay starts another. [`child()`](./child-workflows.md) is the seam that records it.
 - ❌ Catch the engine's control-flow exceptions (`FlowSuspended` / `InternalFlowControl`) as if they
   were errors. If you use a broad `catch (\Throwable $e)`, re-throw them:
 

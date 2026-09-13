@@ -3,7 +3,10 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
+use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalCancellingFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
@@ -14,7 +17,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
  * signal is stored as a floating Received row for a future awaitSignal to consume
  * (FIFO). Delivery runs outside the queue and holds no lock, so filling a signal is
  * a conditional write that falls back to the floating row when it loses.
- * Terminal runs reject signals.
+ * Only a run that can still consume one accepts a signal: FlowStatus::signalable().
  */
 readonly class SignalDispatcher
 {
@@ -27,11 +30,19 @@ readonly class SignalDispatcher
      * @param  array<int|string, mixed>  $payload
      *
      * @throws CannotSignalTerminalFlowException
+     * @throws CannotSignalCancellingFlowException
+     * @throws FlowNotFoundException
      */
     public function deliver(FlowRun $flowRun, string $name, array $payload): FlowSignal
     {
-        if ($flowRun->isTerminal()) {
-            throw CannotSignalTerminalFlowException::for($flowRun);
+        $current = $this->reread($flowRun);
+
+        if ($current->isTerminal()) {
+            throw CannotSignalTerminalFlowException::for($current);
+        }
+
+        if (! in_array($current->status, FlowStatus::signalable(), true)) {
+            throw CannotSignalCancellingFlowException::for($current);
         }
 
         $waitingSignal = $this->repository->earliestWaiting($flowRun->id, $name);
@@ -50,6 +61,17 @@ readonly class SignalDispatcher
         }
 
         return $signal;
+    }
+
+    /**
+     * The run this delivery is decided on. Falling back to the caller's snapshot when
+     * the writer has no row would trust the state this read exists to replace, so a
+     * run that is gone raises instead.
+     */
+    private function reread(FlowRun $flowRun): FlowRun
+    {
+        return $flowRun->newQuery()->useWritePdo()->find($flowRun->getKey())
+            ?? throw FlowNotFoundException::for((string) $flowRun->getKey());
     }
 
     private function wake(FlowRun $flowRun): void

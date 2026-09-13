@@ -33,6 +33,37 @@ refused when it tries to claim the row, a signal-gated retry will not start anot
 already started is a different question and carries on as usual: a step past its own deadline is
 still expired, and the rollback's own compensations still run.
 
+The plan it unwinds is made once the run is here, which is what makes "afterwards" mean afterwards:
+a step whose owed queue attempt completed while an earlier plan was being drawn is in it. That
+earlier plan is drawn before anything is written, so a run whose rollback cannot be planned at all
+is left where it was found rather than stranded mid-rollback. It is also what fills the gaps in the
+later one, and the journal says so: an ordinal the second plan came back without is restored from
+the first, and a second replay that throws leaves the first standing on its own.
+
+A step is not the only thing that begins, and the rest is reached from inside a pass rather than by
+a job of its own: a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md)
+both start work at an ordinal the run has not reached before. A pass still replaying when the
+rollback committed carries the run as it was before it, so both seams read the status from the
+writing connection and end the pass instead of starting anything. That is a check taken immediately
+before the work, not a lock — a run that enters `Cancelling` in the moment between them still starts
+that one.
+
+Neither is the run itself driven. A pass begins only for a run in one of the three statuses
+`mayStartWork()` names, decided on the run as the writing connection holds it, and its deadline is
+weighed after that. A job that arrives for a run outside them — a redelivery, a resume queued while
+the run was still `Waiting`, a manual
+[`saga-flow:kick`](./expiration-and-monitoring.md#repair-the-doctor) — ends without entering the
+pass, and the executor hands its caller the run as the writer holds it rather than throwing. So a
+run is expired once: the rollback the sweep planned is the only one, and each compensation on it
+runs once.
+
+It takes no [signal](./signals.md) either, for the same reason read from the other end: the resume a
+delivery queues cannot drive a rolling-back run, and terminal settlement closes wait-markers, not
+received rows, so the delivery would sit unread forever. Delivery is held to the three statuses
+`signalable()` names, decided on the run as the writing connection holds it. That is a check at
+delivery time, not a lock: a run that enters `Cancelling` immediately afterwards still takes the
+signal, which then stays a floating `Received` row like any other nobody consumed.
+
 ## `ActionStatus` — one step
 
 | Case | Meaning |
@@ -61,7 +92,8 @@ because nothing happened to the step — the run under it ended.
 | `Cancelled` | The run finished while the wait was still open. |
 
 A delivered signal that no `awaitSignal()` ever matched keeps its `Received` status for good — it
-records that a signal arrived and nobody used it.
+records that a signal arrived and nobody used it. Such a row can only come from a run that was
+still open to one: a delivery to a finished or rolling-back run writes nothing at all.
 
 ## What a finished run leaves behind
 
