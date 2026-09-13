@@ -11,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
+use Throwable;
 
 /**
  * The awaitSignal seam: resolves a signal by the workflow's deterministic
@@ -41,6 +42,7 @@ readonly class SignalWaiter
      * @throws HistoryContractMismatchException
      * @throws AwaitSignalTimeoutException
      * @throws FlowSuspended
+     * @throws Throwable
      */
     public function await(FlowRuntime $runtime, string $name, ?DateTimeInterface $timeout = null): mixed
     {
@@ -58,7 +60,7 @@ readonly class SignalWaiter
             }
 
             if ($signal !== null && $signal->status === SignalStatus::TimedOut) {
-                throw AwaitSignalTimeoutException::for($signal, $sequence);
+                throw $runtime->raising(AwaitSignalTimeoutException::for($signal, $sequence));
             }
 
             $this->suspender->suspend('signal', $sequence);
@@ -72,7 +74,9 @@ readonly class SignalWaiter
                 SignalStatus::Received => $this->consume($flowRun, $signal, $sequence),
                 // The monitor timed the wait-signal out: surface a business error the
                 // workflow may catch, otherwise it fails the flow and rolls back.
-                SignalStatus::TimedOut => throw AwaitSignalTimeoutException::for($signal, $sequence),
+                SignalStatus::TimedOut => throw $runtime->raising(
+                    AwaitSignalTimeoutException::for($signal, $sequence),
+                ),
                 // Still parked (Waiting): keep waiting.
                 default => $this->suspender->suspend('signal', $sequence),
             };

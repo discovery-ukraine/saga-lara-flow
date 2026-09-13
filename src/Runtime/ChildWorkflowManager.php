@@ -72,7 +72,7 @@ readonly class ChildWorkflowManager
         // A recorded child resolves the same way for both replays: what it already
         // came to is history, and a rollback has to be planned past it.
         if ($link !== null) {
-            return $this->resolve($link, $continueParentOnFailure, $sequence);
+            return $this->resolve($runtime, $link, $continueParentOnFailure, $sequence);
         }
 
         // Compensation-only planning stops at a child this run never started: that is
@@ -82,7 +82,8 @@ readonly class ChildWorkflowManager
         }
 
         // First encounter: create and start the child, then suspend the parent.
-        $child = $this->startChild($parent, $workflowClass, $arguments, $closePolicy, $sequence, $continueParentOnFailure);
+        $child = $this->startChild($parent, $workflowClass, $arguments, $closePolicy, $sequence,
+            $continueParentOnFailure);
 
         if ($runtime->mode() === RunMode::Sync) {
             $driven = $this->executor->drive($child, RunMode::Sync);
@@ -126,17 +127,24 @@ readonly class ChildWorkflowManager
      * @throws FlowSuspended
      * @throws ChildWorkflowFailedException
      * @throws ChildWorkflowCancelledException
+     * @throws Throwable
      */
-    private function resolve(FlowChild $link, bool $continueParentOnFailure, int $sequence): mixed
-    {
+    private function resolve(
+        FlowRuntime $runtime,
+        FlowChild $link,
+        bool $continueParentOnFailure,
+        int $sequence,
+    ): mixed {
         $child = $link->child;
 
         return match ($child->status) {
             FlowStatus::Completed => $this->serializer->deserialize($child->result),
             FlowStatus::Failed => $continueParentOnFailure
                 ? null
-                : throw ChildWorkflowFailedException::for($child, $sequence),
-            FlowStatus::Cancelled => throw ChildWorkflowCancelledException::for($child, $sequence),
+                : throw $runtime->raising(ChildWorkflowFailedException::for($child, $sequence)),
+            FlowStatus::Cancelled => throw $runtime->raising(
+                ChildWorkflowCancelledException::for($child, $sequence),
+            ),
             // Still in flight (Pending/Running/Waiting): park until it finalizes.
             default => $this->suspender->suspend('child', $sequence),
         };

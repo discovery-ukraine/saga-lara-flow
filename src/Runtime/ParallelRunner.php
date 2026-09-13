@@ -246,11 +246,11 @@ final readonly class ParallelRunner
         }
 
         if ($hardFailed !== null) {
-            throw ActionFailedException::forAction(
+            throw $runtime->raising(ActionFailedException::forAction(
                 $hardFailed['class'],
                 $hardFailed['sequence'],
                 $hardFailed['message'],
-            );
+            ));
         }
 
         if ($pending) {

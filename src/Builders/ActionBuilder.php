@@ -516,6 +516,8 @@ class ActionBuilder
     /**
      * Replay a failed step: optionally register its compensation (opt-in, for
      * non-atomic steps) then surface the failure as a business error.
+     *
+     * @throws Throwable
      */
     private function resolveFailed(ActionRun $step, int $sequence): never
     {
@@ -523,13 +525,17 @@ class ActionBuilder
             $this->pushCompensation($step->id, $sequence);
         }
 
-        throw ActionFailedException::forAction($this->actionClass, $sequence, $this->failureMessage($step));
+        throw $this->runtime->raising(
+            ActionFailedException::forAction($this->actionClass, $sequence, $this->failureMessage($step)),
+        );
     }
 
     /**
      * Replay a required step the monitor expired: optionally register its
      * compensation (opt-in, for non-atomic steps) then surface the expiry as a
      * business error so the flow fails and rolls back.
+     *
+     * @throws Throwable
      */
     private function resolveExpired(ActionRun $step, int $sequence): never
     {
@@ -537,7 +543,7 @@ class ActionBuilder
             $this->pushCompensation($step->id, $sequence);
         }
 
-        throw FlowExpiredException::forAction($this->actionClass, $sequence);
+        throw $this->runtime->raising(FlowExpiredException::forAction($this->actionClass, $sequence));
     }
 
     /**
