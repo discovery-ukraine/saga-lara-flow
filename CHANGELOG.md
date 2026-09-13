@@ -2,6 +2,47 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.2.1 - 2026-09-13
+
+> ### ⚠️ Run `php artisan migrate`
+
+One migration ships with this release — `reconcile_partially_applied_migrations`. It runs from the
+package; do **not** `vendor:publish` it. On a complete schema it changes nothing.
+
+### Fixed: a failed `migrate` could not be run again
+
+Every package migration now names the package's database connection to the migrator. Before, a
+host with a dedicated `database.connection` had its schema changes run outside the transaction
+Laravel opened, so a migration that failed left its columns behind without being recorded, and the
+next `migrate` stopped on `column "retry_signal" … already exists`.
+
+The column migrations — `add_retry_on_signal_to_action_runs`, `add_reclaim_stale_running_columns`
+and `add_expiry_backoff_to_flow_runs` — add only what is missing and roll back only what is there,
+so a run that died part of the way through (MySQL commits each `ALTER` on its own) carries on from
+where it stopped. The reclaim index is recognised by its own name and shape, so a host index on the
+same column neither stands in for it nor gets dropped by a rollback.
+
+If you recorded the migrations by hand to get past the error, leave those rows:
+`reconcile_partially_applied_migrations` fills in every column and index they had not reached.
+
+### Fixed: tenancy hooks blocked `config:cache`
+
+The documented closures in `tenancy.capture`, `restore` and `end` made `php artisan config:cache`
+refuse the configuration. A hook can now be an invokable class name or a `[Class::class, 'method']`
+pair, resolved from the container, and the docs use that form. Closures still work where the config
+is not cached.
+
+### Behaviour changes
+
+- **A tenancy hook that is set but cannot be called throws `InvalidTenancyHookException`.** It used
+  to be skipped silently, which ran the step outside the run's tenant. Every hook is now resolved
+  before the step runs, so a broken one refuses the step instead of failing it after its work is
+  recorded. Only `null` turns a hook off.
+
+See [UPGRADING](https://github.com/discovery-ukraine/saga-lara-flow/blob/v1.2.1/UPGRADING.md).
+
+**Full Changelog**: https://github.com/discovery-ukraine/saga-lara-flow/compare/v1.2.0...v1.2.1
+
 ## v1.2.0 - 2026-09-01
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading
@@ -13,6 +54,7 @@ engine writes their columns from the moment it starts.
 ```bash
 composer update discovery-ukraine/saga-lara-flow
 php artisan migrate
+
 
 ```
 Deploy them together. They run from the package — do **not** `vendor:publish` them, or `migrate`
@@ -251,6 +293,7 @@ php artisan migrate
 
 
 
+
 ```
 Deploy the two together. See [UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md).
 
@@ -271,6 +314,7 @@ $this->action(ChargeCard::class, $orderId)
         only: [InsufficientBalanceException::class],  // null = park on any exception
     )
     ->run();
+
 
 
 
@@ -304,6 +348,7 @@ $this->tags([
     'attempt'  => 2,      // int values are cast to string
     'orders'   => null,   // a tag with no value
 ]);
+
 
 
 
@@ -447,6 +492,7 @@ fails partway through, registered compensations roll back the completed work in 
 composer require discovery-ukraine/saga-lara-flow
 php artisan vendor:publish --tag="saga-lara-flow-migrations"
 php artisan migrate
+
 
 
 
