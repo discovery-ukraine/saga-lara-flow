@@ -47,7 +47,7 @@ class TenancyManager
         $restore = $auto ? $this->hook('restore') : null;
         $end = $auto ? $this->hook('end') : null;
 
-        $previous = $capture !== null ? $capture() : null;
+        $previous = $this->captureWith($capture);
 
         $heldContext = $this->current;
         $this->current = $flowRun->tenancy_context;
@@ -127,8 +127,17 @@ class TenancyManager
      */
     public function capture(): ?array
     {
-        $capture = $this->hook('capture');
+        return $this->captureWith($this->hook('capture'));
+    }
 
+    /**
+     * Typed on purpose: a hook that returns anything but an array fails here, before
+     * a tenant is entered, rather than on the way out of a step that already ran.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    private function captureWith(?callable $capture): ?array
+    {
         return $capture !== null ? $capture() : null;
     }
 

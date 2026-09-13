@@ -162,6 +162,26 @@ it('refuses a tenancy hook it cannot call instead of skipping it', function (mix
     'a class whose constructor throws' => [UnbuildableTenantHook::class],
 ])->throws(InvalidTenancyHookException::class);
 
+it('refuses a capture hook that returns no array before the step enters the tenant', function () {
+    config()->set('saga-lara-flow.tenancy.auto', true);
+    config()->set('saga-lara-flow.tenancy.capture', fn () => 'acme');
+
+    $tenancy = app(TenancyManager::class);
+    $ran = false;
+
+    expect(fn () => $tenancy->for(
+        new FlowRun(['tenancy_context' => ['tenant' => 'acme']]),
+        null,
+        function () use (&$ran): void {
+            $ran = true;
+        },
+    ))->toThrow(TypeError::class);
+
+    expect($ran)->toBeFalse()
+        ->and(TenantSpy::$current)->toBeNull()
+        ->and($tenancy->context())->toBeNull();
+});
+
 it('calls the hooks it checked before the step, not ones resolved again after it', function () {
     config()->set('saga-lara-flow.tenancy.auto', true);
     config()->set('saga-lara-flow.tenancy.restore', [TenantHooks::class, 'restore']);
