@@ -51,10 +51,11 @@ Nothing below asks anything of you. Each links to the page that covers it.
   The replay that rebuilds a compensation stack ends only where one of the engine's seams raises
   `ActionFailedException`, `FlowExpiredException`, `AwaitSignalTimeoutException`,
   `ChildWorkflowFailedException` or `ChildWorkflowCancelledException` off the run's history. A
-  workflow raising one of those classes itself is a fault like any other throw, so the stack is no
-  longer cut at that point and unwound as a complete rollback: `compensate()` surfaces it and leaves
-  the run untouched, the expiration sweep reports `ExpirationNotPlannedException`, and a second plan
-  is journalled as `replan_failed` and unwound on the plan in hand.
+  workflow raising one of those classes itself is a fault like any other throw: planning stops and
+  the throw surfaces, rather than the stack being cut there and unwound as a complete rollback.
+  `compensate()` leaves the run untouched, the expiration sweep reports
+  `ExpirationNotPlannedException`, and a second plan is journalled as `replan_failed` and unwound on
+  the plan in hand.
   [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
 
 ## From 1.2.0 to 1.2.1
