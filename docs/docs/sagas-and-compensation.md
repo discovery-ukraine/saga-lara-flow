@@ -121,13 +121,15 @@ The rollback is planned before anything is undone: the handle replays `handle()`
 completed steps carry compensations. Every seam is guarded for that pass, so it runs no business
 logic, starts no work, and settles no step — one it has not seen is a place to stop, not a place to
 schedule. (Your own `tag()` calls still rewrite their rows, as they do on every replay.) The pass
-ends on the frontier it stopped at, and on a step failure, an expiry, a signal timeout or an awaited
-child's failure or cancellation already in the run's history — each of them raised by the seam that
-read it. Anything else is a fault, not an ending: an argument expression reading a record that has
-since been deleted, say, or your own code raising one of those business exceptions itself. The plan
-is then incomplete, so `compensate()` surfaces the throw and leaves the run as it found it, rather
-than unwinding part of it and reporting a finished rollback. Fix the cause and call it again. That
-is the plan drawn before the run is moved; a throw from the one made after it is journalled instead,
+reads the history from the write connection, so a lagging
+[read replica](./queues-locks-idempotency.md#read-replicas) cannot cut the plan short. It ends on
+the frontier it stopped at, and on a step failure, an expiry, a signal timeout or an awaited child's
+failure or cancellation already in the run's history — each of them raised by the seam that read it.
+Anything else is a fault, not an ending: an argument expression reading a record that has since been
+deleted, say, or your own code raising one of those business exceptions itself. The plan is then
+incomplete, so `compensate()` surfaces the throw and leaves the run as it found it, rather than
+unwinding part of it and reporting a finished rollback. Fix the cause and call it again. That is the
+plan drawn before the run is moved; a throw from the one made after it is journalled instead,
 because by then the run has been taken and there is a plan to unwind either way.
 
 :::warning Not inside a transaction of your own

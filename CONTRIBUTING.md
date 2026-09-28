@@ -101,7 +101,14 @@ not `FlowHandle`, not the monitor's inline sweep. Changes to `src/Runtime`, `src
   case pins. What such a read proves is visibility on the writing connection, which equals
   durability only while the engine's transaction is the outermost one — see the boundary below.
 - **A read that decides something must use `useWritePdo()`.** A lagging replica will answer with the
-  very state the fence was guarding against.
+  very state the fence was guarding against. The pass that plans a rollback is held to the writer
+  as a whole instead of read by read: `collectCompensationsInner()` sets the connection to read from
+  the writer for the pass and restores the setting in the same `finally`, so a seam's lookups are
+  covered there. Not a transaction: MySQL's default `REPEATABLE READ` would answer every read from
+  the pass's first one, and a step settled in between would be missing from the plan. A drive pass
+  is left to the connection's routing. Its transition normally changes the run's row before it
+  replays, which sends a sticky connection to the writer — but not when MySQL reports a same-second
+  `Running → Running` as no change, since Laravel marks a connection only for changed rows.
 - **Do not `refresh()` a model the caller still holds.** It discards their unsaved attributes;
   `FlowHandle` hands that same instance back.
 

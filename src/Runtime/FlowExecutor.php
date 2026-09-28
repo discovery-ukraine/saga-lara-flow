@@ -21,6 +21,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
+use ReflectionProperty;
 use Throwable;
 
 /**
@@ -218,7 +219,8 @@ class FlowExecutor
      * so completed steps register their compensations and the replay stops at the
      * live frontier. Every seam is guarded, so the pass starts no work and settles
      * no step; a workflow's own tag() calls still rewrite their rows, as they do on
-     * every replay. Planned from three places — compensate(), the expiration sweep and
+     * every replay. The history is read from the writer, whatever the connection's
+     * routing. Planned from three places — compensate(), the expiration sweep and
      * a parent closing a child — so a throw no seam of its own raised is a fault, not a
      * frontier: it leaves rather than shortening the stack behind the caller's back.
      * Where it lands is then the caller's to answer, and each of them plans twice —
@@ -339,9 +341,16 @@ class FlowExecutor
         $runtime->reset();
         $runtime->beginCollecting();
 
+        // Every read of the pass comes from the writer. A drive pass is left to the connection's
+        // routing, where a sticky connection follows the row its transition normally changes.
+        $connection = $flowRun->getConnection();
+        $pinned = (bool) new ReflectionProperty($connection, 'readOnWriteConnection')->getValue($connection);
+
         // Every exit unbinds, including the ones that leave by throwing, so nothing
         // that escapes this pass can be read as though a run were still bound.
         try {
+            $connection->useWriteConnectionWhenReading();
+
             // Only the throws below end the pass. Swallowing any other hands back a stack
             // truncated at that point, for compensate() to unwind and report as a complete
             // rollback. It leaves here instead, before the run has been touched, so the
@@ -368,6 +377,7 @@ class FlowExecutor
         } finally {
             $runtime->endCollecting();
             $runtime->clear();
+            $connection->useWriteConnectionWhenReading($pinned);
         }
     }
 
