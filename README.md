@@ -639,6 +639,11 @@ idempotency key, prefer upserts, or check whether the effect already happened. T
 `(flow_run_id, sequence)` pair makes a stable idempotency key to hand downstream. See
 [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency).
 
+With a `read` / `write` split on the package's connection, set `'sticky' => true` on it. A drive
+normally changes the run's row before it replays, so a sticky connection reads the history back from
+the writer. Planning a rollback reads from the writer either way. See
+[Read replicas](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas).
+
 ## Synchronous execution
 
 `runSync()` drives the whole workflow in-process, using the same single replay loop as the queued

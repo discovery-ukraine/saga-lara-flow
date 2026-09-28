@@ -57,6 +57,11 @@ Nothing below asks anything of you. Each links to the page that covers it.
   `ExpirationNotPlannedException`, and a second plan is journalled as `replan_failed` and unwound on
   the plan in hand.
   [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
+- **A rollback is planned from the writing connection.** For the length of the replay that rebuilds
+  a compensation stack, the package's connection reads from the writer, so a read replica that has
+  fallen behind cannot cut the plan short. A connection without a `read` / `write` split sees no
+  difference.
+  [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
 
 ## From 1.2.0 to 1.2.1
 

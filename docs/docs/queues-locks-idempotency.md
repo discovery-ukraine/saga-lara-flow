@@ -148,6 +148,25 @@ ends cleanly rather than retrying.
 Two workers that both legitimately hold a run as `running` are a different problem — nothing changes
 between them for a condition to catch. That is what the lock is for.
 
+## Read replicas {#read-replicas}
+
+The engine queries the package's connection (`saga-lara-flow.database.connection`). With a `read` /
+`write` split configured on it, Laravel sends reads to a replica, and a replica can be behind the
+writer. The engine takes these reads from the writer instead:
+
+- every read a write is decided on, such as a run's status checked before work starts or a signal
+  is accepted, or a write read back to confirm it landed;
+- every read of the pass that plans a rollback. That pass replays `handle()` to learn which
+  completed steps carry compensations, and a replica that has not caught up ends it early, with a
+  shorter plan that would be unwound and reported as complete. So for the length of the pass the
+  package's connection reads from the writer, reads your own code makes on it included, and goes
+  back to its routing when the pass ends.
+
+The replay that drives a run reads its history through the connection's routing like any other
+query, so a replica that is behind can show it a step recorded a moment earlier as missing or
+unfinished. Set `'sticky' => true` on a split connection: it reads from the writer once it has
+changed a row, which the transition a drive writes before it replays normally does.
+
 ## When a step is quietly skipped
 
 Several things can happen to a worker without failing its job: it loses the claim to whoever already
