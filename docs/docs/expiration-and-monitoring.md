@@ -29,6 +29,10 @@ The `signal` default also bounds a [retry-on-signal](./retry-on-signal.md) wait 
 `waitSeconds:`. A step's own `action` deadline does not: an action deadline bounds *execution*, and a parked step is not
 executing.
 
+A child run takes the `run` default as a root run does, below its class's `#[FlowTimeout]` and an
+explicit `->expiresAt()` on the child builder. It never takes its parent's deadline — see
+[child workflows](./child-workflows.md#a-childs-own-class).
+
 ## Driving the sweep
 
 ### Scheduler (recommended)

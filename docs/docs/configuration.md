@@ -57,9 +57,12 @@ whose cursor the default order would otherwise outrank.
 ],
 ```
 
-Controls where workflow and action jobs run. `after_commit` dispatches jobs only after the
-surrounding database transaction commits. Individual runs can override the connection/queue via
-`->onConnection()` / `->onQueue()` or the `#[FlowQueue]` attribute.
+Controls where a run's jobs go — workflow, action and compensation jobs alike; a child closed by
+its parent's close policy is rolled back inside the closing job, on the parent's. `after_commit`
+dispatches jobs only after the surrounding database transaction commits. Individual runs can
+override the connection/queue via `->onConnection()` / `->onQueue()` or the `#[FlowQueue]`
+attribute. A child run resolves each field from its class's `#[FlowQueue]`, else from its parent,
+else from here — see [child workflows](./child-workflows.md#a-childs-own-class).
 
 ## Locks
 

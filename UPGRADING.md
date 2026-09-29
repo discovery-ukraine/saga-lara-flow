@@ -7,6 +7,16 @@
 - **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — `ChildStatus::Expired` and
   `FlowEventType::ChildExpired` are new, written for a child that expired, so a `match` that was
   exhaustive needs the new arm. [Statuses](https://sagalaraflow.dev/statuses)
+- **If a child class carries `#[FlowTimeout]`, or you set `monitor.expiration.defaults.run`**
+  *(medium)* — children expire. A child's deadline is its class's `#[FlowTimeout]`, else the
+  configured default, and the sweep expires it as it does a root run; the parent then gets
+  `ChildWorkflowExpiredException`. To keep one child open, pass it a far-future `->expiresAt()`.
+  Children started before the upgrade keep no deadline.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+- **If a child class carries `#[FlowQueue]`** *(medium)* — the child moves to the connection and
+  queue it names, each field on its own, instead of following its parent. A worker has to listen
+  there, or the child stays `Pending`. Children started before the upgrade keep their parent's.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 
 ### Behaviour changed
 
@@ -75,6 +85,20 @@ Nothing below asks anything of you. Each links to the page that covers it.
   for good. A rollback planned over such a child reads past it too. The link is recorded as
   `expired`, with a `child.expired` history entry.
   [Child workflows](https://sagalaraflow.dev/child-workflows)
+- **A child run is created from its own class.** Its `#[Tag]`s are written with it and `#[Flow]`
+  names and versions it, so `$this->version()` inside a child reads its class's version rather than
+  `null`. Neither comes from the parent. Rows written before the upgrade are not filled in.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+- **A queued rollback runs on the run's own connection and queue.** Compensation jobs follow
+  `->onConnection()` / `->onQueue()` and `#[FlowQueue]` as every other job of the run does, rather
+  than going to the default connection and queue, so a run routed away from the default finishes
+  its rollback where its own workers listen. A child closed by its parent's close policy is still
+  rolled back inline, inside the closing job on the parent's connection and queue.
+  [Configuration](https://sagalaraflow.dev/configuration)
+- **An expired run rolls back the children it cancels even with nothing of its own to undo.** A
+  child closed under `ChildClosePolicy::Cancel` rolls back its completed steps rather than landing
+  in `Cancelled` over them.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
 
 ### Additions
 
@@ -83,6 +107,9 @@ Nothing to do; each is additive.
 - **`ChildWorkflowExpiredException`** and the **`ChildWorkflowExpired`** event, the answer and the
   announcement for a child that expired, beside their `Failed` and `Cancelled` counterparts.
   [Child workflows](https://sagalaraflow.dev/child-workflows)
+- **`->expiresAt()` on the child builder** — a deadline for one child, over its class's
+  `#[FlowTimeout]` and the configured default.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 
 ## From 1.2.0 to 1.2.1
 

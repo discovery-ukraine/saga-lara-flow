@@ -178,11 +178,20 @@ class SagaRunner
             $jobs[] = new RunCompensationJob($flowRun->id, $compensation->id, $entry->definition);
         }
 
-        Bus::batch($jobs)
+        $batch = Bus::batch($jobs)
             ->name("saga-compensate:{$flowRun->id}")
             ->allowFailures()
-            ->finally(new AdvanceCompensation($flowRun->id, $levels, $primary, $finalState, $compensationIds))
-            ->dispatch();
+            ->finally(new AdvanceCompensation($flowRun->id, $levels, $primary, $finalState, $compensationIds));
+
+        if ($flowRun->connection !== null) {
+            $batch->onConnection($flowRun->connection);
+        }
+
+        if ($flowRun->queue !== null) {
+            $batch->onQueue($flowRun->queue);
+        }
+
+        $batch->dispatch();
     }
 
     /**
