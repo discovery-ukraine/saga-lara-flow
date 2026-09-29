@@ -6,7 +6,9 @@ use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
+use DiscoveryUkraine\SagaLaraFlow\Data\CompensationDefinition;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
+use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowCancelledException;
@@ -69,6 +71,8 @@ readonly class ChildWorkflowManager
         ChildClosePolicy $closePolicy,
         bool $continueParentOnFailure,
         ?DateTimeInterface $expiresAt,
+        ?CompensationDefinition $compensation,
+        ?CompensationFailurePolicy $compensationFailurePolicy,
     ): mixed {
         $parent = $runtime->run();
         $sequence = $runtime->nextSequence();
@@ -78,7 +82,14 @@ readonly class ChildWorkflowManager
         // A recorded child resolves the same way for both replays: what it already
         // came to is history, and a rollback has to be planned past it.
         if ($link !== null) {
-            return $this->resolve($runtime, $link, $continueParentOnFailure, $sequence);
+            return $this->resolve(
+                $runtime,
+                $link,
+                $continueParentOnFailure,
+                $sequence,
+                $compensation,
+                $compensationFailurePolicy,
+            );
         }
 
         // Compensation-only planning stops at a child this run never started: that is
@@ -148,11 +159,19 @@ readonly class ChildWorkflowManager
         FlowChild $link,
         bool $continueParentOnFailure,
         int $sequence,
+        ?CompensationDefinition $compensation,
+        ?CompensationFailurePolicy $compensationFailurePolicy,
     ): mixed {
         $child = $link->child;
 
         return match ($child->status) {
-            FlowStatus::Completed => $this->serializer->deserialize($child->result),
+            FlowStatus::Completed => $this->resolveCompleted(
+                $runtime,
+                $child,
+                $sequence,
+                $compensation,
+                $compensationFailurePolicy,
+            ),
             FlowStatus::Failed => $continueParentOnFailure
                 ? null
                 : throw $runtime->raising(ChildWorkflowFailedException::for($child, $sequence)),
@@ -165,6 +184,22 @@ readonly class ChildWorkflowManager
             // Still in flight, Cancelling included: park until it finalizes.
             default => $this->suspender->suspend('child', $sequence),
         };
+    }
+
+    private function resolveCompleted(
+        FlowRuntime $runtime,
+        FlowRun $child,
+        int $sequence,
+        ?CompensationDefinition $compensation,
+        ?CompensationFailurePolicy $compensationFailurePolicy,
+    ): mixed {
+        if ($compensation !== null) {
+            $runtime->sagaStack()->push(
+                new CompensationEntry(null, $sequence, $compensation, $compensationFailurePolicy),
+            );
+        }
+
+        return $this->serializer->deserialize($child->result);
     }
 
     /**

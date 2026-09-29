@@ -532,6 +532,11 @@ parent's. `->expiresAt()` on the child builder wins over both. `#[FlowQueue]` re
 field: the class's connection or queue, else the parent's, else config. The job that closes a child
 under its parent's close policy stays on the parent's connection and queue.
 
+`->compensateWith()` gives a child an undo on the parent's saga stack, registered once the child
+completes, as a step's is; `->onCompensationFailure()` sets its policy. A child that failed or
+expired registers none: its own rollback has already run, under its own failure policies. The close
+policy reaches only a child still in flight, so the two never act on the same child.
+
 `child()` is also the only seam that runs another workflow from inside `handle()`.
 `SagaFlow::create(...)` there takes no ordinal, so the run it starts is recognized by nothing, and
 the next replay starts another one.

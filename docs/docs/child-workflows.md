@@ -100,6 +100,29 @@ child that has already finished is history the plan reads, not a frontier it sto
 in flight is a frontier, so a rollback planned while one runs covers only the steps before it — the
 child rolls itself back through its own [close policy](#close-policies) instead.
 
+## Compensating a child
+
+`compensateWith()` gives the child an undo on the parent's saga stack, and `onCompensationFailure()`
+its [failure policy](./sagas-and-compensation.md#failure-policies), in the forms a step takes:
+
+```php
+$this->child(AnalyzePodcast::class, [$podcastId])
+    ->compensateWith(RefundForPodcastAnalysis::class, $amount)
+    ->run();
+```
+
+The compensation joins the stack when the child resolves `Completed`, at the child's place among the
+parent's steps, so a rollback of the parent runs it in reverse order with theirs. A child that
+failed or expired registers nothing, under `continueParentOnFailure()` too. Its own rollback has run
+by then, under its own compensations' failure policies, and a `Stop` there can leave some of its
+steps applied. A child has no step row, so the compensation's `compensation_runs` row has a null
+`action_run_id`.
+
+The compensation and the [close policy](#close-policies) never act on the same child. The close
+policy reaches only a child still in flight when the parent closes, so a completed child is undone
+by its compensation or not at all, whatever its policy. `Cancel` covers a child the parent leaves
+behind in flight, and `compensateWith()` one it has already awaited.
+
 ## A parent that is rolling back
 
 No child starts under a parent that is rolling back. The seam reads the parent's status from the

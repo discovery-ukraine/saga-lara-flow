@@ -110,6 +110,10 @@ Nothing to do; each is additive.
 - **`->expiresAt()` on the child builder** — a deadline for one child, over its class's
   `#[FlowTimeout]` and the configured default.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+- **`->compensateWith()` and `->onCompensationFailure()` on the child builder** — an undo on the
+  parent's stack for a child that completed. Its `compensation_runs` row has a null
+  `action_run_id`, so a listener reading `$compensationRun->actionRun` gets `null` for it.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#compensating-a-child)
 
 ## From 1.2.0 to 1.2.1
 
