@@ -109,9 +109,10 @@ Nothing below asks anything of you. Each links to the page that covers it.
   in `Cancelled` over them.
   [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
 - **A queued run on a `sync` connection is driven to its end or to its first wait.** A step, a
-  parallel block or a child that ran on `sync` inside the pass that sent it is resolved by that pass
-  replaying at once, rather than by a resume the job lock turned away or that a child never sent;
-  a step outside a `parallel()` block that failed there resolves as on any other queue. The run's
+  parallel block whose members succeed or a child that ran on `sync` inside the pass that sent it is
+  resolved by that pass replaying at once, rather than by a resume the job lock turned away or that
+  a child never sent; a step outside a `parallel()` block that failed there resolves as on any other
+  queue, while a failing member of a block still fails the run with its own exception. The run's
   history records one pass, with no `flow.waiting` and `flow.resumed` between the steps. A parent
   whose child ends while it is still writing `Waiting` reads the child again and goes on.
   [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)

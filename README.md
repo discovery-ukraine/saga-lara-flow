@@ -657,9 +657,10 @@ seconds) are keyed on the job's class and its row, so two resumes of one run rep
 other.
 
 On a `sync` connection a job runs inside the pass that sent it, and when a step, a parallel block
-or a child finishes there, the pass replays at once rather than waiting for a resume: a queued run
-on `sync` is driven by the call that starts it, to its end or to its first wait nothing in the pass
-can answer. See
+whose members succeed or a child finishes there, the pass replays at once rather than waiting for a
+resume: a queued run on `sync` is driven by the call that starts it, to its end or to its first
+wait nothing in the pass can answer. A failing member of a `parallel()` block still fails the run
+with its own exception there. See
 [On a sync connection](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection).
 
 This is *not* automatic end-to-end idempotency. The reuse guarantee covers **recorded** steps only —
