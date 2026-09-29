@@ -535,7 +535,8 @@ under its parent's close policy stays on the parent's connection and queue.
 `->compensateWith()` gives a child an undo on the parent's saga stack, registered once the child
 completes, as a step's is; `->onCompensationFailure()` sets its policy. A child that failed or
 expired registers none: its own rollback has already run, under its own failure policies. The close
-policy reaches only a child still in flight, so the two never act on the same child.
+policy reaches only a child still in flight, so the two never act on the same child. A child that
+completes after the parent planned its rollback, but before its close runs, is reached by neither.
 
 `child()` is also the only seam that runs another workflow from inside `handle()`.
 `SagaFlow::create(...)` there takes no ordinal, so the run it starts is recognized by nothing, and

@@ -120,8 +120,10 @@ steps applied. A child has no step row, so the compensation's `compensation_runs
 
 The compensation and the [close policy](#close-policies) never act on the same child. The close
 policy reaches only a child still in flight when the parent closes, so a completed child is undone
-by its compensation or not at all, whatever its policy. `Cancel` covers a child the parent leaves
-behind in flight, and `compensateWith()` one it has already awaited.
+by its compensation or not at all, whatever its policy. `Cancel` is for a child the parent leaves
+behind in flight, and `compensateWith()` for one it has already awaited. A child that completes
+after the parent planned its rollback, but before its close runs, is reached by neither: the plan
+saw it in flight, and the close finds it complete.
 
 ## A parent that is rolling back
 
