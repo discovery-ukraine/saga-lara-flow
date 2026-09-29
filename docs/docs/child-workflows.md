@@ -44,8 +44,8 @@ The default comes from `children.default_close_policy`, or per class via `#[Chil
 
 ## Handling child failure
 
-A failing child throws `ChildWorkflowFailedException`; a cancelled one throws
-`ChildWorkflowCancelledException`:
+A failing child throws `ChildWorkflowFailedException`, one that ran out of time throws
+`ChildWorkflowExpiredException`, and a cancelled one throws `ChildWorkflowCancelledException`:
 
 ```php
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowFailedException;
@@ -63,8 +63,9 @@ re-driven. It is for **local** branching; for cross-cutting failure reporting pr
 [`FlowFailed`](./events.md) event, and if you report from inside `handle()`, re-throw so the parent
 still fails and compensates.
 
-To let the parent proceed regardless of the child's outcome, call `->continueParentOnFailure()` — the
-child's failure is then swallowed rather than thrown.
+To let the parent proceed past a child that failed or expired, call `->continueParentOnFailure()` —
+`run()` then returns `null` rather than throwing. A cancelled child still throws: a cancellation is
+an explicit act, and the parent has no result to carry on with.
 
 A parent that carries on this way keeps collecting compensations, and a later rollback runs them: a
 child that has already finished is history the plan reads, not a frontier it stops at. A child still

@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowCancelledException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
@@ -54,6 +55,7 @@ readonly class ChildWorkflowManager
      * @throws HistoryContractMismatchException
      * @throws FlowSuspended
      * @throws ChildWorkflowFailedException
+     * @throws ChildWorkflowExpiredException
      * @throws ChildWorkflowCancelledException
      * @throws Throwable
      */
@@ -120,12 +122,13 @@ readonly class ChildWorkflowManager
 
     /**
      * Resolve a child already recorded against this ordinal. A terminal child has an
-     * answer either way — a result, a failure the parent may be told to survive, or a
-     * cancellation it cannot — and only one still in flight is a wait. The compensation
+     * answer either way — a result, a failure or expiry the parent may be told to survive,
+     * or a cancellation it cannot — and only one still in flight is a wait. The compensation
      * pass runs through here too, where a suspension would end the stack short.
      *
      * @throws FlowSuspended
      * @throws ChildWorkflowFailedException
+     * @throws ChildWorkflowExpiredException
      * @throws ChildWorkflowCancelledException
      * @throws Throwable
      */
@@ -142,10 +145,13 @@ readonly class ChildWorkflowManager
             FlowStatus::Failed => $continueParentOnFailure
                 ? null
                 : throw $runtime->raising(ChildWorkflowFailedException::for($child, $sequence)),
+            FlowStatus::Expired => $continueParentOnFailure
+                ? null
+                : throw $runtime->raising(ChildWorkflowExpiredException::for($child, $sequence)),
             FlowStatus::Cancelled => throw $runtime->raising(
                 ChildWorkflowCancelledException::for($child, $sequence),
             ),
-            // Still in flight (Pending/Running/Waiting): park until it finalizes.
+            // Still in flight, Cancelling included: park until it finalizes.
             default => $this->suspender->suspend('child', $sequence),
         };
     }
@@ -269,6 +275,7 @@ readonly class ChildWorkflowManager
         match ($run->status) {
             FlowStatus::Completed => $this->recorder->recordCompleted($link, $run),
             FlowStatus::Failed => $this->recorder->recordFailed($link, $run),
+            FlowStatus::Expired => $this->recorder->recordExpired($link, $run),
             FlowStatus::Cancelled => $this->recorder->recordCancelled($link, $run),
             default => null,
         };

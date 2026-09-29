@@ -521,8 +521,9 @@ public function handle(): array
 ```
 
 Close policies: `Abandon` (default — leave the child running), `Cancel` (cancel it), `Fail` (fail
-it). A failing child throws `ChildWorkflowFailedException` (or `ChildWorkflowCancelledException`)
-unless you call `->continueParentOnFailure()`. The default close policy is configurable
+it). A failing child throws `ChildWorkflowFailedException` and an expired one
+`ChildWorkflowExpiredException`, unless you call `->continueParentOnFailure()`; a cancelled one
+throws `ChildWorkflowCancelledException` either way. The default close policy is configurable
 (`children.default_close_policy`) or per class via `#[ChildPolicy]`.
 
 `child()` is also the only seam that runs another workflow from inside `handle()`.

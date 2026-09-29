@@ -7,6 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\ChildStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowCancelled;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowCompleted;
+use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowExpired;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowFailed;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowStarted;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
@@ -80,6 +81,13 @@ final readonly class ChildRecorder
         $this->transition($link, ChildStatus::Failed, FlowEventType::ChildFailed, $child);
 
         event(new ChildWorkflowFailed($child));
+    }
+
+    public function recordExpired(FlowChild $link, FlowRun $child): void
+    {
+        $this->transition($link, ChildStatus::Expired, FlowEventType::ChildExpired, $child);
+
+        event(new ChildWorkflowExpired($child));
     }
 
     public function recordCancelled(FlowChild $link, FlowRun $child): void

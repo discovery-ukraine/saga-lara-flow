@@ -41,7 +41,7 @@ Compensations: `CompensationStarted`, `CompensationCompleted`, `CompensationFail
 `CompensationOutcomeRejected`.
 
 Child workflows: `ChildWorkflowStarted`, `ChildWorkflowCompleted`, `ChildWorkflowFailed`,
-`ChildWorkflowCancelled`.
+`ChildWorkflowExpired`, `ChildWorkflowCancelled`.
 
 Signals & side effects: `FlowSignalReceived`, `FlowSignalConsumed`, `SideEffectRecorded`,
 `SideEffectReused`.

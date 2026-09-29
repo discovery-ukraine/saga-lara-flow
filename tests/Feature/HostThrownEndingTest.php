@@ -4,6 +4,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowCancelledException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
@@ -17,7 +18,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ProbeHostThrowWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SignalTimeoutWorkflow;
 
 /**
- * A collecting replay ends where a seam reports the live frontier, and five of the six
+ * A collecting replay ends where a seam reports the live frontier, and six of the seven
  * throws that say so are ordinary public exceptions. Only the seam that read the history
  * behind one may end the pass with it: a workflow raising the same class is a fault, and
  * reading that as a frontier stops the stack there and leaves everything past it applied
@@ -65,6 +66,7 @@ it('leaves an ending the workflow raised itself', function (string $ending): voi
     [FlowExpiredException::class],
     [AwaitSignalTimeoutException::class],
     [ChildWorkflowFailedException::class],
+    [ChildWorkflowExpiredException::class],
     [ChildWorkflowCancelledException::class],
 ]);
 
