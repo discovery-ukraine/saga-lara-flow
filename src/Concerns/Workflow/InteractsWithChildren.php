@@ -4,6 +4,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Concerns\Workflow;
 
 use DiscoveryUkraine\SagaLaraFlow\Builders\ChildWorkflowBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowCancelledException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 
@@ -22,6 +23,7 @@ trait InteractsWithChildren
      * @param  array<int, mixed>  $arguments
      *
      * @throws ChildWorkflowFailedException the child ended in Failed
+     * @throws ChildWorkflowExpiredException the child ended in Expired
      * @throws ChildWorkflowCancelledException the child was cancelled
      * @throws HistoryContractMismatchException handle() diverged from recorded history
      */

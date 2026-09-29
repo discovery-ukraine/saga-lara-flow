@@ -11,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\AwaitSignalTimeoutException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowCancelledException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ChildWorkflowFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ExpirationNotPlannedException;
@@ -364,9 +365,9 @@ class FlowExecutor
                 $this->callWithDependencies($workflow, 'handle', $arguments);
             } catch (InternalFlowControl) {
                 // The frontier: a seam that cannot be resolved from history yet.
-            } catch (ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowCancelledException $ending) {
+            } catch (ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowExpiredException|ChildWorkflowCancelledException $ending) {
                 // Each of these ends the pass only when one of its own seams raised it
-                // off this run's history. All five are public classes a workflow can
+                // off this run's history. All six are public classes a workflow can
                 // build, so the class alone says nothing about who raised it.
                 if (! $runtime->raised($ending)) {
                     throw $ending;

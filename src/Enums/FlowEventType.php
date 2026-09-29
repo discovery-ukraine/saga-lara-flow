@@ -39,5 +39,6 @@ enum FlowEventType: string
     case ChildStarted = 'child.started';
     case ChildCompleted = 'child.completed';
     case ChildFailed = 'child.failed';
+    case ChildExpired = 'child.expired';
     case ChildCancelled = 'child.cancelled';
 }

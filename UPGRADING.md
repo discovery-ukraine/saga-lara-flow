@@ -2,6 +2,12 @@
 
 ## From 1.2.x to 1.3.0
 
+### Action required
+
+- **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — `ChildStatus::Expired` and
+  `FlowEventType::ChildExpired` are new, written for a child that expired, so a `match` that was
+  exhaustive needs the new arm. [Statuses](https://sagalaraflow.dev/statuses)
+
 ### Behaviour changed
 
 Nothing below asks anything of you. Each links to the page that covers it.
@@ -50,7 +56,8 @@ Nothing below asks anything of you. Each links to the page that covers it.
 - **A business exception your own code raises now surfaces instead of shortening a rollback plan.**
   The replay that rebuilds a compensation stack ends only where one of the engine's seams raises
   `ActionFailedException`, `FlowExpiredException`, `AwaitSignalTimeoutException`,
-  `ChildWorkflowFailedException` or `ChildWorkflowCancelledException` off the run's history. A
+  `ChildWorkflowFailedException`, `ChildWorkflowExpiredException` or
+  `ChildWorkflowCancelledException` off the run's history. A
   workflow raising one of those classes itself is a fault like any other throw: planning stops and
   the throw surfaces, rather than the stack being cut there and unwound as a complete rollback.
   `compensate()` leaves the run untouched, the expiration sweep reports
@@ -62,6 +69,20 @@ Nothing below asks anything of you. Each links to the page that covers it.
   fallen behind cannot cut the plan short. A connection without a `read` / `write` split sees no
   difference.
   [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
+- **A child that expired answers its parent.** `child()->run()` raises
+  `ChildWorkflowExpiredException` for a child in `Expired`, and `->continueParentOnFailure()`
+  carries the parent past it as it does past a failed child, rather than the parent parking on it
+  for good. A rollback planned over such a child reads past it too. The link is recorded as
+  `expired`, with a `child.expired` history entry.
+  [Child workflows](https://sagalaraflow.dev/child-workflows)
+
+### Additions
+
+Nothing to do; each is additive.
+
+- **`ChildWorkflowExpiredException`** and the **`ChildWorkflowExpired`** event, the answer and the
+  announcement for a child that expired, beside their `Failed` and `Cancelled` counterparts.
+  [Child workflows](https://sagalaraflow.dev/child-workflows)
 
 ## From 1.2.0 to 1.2.1
 

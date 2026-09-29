@@ -8,6 +8,7 @@ enum ChildStatus: string
     case Running = 'running';
     case Completed = 'completed';
     case Failed = 'failed';
+    case Expired = 'expired';
     case Cancelled = 'cancelled';
 
     public function isTerminal(): bool
@@ -15,6 +16,7 @@ enum ChildStatus: string
         return in_array($this, [
             self::Completed,
             self::Failed,
+            self::Expired,
             self::Cancelled,
         ], true);
     }

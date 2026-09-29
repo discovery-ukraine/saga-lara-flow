@@ -118,6 +118,6 @@ claims it and no repair sends another — while the deadline sweeps still settle
 ## `CompensationStatus` and `ChildStatus`
 
 `CompensationStatus` (`Pending`, `Running`, `Completed`, `Failed`) tracks one compensation of a
-rollback. `ChildStatus` (`Pending`, `Running`, `Completed`, `Failed`, `Cancelled`) tracks the link
-between a parent and a [child workflow](./child-workflows.md) — the child's own run row carries a
-`FlowStatus` of its own.
+rollback. `ChildStatus` (`Pending`, `Running`, `Completed`, `Failed`, `Expired`, `Cancelled`) tracks
+the link between a parent and a [child workflow](./child-workflows.md) — the child's own run row
+carries a `FlowStatus` of its own.
