@@ -224,7 +224,7 @@ it('keeps a numeric tag name as written on a root run too', function (): void {
 it('keeps a numeric tag name as written through a handle, and overwrites it', function (): void {
     $run = SagaFlow::create(TaggedBareChildWorkflow::class)->runSync();
 
-    // PHP hands the key over as an int; PostgreSQL refuses to compare one with the key column.
+    // PHP hands '2024' over as an int key; it has to be stored and found again under the same name.
     SagaFlow::loadFlow($run->id)->withTags(['2024' => 'a', '7' => 1]);
     SagaFlow::loadFlow($run->id)->withTags(['2024' => 'b']);
 
