@@ -26,5 +26,6 @@ final readonly class RetryContext
         public ?int $cap,
         public int $executions,
         public RecordedFailure $failure,
+        public ?string $childRunId = null,
     ) {}
 }

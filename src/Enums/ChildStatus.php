@@ -6,6 +6,7 @@ enum ChildStatus: string
 {
     case Pending = 'pending';
     case Running = 'running';
+    case AwaitingRetry = 'awaiting_retry';
     case Completed = 'completed';
     case Failed = 'failed';
     case Expired = 'expired';

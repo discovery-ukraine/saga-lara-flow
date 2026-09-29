@@ -2,8 +2,10 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Queries;
 
+use Closure;
 use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ChildStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\FlowHandle;
@@ -11,6 +13,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection as SupportCollection;
 
 /**
@@ -62,7 +65,7 @@ readonly class FlowQuery
 
     /**
      * Runs whose wait for a signal is still open, whichever seam opened it: an
-     * explicit awaitSignal(), or a step parked by retryOnSignal(). A null $name
+     * explicit awaitSignal(), or a step or child parked by retryOnSignal(). A null $name
      * matches any name.
      *
      * Only whereAwaitingRetrySignal() tells the two seams apart. Matching is on the
@@ -84,25 +87,36 @@ readonly class FlowQuery
     }
 
     /**
-     * Runs holding a step parked by retryOnSignal(), i.e. an action_runs row in
-     * awaiting_retry. A null $signal matches any retry signal.
+     * Runs holding a step or a child parked by retryOnSignal(), i.e. an action_runs or a
+     * flow_children row in awaiting_retry. A null $signal matches any retry signal.
      *
      * A park opens a signal wait too, but the two settle at different moments:
      * delivery marks the wait Received and a timeout marks it TimedOut, while the
-     * step stays parked until replay resumes the run. So this also finds a run whose
+     * row stays parked until replay resumes the run. So this also finds a run whose
      * signal arrived but whose resume never did.
      */
     public function whereAwaitingRetrySignal(?string $signal = null): static
     {
-        $this->builder->whereHas('actions', function (Builder $query) use ($signal): void {
-            $query->where('status', ActionStatus::AwaitingRetry);
+        $this->builder->where(function (Builder $query) use ($signal): void {
+            $query->whereHas('actions', $this->parkedOn(ActionStatus::AwaitingRetry, $signal))
+                ->orWhereHas('children', $this->parkedOn(ChildStatus::AwaitingRetry, $signal));
+        });
+
+        return $this;
+    }
+
+    /**
+     * @return Closure(Builder<Model>): void
+     */
+    private function parkedOn(ActionStatus|ChildStatus $status, ?string $signal): Closure
+    {
+        return function (Builder $query) use ($status, $signal): void {
+            $query->where('status', $status);
 
             if ($signal !== null) {
                 $query->where('retry_signal', $signal);
             }
-        });
-
-        return $this;
+        };
     }
 
     public function running(): static

@@ -41,7 +41,9 @@ Compensations: `CompensationStarted`, `CompensationCompleted`, `CompensationFail
 `CompensationOutcomeRejected`.
 
 Child workflows: `ChildWorkflowStarted`, `ChildWorkflowCompleted`, `ChildWorkflowFailed`,
-`ChildWorkflowExpired`, `ChildWorkflowCancelled`.
+`ChildWorkflowExpired`, `ChildWorkflowCancelled`, `ChildWorkflowAwaitingRetry`,
+`ChildWorkflowRetried` (the last two cover
+[retrying a child](./retry-on-signal.md#retrying-a-child)).
 
 Signals & side effects: `FlowSignalReceived`, `FlowSignalConsumed`, `SideEffectRecorded`,
 `SideEffectReused`.

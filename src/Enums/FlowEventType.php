@@ -41,4 +41,6 @@ enum FlowEventType: string
     case ChildFailed = 'child.failed';
     case ChildExpired = 'child.expired';
     case ChildCancelled = 'child.cancelled';
+    case ChildAwaitingRetry = 'child.awaiting_retry';
+    case ChildRetried = 'child.retried';
 }

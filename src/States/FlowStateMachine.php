@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalRecorder;
 use Illuminate\Support\Arr;
 use Throwable;
@@ -175,6 +176,7 @@ class FlowStateMachine implements StateMachine
 
             app(ActionRecorder::class)->settleOpenSteps($run);
             app(SignalRecorder::class)->settleOpenWaits($run);
+            app(ChildRecorder::class)->settleParked($run);
         });
     }
 

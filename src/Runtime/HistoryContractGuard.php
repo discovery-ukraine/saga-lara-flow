@@ -52,8 +52,8 @@ final readonly class HistoryContractGuard
         $requested = "action {$actionClass}";
 
         $this->rejectSideEffect($flowRunId, $sequence, $requested);
-        $this->rejectSignal($flowRunId, $sequence, $requested);
         $this->rejectChild($flowRunId, $sequence, $requested);
+        $this->rejectSignal($flowRunId, $sequence, $requested);
 
         return null;
     }
@@ -95,8 +95,8 @@ final readonly class HistoryContractGuard
         $requested = "side effect '{$key}'";
 
         $this->rejectAction($flowRunId, $sequence, $requested);
-        $this->rejectSignal($flowRunId, $sequence, $requested);
         $this->rejectChild($flowRunId, $sequence, $requested);
+        $this->rejectSignal($flowRunId, $sequence, $requested);
 
         return $this->sideEffectRepository->find($flowRunId, $sequence);
     }
@@ -108,13 +108,14 @@ final readonly class HistoryContractGuard
     {
         $requested = "signal '{$name}'";
 
-        // A signal is the one operation whose ordinal can already be occupied: a step
-        // parked by retryOnSignal() records its wait-signal at the step's OWN ordinal.
+        // A signal is the one operation whose ordinal can already be occupied: a step or
+        // a child parked by retryOnSignal() records its wait-signal at its OWN ordinal.
         // So the cross-type check has to run before the row is handed back, not only
         // when the slot looks free — otherwise editing an in-flight workflow from
-        // action() to awaitSignal() would quietly consume the retry wait-signal
-        // instead of reporting a broken history contract.
+        // action() or child() to awaitSignal() would quietly consume the retry
+        // wait-signal instead of reporting a broken history contract.
         $this->rejectAction($flowRunId, $sequence, $requested);
+        $this->rejectChild($flowRunId, $sequence, $requested);
 
         $signal = $this->signalRepository->find($flowRunId, $sequence);
 
@@ -132,7 +133,6 @@ final readonly class HistoryContractGuard
         }
 
         $this->rejectSideEffect($flowRunId, $sequence, $requested);
-        $this->rejectChild($flowRunId, $sequence, $requested);
 
         return null;
     }

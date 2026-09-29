@@ -444,6 +444,13 @@ downstream steps land identically whether it retried or not. `saga()->step()` mi
 `saga-flow:list` annotates a parked run with the signal it needs, `saga-flow:show` gains a **Retry**
 column, and two events (`ActionAwaitingRetry`, `ActionRetried`) cover the lifecycle.
 
+`child()` takes the same method. A child that fails or expires parks its **parent** on the signal,
+and the signal — delivered to the parent — starts the child again as a new run at the same ordinal.
+`Failed` and `Expired` are retried, `Cancelled` is not, and `$only` / `$when` judge the failure the
+child's run recorded. The policy comes before `continueParentOnFailure()`, and a child the parent
+has already gone past is not retried.
+[Retrying a child](https://sagalaraflow.dev/retry-on-signal#retrying-a-child)
+
 ## Side effects
 
 Anything non-deterministic (random values, `now()`, a UUID, an external read) must be wrapped in
@@ -587,7 +594,7 @@ $count   = SagaFlow::query()->failed()->count();
 // runs whose wait is still open, from either seam
 SagaFlow::query()->whereAwaitingSignal('approval')->get();
 
-// runs holding a step parked by retryOnSignal()
+// runs holding a step or a child parked by retryOnSignal()
 SagaFlow::query()->whereAwaitingRetrySignal('balance-refilled')->handles();
 ```
 

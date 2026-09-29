@@ -1,0 +1,14 @@
+<?php
+
+namespace DiscoveryUkraine\SagaLaraFlow\Events;
+
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
+
+final readonly class ChildWorkflowRetried implements ShouldDispatchAfterCommit
+{
+    public function __construct(
+        public FlowRun $childFlowRun,
+        public FlowRun $previousChildFlowRun,
+    ) {}
+}

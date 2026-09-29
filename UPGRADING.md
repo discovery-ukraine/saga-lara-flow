@@ -2,11 +2,20 @@
 
 ## From 1.2.x to 1.3.0
 
+> ### ⚠️ Run `php artisan migrate` immediately after upgrading
+>
+> One migration ships with this release — `add_retry_on_signal_to_flow_children` — and the engine
+> writes its columns from the moment it starts. Deploy it together with the code. It runs from the
+> package — do **not** `vendor:publish` it, or `migrate` would try both copies.
+
 ### Action required
 
 - **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — `ChildStatus::Expired` and
-  `FlowEventType::ChildExpired` are new, written for a child that expired, so a `match` that was
-  exhaustive needs the new arm. [Statuses](https://sagalaraflow.dev/statuses)
+  `FlowEventType::ChildExpired` are new, written for a child that expired, and so are
+  `ChildStatus::AwaitingRetry`, `FlowEventType::ChildAwaitingRetry` and
+  `FlowEventType::ChildRetried`, written for a child retried on a signal. A `match` that was
+  exhaustive needs the new arms.
+  [Statuses](https://sagalaraflow.dev/statuses)
 - **If a child class carries `#[FlowTimeout]`, or you set `monitor.expiration.defaults.run`**
   *(medium)* — children expire. A child's deadline is its class's `#[FlowTimeout]`, else the
   configured default, and the sweep expires it as it does a root run; the parent then gets
@@ -114,6 +123,11 @@ Nothing to do; each is additive.
   parent's stack for a child that completed. Its `compensation_runs` row has a null
   `action_run_id`, so a listener reading `$compensationRun->actionRun` gets `null` for it.
   [Child workflows](https://sagalaraflow.dev/child-workflows#compensating-a-child)
+- **`->retryOnSignal()` on the child builder** — a child that fails or expires parks its parent on a
+  signal, and the signal starts the child again as a new run at the same ordinal. The
+  `ChildWorkflowAwaitingRetry` and `ChildWorkflowRetried` events announce both;
+  `whereAwaitingRetrySignal()` and `saga-flow:list` find a parent parked this way.
+  [Retry on signal](https://sagalaraflow.dev/retry-on-signal#retrying-a-child)
 
 ## From 1.2.0 to 1.2.1
 

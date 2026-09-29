@@ -93,7 +93,8 @@ still fails and compensates.
 
 To let the parent proceed past a child that failed or expired, call `->continueParentOnFailure()` —
 `run()` then returns `null` rather than throwing. A cancelled child still throws: a cancellation is
-an explicit act, and the parent has no result to carry on with.
+an explicit act, and the parent has no result to carry on with. To have the parent wait for a signal
+and start the child again instead, see [retrying a child](./retry-on-signal.md#retrying-a-child).
 
 A parent that carries on this way keeps collecting compensations, and a later rollback runs them: a
 child that has already finished is history the plan reads, not a frontier it stops at. A child still
