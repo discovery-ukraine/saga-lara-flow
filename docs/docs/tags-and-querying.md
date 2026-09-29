@@ -44,7 +44,8 @@ SagaFlow::loadFlow($runId)
 ```
 
 Explicit tags passed to `withTags()` override attribute tags with the same key. On a handle,
-`tags()` reads and `withTags()` writes.
+`tags()` reads and `withTags()` writes. A child run started with `child()` gets the `#[Tag]`s of
+its own class, written together with the run; it does not get its parent's tags.
 
 Re-tagging an existing key overwrites its value rather than adding a second tag — the database
 enforces one row per `(flow_run_id, key)`. Both `tag()` and `tags()` / `withTags()` are idempotent

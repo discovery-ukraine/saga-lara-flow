@@ -519,7 +519,7 @@ class FlowExecutor
 
             $this->recorder->flowExpired($flowRun);
 
-            app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, false);
+            app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
 
             return $flowRun;
         }

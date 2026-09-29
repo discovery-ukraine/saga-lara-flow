@@ -12,7 +12,6 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
-use DiscoveryUkraine\SagaLaraFlow\Support\WorkflowAttributes;
 use Throwable;
 
 class CreateWorkflowBuilder
@@ -133,51 +132,10 @@ class CreateWorkflowBuilder
             'workflow_version' => $this->version ?? $attributes->version,
             'status' => FlowStatus::Pending,
             'arguments' => $this->arguments,
-            'connection' => $this->connection ?? $attributes->connection ?? config('saga-lara-flow.queue.connection'),
-            'queue' => $this->queue ?? $attributes->queue ?? config('saga-lara-flow.queue.queue'),
-            'expires_at' => $this->expiresAt ?? $this->attributeExpiry($attributes) ?? $this->defaultExpiry(),
+            'connection' => $this->connection ?? $attributes->connectionWithin(null),
+            'queue' => $this->queue ?? $attributes->queueWithin(null),
+            'expires_at' => $this->expiresAt ?? $attributes->expiresAt(),
             'tenancy_context' => app(TenancyManager::class)->capture(),
-        ], $this->normalizedTags($attributes));
-    }
-
-    private function attributeExpiry(WorkflowAttributes $attributes): ?DateTimeInterface
-    {
-        return $attributes->timeoutSeconds === null
-            ? null
-            : now()->addSeconds($attributes->timeoutSeconds);
-    }
-
-    private function defaultExpiry(): ?DateTimeInterface
-    {
-        $seconds = config('saga-lara-flow.monitor.expiration.defaults.run');
-
-        return $seconds === null ? null : now()->addSeconds((int) $seconds);
-    }
-
-    /**
-     * Merge attribute-declared tags with the builder's explicit tags. An explicit
-     * tag with the same key overrides the attribute's value (precedence).
-     *
-     * @return array<int, array{key: string, value: ?string}>
-     */
-    private function normalizedTags(WorkflowAttributes $attributes): array
-    {
-        $merged = [];
-
-        foreach ($attributes->tags as $tag) {
-            $merged[$tag['key']] = $tag['value'];
-        }
-
-        foreach ($this->tags as $key => $value) {
-            $merged[(string) $key] = $value === null ? null : (string) $value;
-        }
-
-        $normalized = [];
-
-        foreach ($merged as $key => $value) {
-            $normalized[] = ['key' => (string) $key, 'value' => $value];
-        }
-
-        return $normalized;
+        ], $attributes->tagsWith($this->tags));
     }
 }

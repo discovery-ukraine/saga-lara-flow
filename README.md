@@ -505,7 +505,7 @@ You can also mark it declaratively with `#[ContinueOnFailure]` on the action cla
 ## Child workflows
 
 A workflow can start another workflow and await its result. The child inherits the parent's
-connection, queue, and **tenant context**:
+**tenant context**; everything else comes from the child's own class:
 
 ```php
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
@@ -525,6 +525,12 @@ it). A failing child throws `ChildWorkflowFailedException` and an expired one
 `ChildWorkflowExpiredException`, unless you call `->continueParentOnFailure()`; a cancelled one
 throws `ChildWorkflowCancelledException` either way. The default close policy is configurable
 (`children.default_close_policy`) or per class via `#[ChildPolicy]`.
+
+A child is created from its class the way a root run is: its `#[Tag]`s, the name and version from
+`#[Flow]`, and a deadline from `#[FlowTimeout]`, else `monitor.expiration.defaults.run` — never the
+parent's. `->expiresAt()` on the child builder wins over both. `#[FlowQueue]` resolves field by
+field: the class's connection or queue, else the parent's, else config. The job that closes a child
+under its parent's close policy stays on the parent's connection and queue.
 
 `child()` is also the only seam that runs another workflow from inside `handle()`.
 `SagaFlow::create(...)` there takes no ordinal, so the run it starts is recognized by nothing, and
@@ -551,6 +557,8 @@ SagaFlow::loadFlow($runId)
     ->tag('payment-failed')
     ->withTags(['attempt' => 2]);
 ```
+
+A child run gets the `#[Tag]`s of its own class, not its parent's tags.
 
 Tag keys written from outside should not collide with keys the workflow writes in `handle()`: a
 workflow `$this->tag('x', ...)` re-runs on every replay and would overwrite the host value.
@@ -681,7 +689,7 @@ SagaFlow::create(\App\Workflows\V2\CheckoutWorkflow::class)
 ```
 
 Read the pinned version inside `handle()` with `$this->version()`; existing runs keep replaying
-against the class they were created with.
+against the class they were created with. A child run is versioned by `#[Flow]` on its own class.
 
 ## Octane & multi-tenancy
 

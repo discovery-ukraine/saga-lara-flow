@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
@@ -25,6 +26,8 @@ class ChildWorkflowBuilder
     private ChildClosePolicy $closePolicy;
 
     private bool $continueParentOnFailure = false;
+
+    private ?DateTimeInterface $expiresAt = null;
 
     /**
      * @param  array<int, mixed>  $arguments
@@ -54,6 +57,13 @@ class ChildWorkflowBuilder
         return $this;
     }
 
+    public function expiresAt(?DateTimeInterface $expiresAt): static
+    {
+        $this->expiresAt = $expiresAt;
+
+        return $this;
+    }
+
     /**
      * Await the child and return its result.
      *
@@ -67,6 +77,7 @@ class ChildWorkflowBuilder
             $this->arguments,
             $this->closePolicy,
             $this->continueParentOnFailure,
+            $this->expiresAt,
         );
     }
 }

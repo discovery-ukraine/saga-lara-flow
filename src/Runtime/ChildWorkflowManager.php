@@ -2,6 +2,7 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
+use DateTimeInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
@@ -18,6 +19,7 @@ use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Throwable;
 
@@ -44,6 +46,7 @@ readonly class ChildWorkflowManager
         private FlowExecutor $executor,
         private StartWorkGuard $startWork,
         private AnomalyLog $anomalies,
+        private AttributeReader $attributes,
     ) {}
 
     /**
@@ -65,6 +68,7 @@ readonly class ChildWorkflowManager
         array $arguments,
         ChildClosePolicy $closePolicy,
         bool $continueParentOnFailure,
+        ?DateTimeInterface $expiresAt,
     ): mixed {
         $parent = $runtime->run();
         $sequence = $runtime->nextSequence();
@@ -84,8 +88,15 @@ readonly class ChildWorkflowManager
         }
 
         // First encounter: create and start the child, then suspend the parent.
-        $child = $this->startChild($parent, $workflowClass, $arguments, $closePolicy, $sequence,
-            $continueParentOnFailure);
+        $child = $this->startChild(
+            $parent,
+            $workflowClass,
+            $arguments,
+            $closePolicy,
+            $sequence,
+            $continueParentOnFailure,
+            $expiresAt
+        );
 
         if ($runtime->mode() === RunMode::Sync) {
             $driven = $this->executor->drive($child, RunMode::Sync);
@@ -173,6 +184,7 @@ readonly class ChildWorkflowManager
         ChildClosePolicy $closePolicy,
         int $sequence,
         bool $continueParentOnFailure,
+        ?DateTimeInterface $expiresAt,
     ): FlowRun {
         $child = $parent->getConnection()->transaction(function () use (
             $parent,
@@ -181,10 +193,11 @@ readonly class ChildWorkflowManager
             $closePolicy,
             $sequence,
             $continueParentOnFailure,
+            $expiresAt,
         ): FlowRun {
             $this->startWork->expect($parent, 'child', $sequence);
 
-            $child = $this->createChild($parent, $workflowClass, $arguments, $closePolicy);
+            $child = $this->createChild($parent, $workflowClass, $arguments, $closePolicy, $expiresAt);
 
             $this->recorder->startChild($parent, $child, $sequence, $closePolicy, $continueParentOnFailure);
 
@@ -246,17 +259,23 @@ readonly class ChildWorkflowManager
         string $workflowClass,
         array $arguments,
         ChildClosePolicy $closePolicy,
+        ?DateTimeInterface $expiresAt,
     ): FlowRun {
+        $attributes = $this->attributes->workflow($workflowClass);
+
         return $this->repository->create([
             'workflow_class' => $workflowClass,
+            'workflow_name' => $attributes->name,
+            'workflow_version' => $attributes->version,
             'status' => FlowStatus::Pending,
             'arguments' => $this->serializer->serialize($arguments),
             'parent_id' => $parent->id,
             'parent_close_policy' => $closePolicy->value,
-            'connection' => $parent->connection,
-            'queue' => $parent->queue,
+            'connection' => $attributes->connectionWithin($parent->connection),
+            'queue' => $attributes->queueWithin($parent->queue),
+            'expires_at' => $expiresAt ?? $attributes->expiresAt(),
             'tenancy_context' => $parent->tenancy_context,
-        ]);
+        ], $attributes->tagsWith([]));
     }
 
     /**

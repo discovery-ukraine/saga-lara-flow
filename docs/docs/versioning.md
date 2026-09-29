@@ -50,6 +50,9 @@ You can also declare identity with the attribute:
 class CheckoutWorkflow extends Workflow { /* ... */ }
 ```
 
+The attribute is how a child run is versioned: `child()` has no `->version()`, and a child never
+takes its parent's version. A child class with no `#[Flow]` reads `null` from `$this->version()`.
+
 ## Guidance
 
 - Prefer additive changes; avoid reordering or removing already-recorded steps in a version that has

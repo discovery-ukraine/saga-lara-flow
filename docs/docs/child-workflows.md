@@ -7,7 +7,7 @@ sidebar_position: 12
 # Child workflows
 
 A workflow can start another workflow and await its result. The child inherits the parent's
-connection, queue, and **tenant context**:
+**tenant context**; everything else comes from the [child's own class](#a-childs-own-class):
 
 ```php
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
@@ -32,6 +32,30 @@ another one. A step is free to start a run of its own — an action's body is re
 once however the workflow is replayed — but `handle()` itself reaches another workflow through
 `child()`.
 
+## A child's own class
+
+A child is created from its class the way a root run is. Its `#[Tag]`s are written with it, in the
+same transaction as the run and its link. `#[Flow]` names and versions it. Its deadline is
+`#[FlowTimeout]`, else `monitor.expiration.defaults.run`. None of these come from the parent: a
+child with no `#[Flow]` has no name or version, and the parent's deadline is not the child's.
+
+`->expiresAt()` on the child builder sets a deadline over both the class and the default:
+
+```php
+$this->child(ShipmentWorkflow::class, ['order-42'])
+    ->expiresAt(now()->addHour())
+    ->run();
+```
+
+`#[FlowQueue]` resolves one field at a time, with the parent where config stands for a root run: the
+class's connection or queue, else the parent's, else the configured one. `#[FlowQueue(queue:
+'heavy')]` under a parent on `redis` sends the child to `heavy` on `redis`, and a worker has to
+listen there. The job that closes a child under the parent's [close policy](#close-policies) runs on
+the parent's connection and queue, and so does the child's rollback, which that job runs inline.
+
+All of it is read once, when the child starts. A replay of the parent that reaches the child again
+resolves the run on record and does not consult the builder or the class.
+
 ## Close policies
 
 `ChildClosePolicy` decides what happens to the child when the **parent** closes:
@@ -39,6 +63,10 @@ once however the workflow is replayed — but `handle()` itself reaches another 
 - `Abandon` (default) — leave the child running independently.
 - `Cancel` — cancel the child.
 - `Fail` — fail the child.
+
+A child closed with `Cancel` rolls back its own completed steps first, whatever ended the parent —
+a failure, an expiry, or a rollback — unless the parent was cancelled with `cancel()`, which skips
+compensation and so closes its children without it too. `Fail` always rolls the child back.
 
 The default comes from `children.default_close_policy`, or per class via `#[ChildPolicy]`.
 
