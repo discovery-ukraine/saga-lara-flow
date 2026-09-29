@@ -5,10 +5,10 @@ namespace DiscoveryUkraine\SagaLaraFlow\Middleware;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 
 /**
- * Builds WithoutOverlapping job middleware so that only one job at a time runs
- * for a given workflow run (and for a given action run). This single-threading
- * is what keeps replay correct and prevents races between a resume and an
- * incoming signal. Returns no middleware when locking is disabled in config.
+ * Builds WithoutOverlapping job middleware. The lock is keyed on the job's class and
+ * its row, so two jobs of one class never run at once for the same run or step, while
+ * a run's RunWorkflowJob and a ResumeWorkflowJob do not wait for each other. Returns no
+ * middleware when locking is disabled in config.
  */
 class LockMiddlewareFactory
 {

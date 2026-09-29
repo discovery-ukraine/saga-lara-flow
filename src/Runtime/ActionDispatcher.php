@@ -5,8 +5,10 @@ namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 use DiscoveryUkraine\SagaLaraFlow\Concerns\ResolvesMethodDependencies;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Data\ActionSchedule;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\StepExecution;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionClaimFailedException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
@@ -31,15 +33,22 @@ class ActionDispatcher
 
     /**
      * Queued mode: persist the pending step and dispatch its job.
+     *
+     * @throws FlowSuspended
+     * @throws Throwable
      */
     public function dispatch(FlowRun $flowRun, int $sequence, ActionSchedule $schedule): ActionRun
     {
         $actionRun = $this->recorder->scheduleAction($flowRun, $sequence, $schedule);
 
-        $this->route(
-            RunActionJob::dispatch($actionRun->id, $schedule->actionClass, $actionRun->retry_signal_attempts),
-            $flowRun,
-        );
+        try {
+            $this->route(
+                RunActionJob::dispatch($actionRun->id, $schedule->actionClass, $actionRun->retry_signal_attempts),
+                $flowRun,
+            );
+        } catch (Throwable $thrown) {
+            $this->replayIfRecorded($actionRun, $thrown);
+        }
 
         return $actionRun;
     }
@@ -50,17 +59,51 @@ class ActionDispatcher
      * (flow_run_id, sequence) ordinal, arguments and history — is reused as is. The
      * job carries the cycle it belongs to, so a job left over from an earlier cycle
      * recognises itself as stale and does nothing.
+     *
+     * @throws FlowSuspended
+     * @throws Throwable
      */
     public function redispatch(ActionRun $actionRun): void
     {
-        $this->route(
-            RunActionJob::dispatch(
-                $actionRun->id,
-                $actionRun->action_class,
-                $actionRun->retry_signal_attempts,
-            ),
-            $actionRun->flowRun,
-        );
+        try {
+            $this->route(
+                RunActionJob::dispatch(
+                    $actionRun->id,
+                    $actionRun->action_class,
+                    $actionRun->retry_signal_attempts,
+                ),
+                $actionRun->flowRun,
+            );
+        } catch (Throwable $thrown) {
+            $this->replayIfRecorded($actionRun, $thrown);
+        }
+    }
+
+    /**
+     * The sync queue runs the job inside the dispatch and rethrows its failure once failed()
+     * has run. A step that hook settled is resolved by replay; any other keeps the throw.
+     *
+     * @throws FlowSuspended
+     * @throws Throwable
+     */
+    private function replayIfRecorded(ActionRun $step, Throwable $thrown): never
+    {
+        $row = $step->newQuery()->useWritePdo()->find($step->getKey());
+
+        // How RunActionJob::failed() leaves a step: out of queue attempts, and an optional
+        // one with no retry policy given up as OptionalFailed.
+        $settled = match ($row?->status) {
+            ActionStatus::OptionalFailed => true,
+            ActionStatus::Failed => $row->queue_attempts_exhausted
+                && ! ($row->continue_on_failure && $row->retry_signal === null),
+            default => false,
+        };
+
+        if ($settled) {
+            app(FlowSuspender::class)->suspendInline('action', $step->sequence);
+        }
+
+        throw $thrown;
     }
 
     /**

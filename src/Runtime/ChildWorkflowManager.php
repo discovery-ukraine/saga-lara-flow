@@ -22,7 +22,6 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FencedWriteLost;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
-use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
@@ -59,6 +58,7 @@ readonly class ChildWorkflowManager
         private AttributeReader $attributes,
         private SignalRepository $signals,
         private SignalRecorder $signalRecorder,
+        private FlowResumer $resumer,
     ) {}
 
     /**
@@ -147,7 +147,7 @@ readonly class ChildWorkflowManager
                 ChildWorkflowCancelledException::for($child, $sequence),
             ),
             // Still in flight, Cancelling included: park until it finalizes.
-            default => $this->suspender->suspend('child', $sequence),
+            default => $this->suspender->suspendOnChild($sequence, $child->id),
         };
     }
 
@@ -522,12 +522,12 @@ readonly class ChildWorkflowManager
                 $this->suspender->suspendInline('child', $sequence);
             }
 
-            $this->suspender->suspend('child', $sequence);
+            $this->suspender->suspendOnChild($sequence, $child->id);
         }
 
         $this->dispatch(RunWorkflowJob::dispatch($child->id), $child);
 
-        $this->suspender->suspend('child', $sequence);
+        $this->suspender->suspendOnChild($sequence, $child->id);
     }
 
     /**
@@ -623,9 +623,8 @@ readonly class ChildWorkflowManager
     }
 
     /**
-     * Update this run's link in its parent and wake the parent if it is waiting.
-     * The parent resume is skipped while it is still Running (sync inline drive),
-     * where the seam resolves the child via replay instead.
+     * Update this run's link in its parent and wake the parent: by replay when this process
+     * is driving it, otherwise once it is Waiting. childHasEnded() is the other half.
      */
     private function notifyParent(FlowRun $run): void
     {
@@ -643,11 +642,27 @@ readonly class ChildWorkflowManager
             default => null,
         };
 
-        $parent = $this->repository->find((string) $run->parent_id);
-
-        if ($parent !== null && $parent->status === FlowStatus::Waiting) {
-            $this->dispatch(ResumeWorkflowJob::dispatch($parent->id), $parent);
+        if ($this->executor->replayIfDriving((string) $run->parent_id)) {
+            return;
         }
+
+        $parent = $run->newQuery()->useWritePdo()->find($run->parent_id);
+
+        if ($parent?->status === FlowStatus::Waiting) {
+            $this->resumer->resume($parent);
+        }
+    }
+
+    /**
+     * The parent's half of the wake in notifyParent(), once it has written Waiting on a
+     * child it last saw in flight.
+     */
+    public function childHasEnded(FlowRun $parent, string $childRunId): bool
+    {
+        /** @var ?FlowStatus $status */
+        $status = $parent->newQuery()->useWritePdo()->whereKey($childRunId)->value('status');
+
+        return $status?->isTerminal() ?? false;
     }
 
     private function closeChildren(FlowRun $parent, bool $withCompensation): void
@@ -684,6 +699,7 @@ readonly class ChildWorkflowManager
         $model = config('saga-lara-flow.models.flow_child');
 
         return $model::query()
+            ->useWritePdo()
             ->where('parent_flow_run_id', $run->parent_id)
             ->where('child_flow_run_id', $run->id)
             ->first();

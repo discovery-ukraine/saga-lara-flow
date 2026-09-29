@@ -65,6 +65,15 @@ class's connection or queue, else the parent's, else the configured one. `#[Flow
 listen there. The job that closes a child under the parent's [close policy](#close-policies) runs on
 the parent's connection and queue, and so does the child's rollback, which that job runs inline.
 
+A child whose connection is `sync` runs inside the parent's pass that starts it, and that pass
+resolves it by replaying at once, as it does
+[a step on that connection](./queues-locks-idempotency.md#sync-connection).
+On a worker of its own a child can end before the parent has written `Waiting`. It reads the parent
+from the writing connection once its outcome is recorded and wakes it if it is `Waiting`; the
+parent reads the child from the writing connection once `Waiting` is on record and, if it has
+ended, goes on in the same pass. One of the two always finds the other. Both may, which costs a
+replay that resolves the same history.
+
 All of it is read once, when the child starts. A replay of the parent that reaches the child again
 resolves the run on record and does not consult the builder or the class. An attempt
 [retried on a signal](./retry-on-signal.md#retrying-a-child) is a new run and reads them again,

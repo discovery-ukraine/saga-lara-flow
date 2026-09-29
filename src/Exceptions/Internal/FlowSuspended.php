@@ -14,12 +14,14 @@ final class FlowSuspended extends InternalFlowControl
      * @param  int  $sequence  The (flow_run_id, sequence) ordinal of the suspending step.
      * @param  array<string, mixed>  $context  Optional diagnostic context.
      * @param  bool  $inlineResolved  Sync mode: the step was executed inline and the loop should replay.
+     * @param  ?string  $childRunId  The child still in flight the run waits on, read again once it is Waiting.
      */
     public function __construct(
         public readonly string $reason,
         public readonly int $sequence,
         public readonly array $context = [],
         public readonly bool $inlineResolved = false,
+        public readonly ?string $childRunId = null,
     ) {
         parent::__construct('saga-lara-flow: flow intentionally suspended; do not catch.');
     }

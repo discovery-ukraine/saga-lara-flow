@@ -93,6 +93,23 @@ class FlowExecutor
     }
 
     /**
+     * Turn a wake for a run this process is driving into a replay of that pass: a job to
+     * resume it would only meet the pass still holding the run.
+     */
+    public function replayIfDriving(string $flowRunId): bool
+    {
+        /** @var ?FlowRuntime $pass */
+        $pass = array_find(
+            array_reverse($this->runtimes),
+            fn (FlowRuntime $runtime): bool => $runtime->isDriving($flowRunId),
+        );
+
+        $pass?->requestReplay();
+
+        return $pass !== null;
+    }
+
+    /**
      * A retryOnSignal() predicate may read any run it likes, but it may not drive
      * one — not even somebody else's. See RetryPolicyReentryException for why.
      *
@@ -176,11 +193,11 @@ class FlowExecutor
             try {
                 $result = $this->callHandle($runtime, $flowRun);
             } catch (FlowSuspended $suspended) {
-                if ($suspended->inlineResolved) {
-                    continue; // Sync: the step ran inline; replay from the top.
+                if ($suspended->inlineResolved || $runtime->replayRequested()) {
+                    continue; // The work ran in this process; replay from the top.
                 }
 
-                return $this->suspend($flowRun);
+                return $this->suspendOn($suspended, $runtime, $flowRun, $mode);
             } catch (InternalFlowControl) {
                 return $this->suspend($flowRun);
             } catch (ConcurrentFlowTransitionException $lost) {
@@ -378,6 +395,36 @@ class FlowExecutor
         } finally {
             $runtime->endCollecting();
             $runtime->clear();
+            $connection->useWriteConnectionWhenReading($pinned);
+        }
+    }
+
+    /**
+     * A child that ended before Waiting was on record found this run awake, so the pass goes
+     * on. It reads from the writer, which is what said so: a replay routed as usual can
+     * still find the child in flight.
+     *
+     * @throws Throwable
+     */
+    private function suspendOn(FlowSuspended $suspended, FlowRuntime $runtime, FlowRun $flowRun, RunMode $mode): FlowRun
+    {
+        $this->suspend($flowRun);
+
+        if (
+            $suspended->childRunId === null
+            || ! app(ChildWorkflowManager::class)->childHasEnded($flowRun, $suspended->childRunId)
+        ) {
+            return $flowRun;
+        }
+
+        $connection = $flowRun->getConnection();
+        $pinned = (bool) new ReflectionProperty($connection, 'readOnWriteConnection')->getValue($connection);
+
+        try {
+            $connection->useWriteConnectionWhenReading();
+
+            return $this->driveInner($runtime, $flowRun, $mode);
+        } finally {
             $connection->useWriteConnectionWhenReading($pinned);
         }
     }
