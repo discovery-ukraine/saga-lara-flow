@@ -46,7 +46,7 @@ final readonly class WorkflowAttributes
     }
 
     /**
-     * @param  array<string, ?string>  $explicit
+     * @param  array<array-key, string|int|null>  $explicit
      * @return array<int, array{key: string, value: ?string}>
      */
     public function tagsWith(array $explicit): array

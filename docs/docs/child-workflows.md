@@ -47,6 +47,18 @@ $this->child(ShipmentWorkflow::class, ['order-42'])
     ->run();
 ```
 
+`->withTags()` tags the child from the parent — the order, the customer — with the value rules of
+`SagaFlow::create()->withTags()`. The tags are written with the child, in the same transaction, and
+win over its class's `#[Tag]` under the same name:
+
+```php
+$this->child(ShipmentWorkflow::class, ['order-42'])
+    ->withTags(['customer' => $customerId])
+    ->run();
+```
+
+A tag the child writes itself with `$this->tag()` overwrites the same name on each of its passes.
+
 `#[FlowQueue]` resolves one field at a time, with the parent where config stands for a root run: the
 class's connection or queue, else the parent's, else the configured one. `#[FlowQueue(queue:
 'heavy')]` under a parent on `redis` sends the child to `heavy` on `redis`, and a worker has to
@@ -54,7 +66,9 @@ listen there. The job that closes a child under the parent's [close policy](#clo
 the parent's connection and queue, and so does the child's rollback, which that job runs inline.
 
 All of it is read once, when the child starts. A replay of the parent that reaches the child again
-resolves the run on record and does not consult the builder or the class.
+resolves the run on record and does not consult the builder or the class. An attempt
+[retried on a signal](./retry-on-signal.md#retrying-a-child) is a new run and reads them again,
+from the replay that starts it; only its arguments come from the attempt before.
 
 ## Close policies
 

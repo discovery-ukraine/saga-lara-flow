@@ -33,7 +33,7 @@ trait ProvidesFlowMetadata
      * Attach several queryable tags at once, keyed by tag name. A null value
      * records a tag with no value. Idempotent across replays.
      *
-     * @param  array<string, string|int|null>  $tags
+     * @param  array<array-key, string|int|null>  $tags
      */
     public function tags(array $tags): void
     {

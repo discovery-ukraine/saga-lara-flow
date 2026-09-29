@@ -619,7 +619,7 @@ readonly class ChildWorkflowManager
             'queue' => $attributes->queueWithin($parent->queue),
             'expires_at' => $schedule->expiresAt ?? $attributes->expiresAt(),
             'tenancy_context' => $parent->tenancy_context,
-        ], $attributes->tagsWith([]));
+        ], $attributes->tagsWith($schedule->tags));
     }
 
     /**

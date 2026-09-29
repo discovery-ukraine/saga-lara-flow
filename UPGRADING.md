@@ -108,6 +108,9 @@ Nothing below asks anything of you. Each links to the page that covers it.
   child closed under `ChildClosePolicy::Cancel` rolls back its completed steps rather than landing
   in `Cancelled` over them.
   [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
+- **A numeric tag name passed to `SagaFlow::create()->withTags()` is kept as written.** `'2024'`
+  records a tag named `2024` rather than one named after its position in the merged list.
+  [Tags & querying](https://sagalaraflow.dev/tags-and-querying)
 
 ### Additions
 
@@ -128,6 +131,9 @@ Nothing to do; each is additive.
   `ChildWorkflowAwaitingRetry` and `ChildWorkflowRetried` events announce both;
   `whereAwaitingRetrySignal()` and `saga-flow:list` find a parent parked this way.
   [Retry on signal](https://sagalaraflow.dev/retry-on-signal#retrying-a-child)
+- **`->withTags()` on the child builder** — the parent tags the child it starts, over the child
+  class's `#[Tag]`s, in the transaction that creates the child.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 
 ## From 1.2.0 to 1.2.1
 

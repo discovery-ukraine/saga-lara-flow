@@ -92,7 +92,7 @@ readonly class FlowHandle
     /**
      * Attach several queryable tags at once, keyed by tag name.
      *
-     * @param  array<string, string|int|null>  $tags
+     * @param  array<array-key, string|int|null>  $tags
      */
     public function withTags(array $tags): static
     {

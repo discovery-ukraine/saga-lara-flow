@@ -299,9 +299,10 @@ Where it differs from a step:
   refuses a signal; the parent is the run that waits, and `whereAwaitingRetrySignal()` finds it.
 - **Every attempt is a run of its own.** The parent's `flow_children` row points at the newest
   attempt and counts the cycles in `retry_signal_attempts`. Earlier attempts stay as they ended,
-  reachable through their `parent_id`. Each is started from the child's own class, as the first
-  was — see [a child's own class](./child-workflows.md#a-childs-own-class) — so its deadline counts
-  from its own start.
+  reachable through their `parent_id`. Each is started from the child's own class and the builder,
+  as the first was — see [a child's own class](./child-workflows.md#a-childs-own-class) — so its
+  deadline counts from its own start, and its tags are the builder's rather than whatever the
+  attempt before wrote on its own run.
 - **A failed attempt has run its own rollback** by the time the parent parks, under its own
   compensations' failure policies. `compensateWith()` on the child registers once, for the attempt
   that completes.
