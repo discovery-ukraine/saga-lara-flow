@@ -14,6 +14,22 @@ results, and execution proceeds until it hits the next un-run operation (which i
 suspension point (a signal wait, a queued action). Each operation is identified by a deterministic
 `(flow_run_id, sequence)` pair.
 
+### On a sync connection {#sync-connection}
+
+A job sent to a connection with the `sync` driver runs before the dispatch returns, inside the pass
+that sent it. When a step, a parallel block whose members succeed or a child finishes that way, the
+pass replays at once and goes on rather than waiting for a resume. A queued run on `sync` — a fresh
+install's default and many test suites' — is driven by the call that starts it, to its end or to its
+first wait nothing in the pass can answer. Its history records that as one pass, with no
+`flow.waiting` and `flow.resumed` between the steps.
+
+A step outside a `parallel()` block that fails there is resolved from what its job recorded, as on
+any other queue: a retry policy parks it, an optional step falls back, and a required one fails the
+run with `ActionFailedException`. The sync queue also rethrows the step's exception out of the
+dispatch; the workflow does not see it. A failing member of a `parallel()` block is not resolved
+that way: its exception fails the run and the block's members are left `Cancelled`. A signal a
+step sends its own run is taken up by the same pass.
+
 ## Idempotency
 
 The engine guarantees one thing precisely: a step that has **completed and recorded its result** is
@@ -95,7 +111,7 @@ it inside the action, which runs after your transaction has closed.
 
 ## Locks
 
-Concurrent drives of the *same* run are serialized by Laravel's `WithoutOverlapping` middleware:
+A run's jobs are serialized by Laravel's `WithoutOverlapping` middleware:
 
 ```php
 'locks' => [
@@ -108,8 +124,10 @@ Concurrent drives of the *same* run are serialized by Laravel's `WithoutOverlapp
 ],
 ```
 
-This guarantees that two workers can't advance one run at the same time. It covers workflow drives,
-action steps (sequential and parallel) and compensations, each keyed on its own row. Each parameter:
+Each lock is keyed on the job's class and its row, so two jobs of one class never run at once for
+the same run, step or compensation: two resumes of one run — a step's and a signal's, say — replay
+it one after the other. A run's first `RunWorkflowJob` and a `ResumeWorkflowJob` for it are
+different classes and do not wait for each other. Each parameter:
 
 - **`enabled`** — turn the `WithoutOverlapping` middleware on or off.
 - **`store`** — cache store backing the locks (`null` = the app default). Point it at a dedicated

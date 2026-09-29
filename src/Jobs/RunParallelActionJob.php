@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowResumer;
 use Illuminate\Bus\Batchable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -98,21 +99,7 @@ class RunParallelActionJob implements ShouldQueue
             'batch_id' => $batch->id,
         ]);
 
-        $flowRun = $action->flowRun;
-
-        $job = ResumeWorkflowJob::dispatch($action->flow_run_id);
-
-        if ($flowRun->connection !== null) {
-            $job->onConnection($flowRun->connection);
-        }
-
-        if ($flowRun->queue !== null) {
-            $job->onQueue($flowRun->queue);
-        }
-
-        if (config('saga-lara-flow.queue.after_commit')) {
-            $job->afterCommit();
-        }
+        app(FlowResumer::class)->resume($action->flowRun);
     }
 
     public function failed(Throwable $exception): void

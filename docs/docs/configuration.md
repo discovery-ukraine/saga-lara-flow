@@ -77,8 +77,9 @@ else from here — see [child workflows](./child-workflows.md#a-childs-own-class
 ],
 ```
 
-These configure the `WithoutOverlapping` middleware that serializes concurrent drives of a single
-run — the idempotency guard. See [Queues, locks & idempotency](./queues-locks-idempotency.md).
+These configure the `WithoutOverlapping` middleware that keeps two jobs of one class off the same
+run or step at once — the idempotency guard. See
+[Queues, locks & idempotency](./queues-locks-idempotency.md).
 
 ## Monitor & repair
 

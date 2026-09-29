@@ -23,6 +23,16 @@ final class FlowSuspender
     }
 
     /**
+     * Suspend on a child still in flight, which the executor reads again once the run is Waiting.
+     *
+     * @throws FlowSuspended
+     */
+    public function suspendOnChild(int $sequence, string $childRunId): never
+    {
+        throw new FlowSuspended('child', $sequence, childRunId: $childRunId);
+    }
+
+    /**
      * Sync mode: the step ran inline; signal the drive loop to replay from the top.
      *
      * @throws FlowSuspended

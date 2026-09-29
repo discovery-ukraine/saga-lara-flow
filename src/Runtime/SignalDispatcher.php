@@ -7,7 +7,6 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalCancellingFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
-use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 
@@ -24,6 +23,7 @@ readonly class SignalDispatcher
     public function __construct(
         private SignalRepository $repository,
         private SignalRecorder $recorder,
+        private FlowResumer $resumer,
     ) {}
 
     /**
@@ -76,18 +76,6 @@ readonly class SignalDispatcher
 
     private function wake(FlowRun $flowRun): void
     {
-        $job = ResumeWorkflowJob::dispatch($flowRun->id);
-
-        if ($flowRun->connection !== null) {
-            $job->onConnection($flowRun->connection);
-        }
-
-        if ($flowRun->queue !== null) {
-            $job->onQueue($flowRun->queue);
-        }
-
-        if (config('saga-lara-flow.queue.after_commit')) {
-            $job->afterCommit();
-        }
+        $this->resumer->resume($flowRun);
     }
 }

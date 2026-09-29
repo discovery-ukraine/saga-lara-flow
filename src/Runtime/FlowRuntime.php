@@ -31,6 +31,8 @@ final class FlowRuntime
 
     private bool $deciding = false;
 
+    private bool $replayRequested = false;
+
     /**
      * @var WeakMap<Throwable, true>
      */
@@ -165,6 +167,24 @@ final class FlowRuntime
     }
 
     /**
+     * Whether this pass is driving the run, as opposed to only planning its rollback.
+     */
+    public function isDriving(string $flowRunId): bool
+    {
+        return ! $this->collecting && $this->flowRun?->id === $flowRunId;
+    }
+
+    public function requestReplay(): void
+    {
+        $this->replayRequested = true;
+    }
+
+    public function replayRequested(): bool
+    {
+        return $this->replayRequested;
+    }
+
+    /**
      * Start a replay pass: rewind the sequence counter and the saga stack/group
      * counter so the pass rebuilds them deterministically from stored history.
      */
@@ -173,6 +193,7 @@ final class FlowRuntime
         $this->sequence->reset();
         $this->sagaStack->reset();
         $this->sagaGroup = 0;
+        $this->replayRequested = false;
         $this->collecting = false;
         $this->deciding = false;
         $this->raised = new WeakMap;

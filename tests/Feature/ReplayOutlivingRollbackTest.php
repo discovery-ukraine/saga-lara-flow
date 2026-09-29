@@ -127,7 +127,7 @@ it('leaves no child run behind when the link cannot be written', function (): vo
         ->and(FlowRun::query()->count())->toBe(1);
 });
 
-it('asks the connection that wrote the run whether work may begin', function (string $workflow): void {
+it('asks the connection that wrote the run whether work may begin', function (string $workflow, int $reads): void {
     config()->set('saga-lara-flow.models.flow_run', WriterRoutedFlowRun::class);
 
     useDatabaseQueue();
@@ -139,9 +139,10 @@ it('asks the connection that wrote the run whether work may begin', function (st
     app(FlowExecutor::class)->drive(WriterRoutedFlowRun::query()->findOrFail($run->id), RunMode::Queued);
 
     // Two reads for the pass: the boundary it begins on, and the seam's own before it
-    // starts the one thing this run has to start.
-    expect(WriterRoutedFlowRun::$writerReads)->toBe(2);
-})->with([[OneSideEffectWorkflow::class], [OneChildWorkflow::class]]);
+    // starts the one thing this run has to start. A child adds a third: the parent reads
+    // it again once it is Waiting, in case it ended before that.
+    expect(WriterRoutedFlowRun::$writerReads)->toBe($reads);
+})->with([[OneSideEffectWorkflow::class, 2], [OneChildWorkflow::class, 3]]);
 
 it('keeps a child whose announcement a listener threw over', function (): void {
     Event::listen(ChildWorkflowStarted::class, function (): void {

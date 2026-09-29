@@ -7,6 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Middleware\LockMiddlewareFactory;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowResumer;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -110,21 +111,7 @@ class RunActionJob implements ShouldQueue
 
     private function resumeWorkflow(ActionRun $action): void
     {
-        $flowRun = $action->flowRun;
-
-        $job = ResumeWorkflowJob::dispatch($action->flow_run_id);
-
-        if ($flowRun->connection !== null) {
-            $job->onConnection($flowRun->connection);
-        }
-
-        if ($flowRun->queue !== null) {
-            $job->onQueue($flowRun->queue);
-        }
-
-        if (config('saga-lara-flow.queue.after_commit')) {
-            $job->afterCommit();
-        }
+        app(FlowResumer::class)->resume($action->flowRun);
     }
 
     private function resolveAction(): ?ActionRun

@@ -135,9 +135,9 @@ Every setting lives in `config/saga-lara-flow.php`. The most common ones:
 - **Swappable models.** Every row model under `models.*` can be pointed at your own subclass.
 - **Queue.** `queue.connection` / `queue.queue` control where workflow and action jobs run;
   `queue.after_commit` dispatches after the surrounding DB transaction commits.
-- **Locks.** `locks.*` configure the `WithoutOverlapping` middleware that serializes concurrent
-  drives of a single run. `workflow_ttl_seconds` / `action_ttl_seconds` / `block_seconds` are in
-  seconds. See [Queues, locks & idempotency](#queues-locks--idempotency).
+- **Locks.** `locks.*` configure the `WithoutOverlapping` middleware that keeps two jobs of one
+  class off the same run or step at once. `workflow_ttl_seconds` / `action_ttl_seconds` /
+  `block_seconds` are in seconds. See [Queues, locks & idempotency](#queues-locks--idempotency).
 - **Monitor.** `monitor.expiration.defaults` set implicit deadlines (seconds) for `run` / `action` /
   `signal` — `null` means no default. See [Expiration & monitoring](#expiration--monitoring).
 - **Sagas / parallel / children.** Default compensation, failure, and close policies.
@@ -653,7 +653,15 @@ Every workflow and action runs as a queued job on the configured connection/queu
 by replaying `handle()` from the recorded history; each operation is identified by a deterministic
 `(flow_run_id, sequence)` pair, so a step that has **completed and recorded its result** is never
 repeated — it is reused from history. The `WithoutOverlapping` locks (`locks.*`, TTLs and waits in
-seconds) serialize concurrent drives of the same run so two workers can't advance it at once.
+seconds) are keyed on the job's class and its row, so two resumes of one run replay it one after the
+other.
+
+On a `sync` connection a job runs inside the pass that sent it, and when a step, a parallel block
+whose members succeed or a child finishes there, the pass replays at once rather than waiting for a
+resume: a queued run on `sync` is driven by the call that starts it, to its end or to its first
+wait nothing in the pass can answer. A failing member of a `parallel()` block still fails the run
+with its own exception there. See
+[On a sync connection](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection).
 
 This is *not* automatic end-to-end idempotency. The reuse guarantee covers **recorded** steps only —
 it does not make the work *inside* an action idempotent. If a job hangs, is retried, or dies after
