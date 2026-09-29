@@ -87,6 +87,27 @@ it('rolls the retry-on-signal columns back down again', function (): void {
     expect(Schema::hasColumn('saga_action_runs', 'retry_signal'))->toBeTrue();
 });
 
+it('adds the retry-on-signal columns to flow_children, and rolls them back down again', function (): void {
+    $migration = include __DIR__.'/../../database/migrations/2026_09_29_000000_add_retry_on_signal_to_flow_children.php';
+
+    expect(Schema::hasColumns('saga_flow_children', [
+        'retry_signal',
+        'retry_signal_attempts',
+        'retry_signal_max_attempts',
+    ]))->toBeTrue();
+
+    $migration->down();
+
+    expect(Schema::hasColumn('saga_flow_children', 'retry_signal'))->toBeFalse()
+        ->and(Schema::hasColumn('saga_flow_children', 'retry_signal_attempts'))->toBeFalse()
+        ->and(Schema::hasColumn('saga_flow_children', 'retry_signal_max_attempts'))->toBeFalse()
+        ->and(Schema::hasColumn('saga_flow_children', 'status'))->toBeTrue();
+
+    $migration->up();
+
+    expect(Schema::hasColumn('saga_flow_children', 'retry_signal_max_attempts'))->toBeTrue();
+});
+
 // The migrator wraps a migration in a transaction on the connection the migration
 // names. One that names none gets the default connection's transaction while its DDL
 // goes to the package's own, so a host with a dedicated connection was left holding
@@ -106,11 +127,13 @@ it('re-runs each column migration cleanly over a schema that already has its wor
         '2026_08_21_000000_add_retry_on_signal_to_action_runs',
         '2026_08_25_000000_add_reclaim_stale_running_columns',
         '2026_08_31_000000_add_expiry_backoff_to_flow_runs',
+        '2026_09_29_000000_add_retry_on_signal_to_flow_children',
     ] as $name) {
         (include __DIR__."/../../database/migrations/{$name}.php")->up();
     }
 
     expect(Schema::hasColumn('saga_action_runs', 'retry_signal'))->toBeTrue()
+        ->and(Schema::hasColumn('saga_flow_children', 'retry_signal'))->toBeTrue()
         ->and(Schema::hasIndex('saga_action_runs', ['reclaim_stale_at']))->toBeTrue()
         ->and(Schema::hasColumn('saga_compensation_runs', 'attempts'))->toBeTrue()
         ->and(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue();
@@ -234,6 +257,22 @@ it('does not mistake a host index named as a prefix of its own for the wait or t
         ->and(Schema::hasIndex('saga_flow_signals', 'saga_flow_signals_status_name_run'))->toBeTrue()
         ->and(Schema::hasIndex('saga_flow_tags', 'saga_flow_tags_flow_run_id_key_unique'))->toBeTrue()
         ->and(Schema::hasIndex('saga_flow_tags', 'saga_flow_tags_flow_run_id_key'))->toBeTrue();
+});
+
+it('adds only the flow_children retry columns still missing, and removes only those present', function (): void {
+    $migration = include __DIR__.'/../../database/migrations/2026_09_29_000000_add_retry_on_signal_to_flow_children.php';
+
+    Schema::table('saga_flow_children', fn (Blueprint $table) => $table->dropColumn('retry_signal_max_attempts'));
+
+    $migration->up();
+
+    expect(Schema::hasColumn('saga_flow_children', 'retry_signal_max_attempts'))->toBeTrue();
+
+    Schema::table('saga_flow_children', fn (Blueprint $table) => $table->dropColumn('retry_signal'));
+
+    $migration->down();
+
+    expect(Schema::hasColumn('saga_flow_children', 'retry_signal_attempts'))->toBeFalse();
 });
 
 it('rolls back a column migration that was only partly applied', function (): void {

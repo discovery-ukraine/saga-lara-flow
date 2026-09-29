@@ -50,6 +50,7 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
             ->hasMigration('2026_08_26_000001_unique_flow_tag_keys')
             ->hasMigration('2026_08_31_000000_add_expiry_backoff_to_flow_runs')
             ->hasMigration('2026_09_13_000000_reconcile_partially_applied_migrations')
+            ->hasMigration('2026_09_29_000000_add_retry_on_signal_to_flow_children')
             ->runsMigrations()
             ->hasCommands([
                 MakeWorkflowCommand::class,

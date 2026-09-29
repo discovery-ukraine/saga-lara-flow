@@ -83,8 +83,9 @@ $stuck = SagaFlow::query()
 - `whereWorkflow(string $workflowClass)`
 - `whereAwaitingSignal(?string $name = null)` — runs whose wait for a signal is still open,
   whichever seam opened it (`awaitSignal()` or `retryOnSignal()`). A null `$name` matches any.
-- `whereAwaitingRetrySignal(?string $signal = null)` — runs holding a step parked by
-  `retryOnSignal()`, i.e. an `action_runs` row in `awaiting_retry`. A null `$signal` matches any.
+- `whereAwaitingRetrySignal(?string $signal = null)` — runs holding a step or a child parked by
+  `retryOnSignal()`, i.e. an `action_runs` or a `flow_children` row in `awaiting_retry`. A null
+  `$signal` matches any.
 - `before(DateTimeInterface)` / `after(DateTimeInterface)` (both filter `created_at`)
 
 ```php

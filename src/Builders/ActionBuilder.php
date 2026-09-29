@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\Serializer;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Data\ActionSchedule;
 use DiscoveryUkraine\SagaLaraFlow\Data\CompensationDefinition;
+use DiscoveryUkraine\SagaLaraFlow\Data\SignalRetry;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
@@ -30,7 +31,6 @@ use DiscoveryUkraine\SagaLaraFlow\Retry\RetryContext;
 use DiscoveryUkraine\SagaLaraFlow\Retry\RetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
-use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\CompensationEntry;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowSuspender;
@@ -73,24 +73,7 @@ class ActionBuilder
 
     private ?DateTimeInterface $expiresAt = null;
 
-    private ?string $retrySignal = null;
-
-    private ?int $retryMaxRetries = null;
-
-    private ?int $retryWaitSeconds = null;
-
-    /**
-     * @var list<class-string<Throwable>>|null
-     */
-    private ?array $retryOnly = null;
-
-    /**
-     * Both forms of the fourth gate reduce to this, so nothing below knows which the
-     * caller used: a RetryPolicy contributes shouldRetry(...), when: contributes itself.
-     *
-     * @var ?Closure(RetryContext): bool
-     */
-    private ?Closure $retryDecision = null;
+    private ?SignalRetry $retry = null;
 
     private ?int $reclaimStaleAfterSeconds = null;
 
@@ -247,26 +230,7 @@ class ActionBuilder
         ?array $only = null,
         ?Closure $when = null,
     ): static {
-        if ($signal instanceof RetryPolicy) {
-            $this->rejectPolicyWithArguments($maxRetries, $waitSeconds, $only, $when);
-
-            // Unwrapped once, so the policy is asked as often as an argument list is
-            // evaluated and every seam below goes on reading a plain string.
-            $when = $signal->shouldRetry(...);
-            $maxRetries = $signal->maxRetries();
-            $waitSeconds = $signal->waitSeconds();
-            $only = $signal->only();
-            $signal = $signal->signal();
-        }
-
-        $this->rejectNegative('maxRetries', $maxRetries);
-        $this->rejectNegative('waitSeconds', $waitSeconds);
-
-        $this->retrySignal = $signal;
-        $this->retryMaxRetries = $maxRetries;
-        $this->retryWaitSeconds = $waitSeconds;
-        $this->retryOnly = $only;
-        $this->retryDecision = $when;
+        $this->retry = SignalRetry::for($signal, $maxRetries, $waitSeconds, $only, $when);
 
         return $this;
     }
@@ -350,12 +314,12 @@ class ActionBuilder
             continueOnFailure: $this->resolvedContinueOnFailure(),
             expiresAt: $this->resolvedExpiresAt(),
             actionName: $this->resolvedActionName(),
-            retrySignal: $this->retrySignal,
+            retrySignal: $this->retry?->signal,
             // Only a step that carries the policy gets a ceiling written. Storing the
             // global default on every action would leave an unrelated number in the
             // column, and awaitRetry()'s ??= would then keep it instead of the ceiling
             // the seam actually parked on when a later deploy adds retryOnSignal().
-            retrySignalMaxAttempts: $this->retrySignal === null ? null : $this->resolvedMaxRetries(),
+            retrySignalMaxAttempts: $this->retry?->resolvedMaxRetries(),
             reclaimStaleAfterSeconds: $this->reclaimStaleAfterSeconds,
             reclaimStaleEnabled: $this->reclaimStaleEnabled,
         );
@@ -411,7 +375,7 @@ class ActionBuilder
         // throw from before that (a listener, an observer, an action class that will
         // not resolve) leaves nothing for the seam to read, and replaying would suspend
         // a sync run on a job that does not exist.
-        if ($this->retrySignal !== null && $this->recordedFailure($flowRun->id, $sequence)) {
+        if ($this->retry !== null && $this->recordedFailure($flowRun->id, $sequence)) {
             $suspender->suspendInline('action', $sequence);
         }
 
@@ -481,7 +445,7 @@ class ActionBuilder
                 // An optional step still has retries left: it is not yet
                 // OptionalFailed, so wait rather than surface a business error.
                 if ($this->resolvedContinueOnFailure()) {
-                    if ($this->retrySignal !== null) {
+                    if ($this->retry !== null) {
                         return $this->giveUpAfterRetry($step, $sequence);
                     }
 
@@ -640,8 +604,10 @@ class ActionBuilder
             $suspender->suspend('action', $sequence);
         }
 
-        /** @var string $signal */
-        $signal = $this->retrySignal;
+        /** @var SignalRetry $retry */
+        $retry = $this->retry;
+
+        $signal = $retry->signal;
 
         $flowRun = $this->runtime->run();
 
@@ -697,7 +663,7 @@ class ActionBuilder
                         $this->runtime->run(),
                         $signal,
                         $sequence,
-                        $this->retryWaitSeconds === null ? null : now()->addSeconds($this->retryWaitSeconds),
+                        $this->retry?->waitDeadline(),
                     );
                 }
 
@@ -930,7 +896,7 @@ class ActionBuilder
      */
     private function shouldRetryOnSignal(ActionRun $step): bool
     {
-        if ($this->retrySignal === null) {
+        if ($this->retry === null) {
             return false;
         }
 
@@ -947,77 +913,38 @@ class ActionBuilder
             return false;
         }
 
-        if (! $this->matchesOnly($step)) {
+        if (! $this->retry->matches(RecordedFailure::fromRecord($step->exception))) {
             return false;
         }
 
-        return $this->policyAllows($step, $maxRetries);
+        return $this->policyAllows($this->retry, $step, $maxRetries);
     }
 
     /**
      * The last gate, and the only one that runs the caller's own code — hence last,
      * after three structural checks that cost a column read.
      *
-     * A throw is absorbed as "do not park", the outcome the caller was already
-     * prepared for; letting it out would fail the whole run on one path and truncate
-     * the compensation stack in silence on the other. It is logged rather than
-     * swallowed: a policy that never parks looks identical to one that always throws.
-     *
      * @throws InternalFlowControl
      */
-    private function policyAllows(ActionRun $step, ?int $maxRetries): bool
+    private function policyAllows(SignalRetry $retry, ActionRun $step, ?int $maxRetries): bool
     {
-        $decide = $this->retryDecision;
-
-        if ($decide === null) {
-            return true;
-        }
-
-        // Compensation-only planning stops at this step either way, so the answer
-        // would change nothing — and it runs caller code, which that pass must not.
-        if ($this->runtime->isCollecting()) {
-            return true;
-        }
-
         $flowRun = $this->runtime->run();
 
-        // Outside the guard: that absorbs a defect in the caller's predicate, and
-        // reading our own row is not one. A throw here is ours and should surface.
+        // Built before the caller's code runs: reading our own row is not a defect in
+        // the predicate, and a throw here is ours and should surface.
         $context = new RetryContext(
             runId: $flowRun->id,
             workflowClass: $flowRun->workflow_class,
             actionClass: $step->action_class,
             sequence: $step->sequence,
-            signal: (string) $this->retrySignal,
+            signal: $retry->signal,
             cyclesSpent: $step->retry_signal_attempts,
             cap: $maxRetries,
             executions: $step->attempts,
             failure: RecordedFailure::fromRecord($step->exception),
         );
 
-        $this->runtime->beginDeciding();
-
-        try {
-            return $decide($context);
-        } catch (InternalFlowControl|HistoryContractMismatchException|RetryPolicyReentryException $control) {
-            // Not answers, and none has a safe reading: the engine suspends with the
-            // first, reports the second on its own terms, and the third is a workflow
-            // the caller has to fix, not a step that quietly never parks.
-            throw $control;
-        } catch (Throwable $exception) {
-            app(AnomalyLog::class)->log(AnomalyLog::REASON_RETRY_POLICY_THREW, [
-                'flow_run_id' => $flowRun->id,
-                'action_run_id' => $step->id,
-                'sequence' => $step->sequence,
-                'signal' => $this->retrySignal,
-                'exception' => $exception::class,
-                'message' => $exception->getMessage(),
-            ]);
-
-            return false;
-        } finally {
-            $this->runtime->endDeciding();
-        }
+        return $retry->allows($this->runtime, $context, ['action_run_id' => $step->id]);
     }
 
     /**
@@ -1028,7 +955,7 @@ class ActionBuilder
      */
     private function carriesRetryPolicy(ActionRun $step): bool
     {
-        return $this->retrySignal !== null || $step->retry_signal !== null;
+        return $this->retry !== null || $step->retry_signal !== null;
     }
 
     /**
@@ -1041,7 +968,7 @@ class ActionBuilder
     private function budgetFor(ActionRun $step): ?int
     {
         return $step->retry_signal === null
-            ? $this->resolvedMaxRetries()
+            ? $this->retry?->resolvedMaxRetries()
             : $step->retry_signal_max_attempts;
     }
 
@@ -1071,96 +998,6 @@ class ActionBuilder
         }
 
         return ! $step->queue_attempts_exhausted;
-    }
-
-    /**
-     * Resolve the retry budget: an explicit maxRetries: wins, then the configured
-     * global cap, then null — unbounded, with the wait timeout and the run's own
-     * expires_at as the remaining brakes.
-     */
-    private function resolvedMaxRetries(): ?int
-    {
-        if ($this->retryMaxRetries !== null) {
-            return $this->retryMaxRetries;
-        }
-
-        $configured = config('saga-lara-flow.actions.retry_on_signal.max_retries');
-
-        if ($configured === null) {
-            return null;
-        }
-
-        $this->rejectNegative('actions.retry_on_signal.max_retries', (int) $configured);
-
-        return (int) $configured;
-    }
-
-    /**
-     * Reject a negative budget or wait before it can be persisted. The columns are
-     * unsigned, so a negative value means an error on MySQL and a step that silently
-     * never parks on the drivers that store it; failing here says which value is
-     * wrong, the same way on every driver.
-     */
-    private function rejectNegative(string $name, ?int $value): void
-    {
-        if ($value !== null && $value < 0) {
-            throw new InvalidArgumentException(
-                "retryOnSignal() {$name} must be zero or greater, got {$value}.",
-            );
-        }
-    }
-
-    /**
-     * A policy object and the arguments it replaces are two sources of truth for one
-     * decision, and there is no reading of "both" that is not a guess about which one
-     * the caller meant. Refuse it, naming what to drop.
-     *
-     * @param  list<class-string<Throwable>>|null  $only
-     */
-    private function rejectPolicyWithArguments(
-        ?int $maxRetries,
-        ?int $waitSeconds,
-        ?array $only,
-        ?Closure $when,
-    ): void {
-        $given = array_keys(array_filter([
-            'maxRetries' => $maxRetries !== null,
-            'waitSeconds' => $waitSeconds !== null,
-            'only' => $only !== null,
-            'when' => $when !== null,
-        ]));
-
-        if ($given === []) {
-            return;
-        }
-
-        throw new InvalidArgumentException(
-            'retryOnSignal() takes a RetryPolicy or the arguments it replaces, not both; '
-            .'drop '.implode(', ', $given).' or move it into the policy.',
-        );
-    }
-
-    /**
-     * Whether the recorded failure falls inside the only: filter. Subclasses count
-     * (is_a with allow_string), a null filter accepts everything, and a failure with
-     * no recorded class is never retried under an explicit filter.
-     */
-    private function matchesOnly(ActionRun $step): bool
-    {
-        if ($this->retryOnly === null) {
-            return true;
-        }
-
-        $failure = $step->exception['class'] ?? null;
-
-        if (! is_string($failure)) {
-            return false;
-        }
-
-        return array_any(
-            $this->retryOnly,
-            fn (string $candidate): bool => is_a($failure, $candidate, allow_string: true),
-        );
     }
 
     /**

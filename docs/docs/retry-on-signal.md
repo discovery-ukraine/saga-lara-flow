@@ -161,6 +161,7 @@ final readonly class RetryContext
     public ?int $cap;           // the ceiling on the row; null is unbounded
     public int $executions;     // every run of the step, the queue's own retries included
     public RecordedFailure $failure;
+    public ?string $childRunId; // the attempt that failed, for a child; null for a step
 }
 ```
 
@@ -276,6 +277,52 @@ $this->saga()
     ->run();
 ```
 
+## Retrying a child {#retrying-a-child}
+
+`child()` takes the same method. A child that fails or expires parks its **parent** on the signal
+instead of handing it the failure, and delivering the signal starts the child again — a new run at
+the same ordinal, with the same arguments:
+
+```php
+$analysis = $this->child(SchedulePodcastAnalysis::class, [$podcastId])
+    ->retryOnSignal(
+        'analysis-service-recovered',
+        maxRetries: 3,
+        only: [AwaitSignalTimeoutException::class],
+    )
+    ->run();
+```
+
+Where it differs from a step:
+
+- **The signal goes to the parent.** The attempt that failed has finished, and a finished run
+  refuses a signal; the parent is the run that waits, and `whereAwaitingRetrySignal()` finds it.
+- **Every attempt is a run of its own.** The parent's `flow_children` row points at the newest
+  attempt and counts the cycles in `retry_signal_attempts`. Earlier attempts stay as they ended,
+  reachable through their `parent_id`. Each is started from the child's own class, as the first
+  was — see [a child's own class](./child-workflows.md#a-childs-own-class) — so its deadline counts
+  from its own start.
+- **A failed attempt has run its own rollback** by the time the parent parks, under its own
+  compensations' failure policies. `compensateWith()` on the child registers once, for the attempt
+  that completes.
+- **`Failed` and `Expired` are retried; `Cancelled` is not.** A cancellation is somebody's decision,
+  and the parent gets `ChildWorkflowCancelledException` as it would without the policy.
+- **`$only` and `$when` judge the failure the child's run recorded** — its `exception` column, the
+  throw that left the child's `handle()`. A failed step inside the child leaves as the step's own
+  exception in sync mode and as `ActionFailedException` in queued mode (see
+  [when it throws](./actions.md#when-and-where-it-throws)); list both, or decide with `$when` on
+  the message. `RetryContext::$actionClass` holds the child's workflow class and `$executions` the
+  attempts so far.
+- **The policy comes before `continueParentOnFailure()`.** Once it gives up — budget spent, wait
+  timed out, or the failure refused — `run()` returns `null` under `continueParentOnFailure()`, and
+  throws `ChildWorkflowFailedException` or `ChildWorkflowExpiredException` otherwise.
+- **A child the parent has gone past is not retried.** Once the parent has recorded anything after
+  the child, the failure it took stands, even if a deploy adds `retryOnSignal()` to that call.
+- **The budget is read from the link**, written the first time the parent parks on it.
+
+A parent that ends while it waits — cancelled, compensated or expired — plans its rollback up to the
+parked child, and the link goes back to the status of the attempt it parked on.
+
 ## Delivering the signal
 
 Nothing special — it is an ordinary signal:
@@ -327,6 +374,10 @@ Two events cover the lifecycle — see [Events](./events.md):
 - **`ActionAwaitingRetry`** — fires once per park, carrying the step and the signal name.
 - **`ActionRetried`** — fires once per cycle, when the step is about to run again.
 
+A child has its own pair: **`ChildWorkflowAwaitingRetry`**, carrying the attempt that failed and the
+signal name, and **`ChildWorkflowRetried`**, carrying the new attempt and the one it replaces.
+`saga-flow:list` annotates a parent parked on a child the same way it does a parked step.
+
 Both are dispatched after the surrounding transaction commits, so a listener never reacts to a retry
 the database rolled back.
 
@@ -354,8 +405,8 @@ The counters are two different things: `attempts` keeps counting *every* executi
   but it is off by default. See [Expiration & monitoring](./expiration-and-monitoring.md).
 - **A signal delivered in the same second the step failed counts for that failure.** The engine
   matches a floating signal to the attempt with second resolution, so a signal that landed just
-  *before* the failure in the same second is treated as arriving after it. The cost is bounded: at
-  most one extra cycle, and the budget still applies.
+  *before* the failure in the same second is treated as arriving after it. The same holds for a
+  child's attempt. The cost is bounded: at most one extra cycle, and the budget still applies.
 - **The three wait-signal transitions raise no Eloquent model events.** Delivery into an open wait,
   closing a superseded wait, and timing a wait out are written as single conditional `UPDATE`s —
   the only form that is atomic on every supported driver. An observer registered on a swapped-in

@@ -17,6 +17,9 @@ use Illuminate\Support\Carbon;
  * @property string $child_workflow_class
  * @property ChildClosePolicy $close_policy
  * @property bool $continue_parent_on_failure
+ * @property ?string $retry_signal
+ * @property int $retry_signal_attempts
+ * @property ?int $retry_signal_max_attempts
  * @property ChildStatus $status
  * @property ?Carbon $created_at
  * @property ?Carbon $updated_at
@@ -37,6 +40,8 @@ class FlowChild extends Model
             'sequence' => 'integer',
             'close_policy' => ChildClosePolicy::class,
             'continue_parent_on_failure' => 'boolean',
+            'retry_signal_attempts' => 'integer',
+            'retry_signal_max_attempts' => 'integer',
             'status' => ChildStatus::class,
         ];
     }

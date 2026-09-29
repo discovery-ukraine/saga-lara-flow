@@ -4,9 +4,13 @@ namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
 use Closure;
 use DateTimeInterface;
+use DiscoveryUkraine\SagaLaraFlow\Data\ChildSchedule;
 use DiscoveryUkraine\SagaLaraFlow\Data\CompensationDefinition;
+use DiscoveryUkraine\SagaLaraFlow\Data\SignalRetry;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RetryContext;
+use DiscoveryUkraine\SagaLaraFlow\Retry\RetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
@@ -35,6 +39,8 @@ class ChildWorkflowBuilder
     private ?CompensationDefinition $compensation = null;
 
     private ?CompensationFailurePolicy $compensationFailurePolicy = null;
+
+    private ?SignalRetry $retry = null;
 
     /**
      * @param  array<int, mixed>  $arguments
@@ -88,21 +94,40 @@ class ChildWorkflowBuilder
     }
 
     /**
+     * Park the parent on $signal when the child fails or expires; delivering it to the
+     * parent starts the child again at the same ordinal. See ActionBuilder::retryOnSignal().
+     *
+     * @param  list<class-string<Throwable>>|null  $only
+     * @param  ?Closure(RetryContext): bool  $when
+     */
+    public function retryOnSignal(
+        RetryPolicy|string $signal,
+        ?int $maxRetries = null,
+        ?int $waitSeconds = null,
+        ?array $only = null,
+        ?Closure $when = null,
+    ): static {
+        $this->retry = SignalRetry::for($signal, $maxRetries, $waitSeconds, $only, $when);
+
+        return $this;
+    }
+
+    /**
      * Await the child and return its result.
      *
      * @throws Throwable
      */
     public function run(): mixed
     {
-        return app(ChildWorkflowManager::class)->await(
-            $this->runtime,
-            $this->workflowClass,
-            $this->arguments,
-            $this->closePolicy,
-            $this->continueParentOnFailure,
-            $this->expiresAt,
-            $this->compensation,
-            $this->compensationFailurePolicy,
-        );
+        return app(ChildWorkflowManager::class)->await($this->runtime, new ChildSchedule(
+            workflowClass: $this->workflowClass,
+            arguments: $this->arguments,
+            closePolicy: $this->closePolicy,
+            continueParentOnFailure: $this->continueParentOnFailure,
+            expiresAt: $this->expiresAt,
+            compensation: $this->compensation,
+            compensationFailurePolicy: $this->compensationFailurePolicy,
+            retry: $this->retry,
+        ));
     }
 }

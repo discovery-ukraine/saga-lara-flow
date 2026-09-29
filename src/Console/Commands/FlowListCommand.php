@@ -3,9 +3,11 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Console\Commands;
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ChildStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\FlowManager;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowTag;
 use Illuminate\Console\Command;
@@ -82,24 +84,39 @@ class FlowListCommand extends Command
      * The signals the listed runs are parked on, keyed by run id. A run parked by
      * retryOnSignal() is plainly Waiting like any other, so without this the signal
      * that would unblock it is invisible until the operator opens the run. One query
-     * for the whole page.
+     * per table that parks, for the whole page.
      *
      * @param  Collection<int, FlowRun>  $runs
      * @return Collection<string, string>
      */
     private function retrySignalsByRun(Collection $runs): Collection
     {
-        /** @var class-string<ActionRun> $model */
-        $model = config('saga-lara-flow.models.action_run');
+        /** @var class-string<ActionRun> $steps */
+        $steps = config('saga-lara-flow.models.action_run');
 
-        return $model::query()
-            ->whereIn('flow_run_id', $runs->pluck('id')->all())
+        /** @var class-string<FlowChild> $children */
+        $children = config('saga-lara-flow.models.flow_child');
+
+        $ids = $runs->pluck('id')->all();
+
+        $parkedSteps = $steps::query()
+            ->whereIn('flow_run_id', $ids)
             ->where('status', ActionStatus::AwaitingRetry)
             ->whereNotNull('retry_signal')
             ->get(['flow_run_id', 'retry_signal'])
-            ->groupBy('flow_run_id')
-            ->map(fn (Collection $steps): string => $steps
-                ->pluck('retry_signal')
+            ->map(fn (ActionRun $step): array => ['run' => $step->flow_run_id, 'signal' => $step->retry_signal]);
+
+        $parkedChildren = $children::query()
+            ->whereIn('parent_flow_run_id', $ids)
+            ->where('status', ChildStatus::AwaitingRetry)
+            ->get(['parent_flow_run_id', 'retry_signal'])
+            ->map(fn (FlowChild $link): array => ['run' => $link->parent_flow_run_id, 'signal' => $link->retry_signal]);
+
+        return $parkedSteps->toBase()
+            ->concat($parkedChildren)
+            ->groupBy('run')
+            ->map(fn (Collection $parked): string => $parked
+                ->pluck('signal')
                 ->unique()
                 ->implode(', '));
     }
