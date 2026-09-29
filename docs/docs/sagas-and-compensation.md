@@ -37,6 +37,9 @@ $this->action(MakeReservation::class, $id)
     ->run();
 ```
 
+A [child workflow](./child-workflows.md#compensating-a-child) takes `compensateWith()` as well. Its
+compensation joins the same stack once the child completes.
+
 ## Grouped sagas
 
 `saga()` expresses a compensation boundary explicitly and exposes group-level policies:
@@ -64,8 +67,9 @@ $this->saga()
 - `Stop` (default) — halt the rollback on the first compensation that does not complete.
 - `Continue` — keep rolling back even if one undo does not complete.
 
-Precedence is **action > group > config** (`sagas.default_compensation_failure_policy`). If a
-compensation itself fails under `Stop`, a `CompensationFailedException` surfaces.
+Precedence is **action > group > config** (`sagas.default_compensation_failure_policy`), and a
+child's `onCompensationFailure()` stands where an action's does. If a compensation itself fails
+under `Stop`, a `CompensationFailedException` surfaces.
 
 "Does not complete" covers more than a throw. A compensation whose worker was killed, or whose job
 never arrived, is left `Pending` or `Running` when its level finishes, and `Stop` halts the rollback
@@ -118,10 +122,10 @@ SagaFlow::loadFlow($runId)->compensate(); // roll back completed steps, then can
 ```
 
 The rollback is planned before anything is undone: the handle replays `handle()` only to learn which
-completed steps carry compensations. Every seam is guarded for that pass, so it runs no business
-logic, starts no work, and settles no step — one it has not seen is a place to stop, not a place to
-schedule. (Your own `tag()` calls still rewrite their rows, as they do on every replay.) The pass
-reads the history from the write connection, so a lagging
+completed steps and children carry compensations. Every seam is guarded for that pass, so it runs
+no business logic, starts no work, and settles no step — one it has not seen is a place to stop, not
+a place to schedule. (Your own `tag()` calls still rewrite their rows, as they do on every
+replay.) The pass reads the history from the write connection, so a lagging
 [read replica](./queues-locks-idempotency.md#read-replicas) cannot cut the plan short. It ends on
 the frontier it stopped at, and on a step failure, an expiry, a signal timeout or an awaited child's
 failure, expiry or cancellation already in the run's history — each of them raised by the seam that

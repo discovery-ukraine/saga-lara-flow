@@ -2,8 +2,11 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Builders;
 
+use Closure;
 use DateTimeInterface;
+use DiscoveryUkraine\SagaLaraFlow\Data\CompensationDefinition;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
+use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationFailurePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
@@ -28,6 +31,10 @@ class ChildWorkflowBuilder
     private bool $continueParentOnFailure = false;
 
     private ?DateTimeInterface $expiresAt = null;
+
+    private ?CompensationDefinition $compensation = null;
+
+    private ?CompensationFailurePolicy $compensationFailurePolicy = null;
 
     /**
      * @param  array<int, mixed>  $arguments
@@ -64,6 +71,22 @@ class ChildWorkflowBuilder
         return $this;
     }
 
+    public function compensateWith(string|Closure $compensation, mixed ...$arguments): static
+    {
+        $this->compensation = $compensation instanceof Closure
+            ? CompensationDefinition::forClosure($compensation)
+            : CompensationDefinition::forClass($compensation, array_values($arguments));
+
+        return $this;
+    }
+
+    public function onCompensationFailure(CompensationFailurePolicy $policy): static
+    {
+        $this->compensationFailurePolicy = $policy;
+
+        return $this;
+    }
+
     /**
      * Await the child and return its result.
      *
@@ -78,6 +101,8 @@ class ChildWorkflowBuilder
             $this->closePolicy,
             $this->continueParentOnFailure,
             $this->expiresAt,
+            $this->compensation,
+            $this->compensationFailurePolicy,
         );
     }
 }
