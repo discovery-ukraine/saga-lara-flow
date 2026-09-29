@@ -42,6 +42,9 @@ class ChildWorkflowBuilder
 
     private ?SignalRetry $retry = null;
 
+    /** @var array<array-key, string|int|null> */
+    private array $tags = [];
+
     /**
      * @param  array<int, mixed>  $arguments
      */
@@ -73,6 +76,16 @@ class ChildWorkflowBuilder
     public function expiresAt(?DateTimeInterface $expiresAt): static
     {
         $this->expiresAt = $expiresAt;
+
+        return $this;
+    }
+
+    /**
+     * @param  array<array-key, string|int|null>  $tags
+     */
+    public function withTags(array $tags): static
+    {
+        $this->tags = array_replace($this->tags, $tags);
 
         return $this;
     }
@@ -128,6 +141,7 @@ class ChildWorkflowBuilder
             compensation: $this->compensation,
             compensationFailurePolicy: $this->compensationFailurePolicy,
             retry: $this->retry,
+            tags: $this->tags,
         ));
     }
 }

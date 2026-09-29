@@ -537,7 +537,8 @@ A child is created from its class the way a root run is: its `#[Tag]`s, the name
 `#[Flow]`, and a deadline from `#[FlowTimeout]`, else `monitor.expiration.defaults.run` — never the
 parent's. `->expiresAt()` on the child builder wins over both. `#[FlowQueue]` resolves field by
 field: the class's connection or queue, else the parent's, else config. The job that closes a child
-under its parent's close policy stays on the parent's connection and queue.
+under its parent's close policy stays on the parent's connection and queue. `->withTags()` tags the
+child from the parent, over its class's `#[Tag]`s, in the transaction that creates it.
 
 `->compensateWith()` gives a child an undo on the parent's saga stack, registered once the child
 completes, as a step's is; `->onCompensationFailure()` sets its policy. A child that failed or
@@ -571,10 +572,11 @@ SagaFlow::loadFlow($runId)
     ->withTags(['attempt' => 2]);
 ```
 
-A child run gets the `#[Tag]`s of its own class, not its parent's tags.
+A child run gets the `#[Tag]`s of its own class and whatever its parent passes to `->withTags()` on
+`child()`, not its parent's tags.
 
-Tag keys written from outside should not collide with keys the workflow writes in `handle()`: a
-workflow `$this->tag('x', ...)` re-runs on every replay and would overwrite the host value.
+Tag keys written from outside or by a parent should not collide with keys the workflow writes in
+`handle()`: a workflow `$this->tag('x', ...)` re-runs on every replay and would overwrite them.
 
 Query runs with the fluent, type-safe `FlowQuery`:
 

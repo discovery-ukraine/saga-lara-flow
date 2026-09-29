@@ -10,6 +10,7 @@ final readonly class ChildSchedule
 {
     /**
      * @param  array<int, mixed>  $arguments
+     * @param  array<array-key, string|int|null>  $tags
      */
     public function __construct(
         public string $workflowClass,
@@ -20,5 +21,6 @@ final readonly class ChildSchedule
         public ?CompensationDefinition $compensation = null,
         public ?CompensationFailurePolicy $compensationFailurePolicy = null,
         public ?SignalRetry $retry = null,
+        public array $tags = [],
     ) {}
 }

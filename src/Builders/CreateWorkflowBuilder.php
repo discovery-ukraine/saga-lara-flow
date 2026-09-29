@@ -23,7 +23,7 @@ class CreateWorkflowBuilder
 
     private ?string $queue = null;
 
-    /** @var array<string, ?string> */
+    /** @var array<array-key, string|int|null> */
     private array $tags = [];
 
     private ?string $version = null;
@@ -62,11 +62,11 @@ class CreateWorkflowBuilder
     }
 
     /**
-     * @param  array<string, ?string>  $tags
+     * @param  array<array-key, string|int|null>  $tags
      */
     public function withTags(array $tags): static
     {
-        $this->tags = array_merge($this->tags, $tags);
+        $this->tags = array_replace($this->tags, $tags);
 
         return $this;
     }

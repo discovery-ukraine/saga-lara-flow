@@ -8,8 +8,8 @@ sidebar_position: 13
 
 ## Tagging runs
 
-Attach searchable key/value tags at creation, declaratively, from inside the workflow, or from
-outside through a `FlowHandle`:
+Attach searchable key/value tags at creation, declaratively, from the parent that starts a child,
+from inside the workflow, or from outside through a `FlowHandle`:
 
 ```php
 SagaFlow::create(CheckoutWorkflow::class)
@@ -22,6 +22,13 @@ SagaFlow::create(CheckoutWorkflow::class)
 #[Tag('orders')]
 #[Tag('team', 'checkout')]
 class CheckoutWorkflow extends Workflow { /* ... */ }
+```
+
+```php
+// on a child, from the parent that starts it
+$this->child(ShipmentWorkflow::class, ['order-42'])
+    ->withTags(['customer' => $customerId])
+    ->run();
 ```
 
 ```php
@@ -45,7 +52,8 @@ SagaFlow::loadFlow($runId)
 
 Explicit tags passed to `withTags()` override attribute tags with the same key. On a handle,
 `tags()` reads and `withTags()` writes. A child run started with `child()` gets the `#[Tag]`s of
-its own class, written together with the run; it does not get its parent's tags.
+its own class and the tags the parent passes to `withTags()` on the child builder, written together
+with the run; it does not get its parent's tags.
 
 Re-tagging an existing key overwrites its value rather than adding a second tag — the database
 enforces one row per `(flow_run_id, key)`. Both `tag()` and `tags()` / `withTags()` are idempotent
@@ -54,8 +62,8 @@ across replays — safe to call unconditionally at the top of `handle()`.
 :::caution Outside tags vs workflow tags
 Tags are not history: they carry no sequence and are never consulted during replay. A workflow
 calling `$this->tag('x', ...)` in `handle()` re-runs that write on **every replay**, overwriting
-whatever a host set under the same key. Keys written from outside should not collide with keys the
-workflow writes itself.
+whatever a host, or a parent through `child()->withTags()`, set under the same key. Keys written
+from outside or by a parent should not collide with keys the workflow writes itself.
 :::
 
 ## Querying runs
