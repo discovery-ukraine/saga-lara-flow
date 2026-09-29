@@ -221,6 +221,16 @@ it('keeps a numeric tag name as written on a root run too', function (): void {
     expect(tagLinesOf($run))->toBe(['2024=b', '7', 'k=x']);
 });
 
+it('keeps a numeric tag name as written through a handle, and overwrites it', function (): void {
+    $run = SagaFlow::create(TaggedBareChildWorkflow::class)->runSync();
+
+    // PHP hands the key over as an int; PostgreSQL refuses to compare one with the key column.
+    SagaFlow::loadFlow($run->id)->withTags(['2024' => 'a', '7' => 1]);
+    SagaFlow::loadFlow($run->id)->withTags(['2024' => 'b']);
+
+    expect(tagLinesOf($run))->toBe(['2024=b', '7=1']);
+});
+
 it('wins over the child class\'s #[Tag] on the same name and keeps the rest', function (string $mode): void {
     TaggingParentWorkflow::$child = TaggedByClassChildWorkflow::class;
     TaggingParentWorkflow::$calls = [['customer' => 42]];
