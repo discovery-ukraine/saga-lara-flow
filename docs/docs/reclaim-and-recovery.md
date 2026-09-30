@@ -229,9 +229,10 @@ Eleven reason codes exist; the seven raised on the paths this page covers are be
 are `transition_lost`, which belongs to [run transitions](./queues-locks-idempotency.md),
 `retry_policy_threw`, which belongs to [retry policies](./retry-on-signal.md), and `replan_failed`
 and `replan_incomplete`, which belong to
-[planning a rollback](./sagas-and-compensation.md#while-a-rollback-runs). All but one of the
-seven carry the run id, row id, sequence and class; `expiry_failed` is about a run rather than a row,
-and carries the run id, its workflow class and the throw:
+[planning a rollback](./sagas-and-compensation.md#while-a-rollback-runs). Most of the seven carry
+the run id, row id, sequence and class. Two are about a run rather than a row: `expiry_failed`
+carries the run id, its workflow class and the throw, and `claim_not_committed` for a kick carries
+the run id, its workflow class, its status and the repair count the run holds:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped. Listen for

@@ -104,7 +104,7 @@ delivery accepts — `Pending`, `Running`, or `Waiting` — and a flow parked on
 **`Waiting`**, not `Running`. Filtering by `running()` would silently miss exactly the run you are
 trying to wake.
 
-## Reviving a failed step
+## Reviving a failed step or child
 
 A signal can also restart a step or a [child](./child-workflows.md) that already failed, instead
 of being awaited at a point in `handle()`. `->retryOnSignal('balance-refilled')` on either parks the

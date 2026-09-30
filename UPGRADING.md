@@ -15,7 +15,8 @@
   pass it a far-future `->expiresAt()`. Children started before the upgrade keep no deadline.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 - **If a child class carries `#[FlowQueue]`** *(medium)* — the child runs on the connection or
-  queue it names rather than its parent's, so a worker has to listen there.
+  queue it names rather than its parent's, so a worker has to listen there. Children started
+  before the upgrade keep their parent's.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 - **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — add the new cases:
   `ChildStatus::Expired`, `ChildStatus::AwaitingRetry`, `FlowEventType::ChildExpired`,
@@ -53,7 +54,8 @@ Nothing below asks anything of you.
   it for good; `continueParentOnFailure()` carries the parent past it.
   [Child workflows](https://sagalaraflow.dev/child-workflows)
 - **A child is created from its own class** — its `#[Tag]`s, and its name and version from
-  `#[Flow]`. [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+  `#[Flow]`. Children started before the upgrade are not filled in.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 - **An expired run rolls back the children it closes under `Cancel`**, even with nothing of its
   own to undo. [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
 - **Compensation jobs follow the run's connection and queue** rather than the defaults.

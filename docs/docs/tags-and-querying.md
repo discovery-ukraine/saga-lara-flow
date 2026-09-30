@@ -115,7 +115,7 @@ SagaFlow::query()->whereTagIn('customer', $customerIds)->get();
 SagaFlow::query()->whereAwaitingRetrySignal()->whereId(...$runIds)->handles();
 ```
 
-### Waits and parked steps
+### Waits and parked retries {#waits-and-parked-steps}
 
 Both seams park the run as `Waiting` and open a signal row, so `flow_signals` alone cannot tell them
 apart. What separates them lives on `action_runs`, or on `flow_children` for a child:
