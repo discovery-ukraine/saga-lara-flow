@@ -24,6 +24,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaFlowChild;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaFlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\NamedRetryWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ScopedFlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SelfSignallingRetryWorkflow;
@@ -162,6 +163,45 @@ it('records every parked signal before it wakes the run', function (): void {
         ->and($deliveredAtResume)->toBe([2])
         ->and(FlowSignal::query()->where('flow_run_id', $run->id)->pluck('name')->sort()->values()->all())
         ->toBe(['balance-refilled', 'stock-synced']);
+});
+
+it('wakes a run whose delivery is already in without delivering again', function (): void {
+    config()->set('saga-lara-flow.signals.wake_workflow_on_signal', false);
+
+    $run = parkedOn('balance-refilled');
+
+    // Delivered, but the resume it should have brought never ran.
+    SagaFlow::loadFlow($run->id)->signal('balance-refilled');
+
+    config()->set('saga-lara-flow.signals.wake_workflow_on_signal', true);
+
+    $signals = signalRows();
+
+    SagaFlow::loadFlow($run->id)->signalRetry();
+
+    // A second delivery would float, and a later awaitSignal() of that name would take it.
+    expect(signalRows())->toBe($signals);
+
+    drainQueue();
+
+    expect(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Completed);
+});
+
+it('reads whether the wait is still open from the write connection', function (): void {
+    config()->set('saga-lara-flow.models.flow_signal', LaggingReplicaFlowSignal::class);
+
+    $run = parkedOn('balance-refilled');
+
+    // A replica that has not seen the wait yet must not turn the delivery into a bare wake.
+    LaggingReplicaBuilder::$noSignals = true;
+
+    SagaFlow::loadFlow($run->id)->signalRetry();
+
+    LaggingReplicaBuilder::reset();
+
+    drainQueue();
+
+    expect(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Completed);
 });
 
 it('keeps the payload on the signal it delivers', function (): void {

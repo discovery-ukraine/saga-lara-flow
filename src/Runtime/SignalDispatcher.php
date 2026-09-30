@@ -47,8 +47,8 @@ readonly class SignalDispatcher
     }
 
     /**
-     * Deliver every signal the run's parked steps and children wait on, read from the writer,
-     * and wake the run once all of them are recorded.
+     * Deliver the signal every open wait of the run's parked steps and children waits on, read
+     * from the writer, and wake the run once all of them are recorded.
      *
      * @param  array<int|string, mixed>  $payload
      * @return list<FlowSignal>
@@ -60,16 +60,23 @@ readonly class SignalDispatcher
      */
     public function deliverRetry(FlowRun $flowRun, array $payload): array
     {
-        $names = $this->parked->of($flowRun);
+        $parked = $this->parked->of($flowRun);
 
         // Read after the parked rows: a run that ended in between settled them, and says so.
         $this->refuseUnsignalable($this->reread($flowRun));
 
-        if ($names === []) {
+        if ($parked === []) {
             throw NoAwaitingRetrySignalException::for($flowRun);
         }
 
-        $signals = array_map(fn (string $name): FlowSignal => $this->store($flowRun, $name, $payload), $names);
+        $signals = [];
+
+        foreach ($parked as $name => $open) {
+            // A wait that already holds its delivery needs only the resume it never got.
+            if ($open) {
+                $signals[] = $this->store($flowRun, $name, $payload);
+            }
+        }
 
         $this->wake($flowRun);
 

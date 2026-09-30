@@ -387,8 +387,8 @@ Given a name, `signalRetry('balance-refilled')` or `--signal=`, it delivers that
 
 It finds what `whereAwaitingRetrySignal()` finds: a step or a child in `awaiting_retry` whose wait
 is still open or already holds a delivery. A run whose signal arrived but whose resume never did is
-signalled again; the second delivery is kept as a floating signal, and the wake that comes with it
-resumes the run. A park whose wait timed out is left out: the next replay gives it up.
+woken again without a second delivery: the replay that resumes it takes the one already there. A
+park whose wait timed out is left out: the next replay gives it up.
 
 What it refuses, it refuses with a `CannotSignalFlowException`:
 

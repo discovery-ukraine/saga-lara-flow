@@ -49,11 +49,26 @@ final readonly class ParkedRetrySignals
     }
 
     /**
-     * @return list<string>
+     * @return array<string, bool> keyed by signal name: whether its wait is still open
      */
     public function of(FlowRun $flowRun): array
     {
-        return $this->read([$flowRun->id], fromWriter: true)[$flowRun->id] ?? [];
+        $names = $this->read([$flowRun->id], fromWriter: true)[$flowRun->id] ?? [];
+
+        /** @var class-string<FlowSignal> $signals */
+        $signals = config('saga-lara-flow.models.flow_signal');
+
+        $open = $names === [] ? [] : $signals::query()
+            ->useWritePdo()
+            ->where('flow_run_id', $flowRun->id)
+            ->whereIn('name', $names)
+            ->where('status', SignalStatus::Waiting)
+            ->whereNotNull('wait_sequence')
+            ->get(['name'])
+            ->pluck('name')
+            ->all();
+
+        return array_combine($names, array_map(fn (string $name): bool => in_array($name, $open, true), $names));
     }
 
     /**
