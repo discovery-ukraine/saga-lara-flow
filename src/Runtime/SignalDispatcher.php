@@ -7,6 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalCancellingFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\NoAwaitingRetrySignalException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 
@@ -24,6 +25,7 @@ readonly class SignalDispatcher
         private SignalRepository $repository,
         private SignalRecorder $recorder,
         private FlowResumer $resumer,
+        private ParkedRetrySignals $parked,
     ) {}
 
     /**
@@ -35,15 +37,7 @@ readonly class SignalDispatcher
      */
     public function deliver(FlowRun $flowRun, string $name, array $payload): FlowSignal
     {
-        $current = $this->reread($flowRun);
-
-        if ($current->isTerminal()) {
-            throw CannotSignalTerminalFlowException::for($current);
-        }
-
-        if (! in_array($current->status, FlowStatus::signalable(), true)) {
-            throw CannotSignalCancellingFlowException::for($current);
-        }
+        $this->refuseUnsignalable($this->reread($flowRun));
 
         $waitingSignal = $this->repository->earliestWaiting($flowRun->id, $name);
 
@@ -56,11 +50,66 @@ readonly class SignalDispatcher
         // attaching it to a spent signal, where nothing would look for it again.
         $signal ??= $this->recorder->storeReceivedSignal($flowRun, $name, $payload);
 
-        if (config('saga-lara-flow.signals.wake_workflow_on_signal')) {
-            $this->wake($flowRun);
-        }
+        $this->wake($flowRun);
 
         return $signal;
+    }
+
+    /**
+     * Fill the open waits of the run's parked steps and children, read from the writer, and
+     * wake the run once. A park whose wait already holds its delivery, or has it closed while
+     * this runs, gets the wake alone: a floating signal would be left for a later awaitSignal().
+     *
+     * @param  array<int|string, mixed>  $payload
+     * @return list<FlowSignal>
+     *
+     * @throws CannotSignalTerminalFlowException
+     * @throws CannotSignalCancellingFlowException
+     * @throws NoAwaitingRetrySignalException
+     * @throws FlowNotFoundException
+     */
+    public function deliverRetry(FlowRun $flowRun, array $payload): array
+    {
+        // The waits first: a claim reaches only a wait this call saw open, never one that a
+        // later cycle of the same retry opens at its ordinal.
+        $waits = $this->parked->openWaits($flowRun);
+        $names = $this->parked->of($flowRun);
+
+        // Read after the parked rows: a run that ended in between settled them, and says so.
+        $this->refuseUnsignalable($this->reread($flowRun));
+
+        if ($names === []) {
+            throw NoAwaitingRetrySignalException::for($flowRun);
+        }
+
+        $signals = [];
+
+        foreach ($waits as $wait) {
+            $signal = $this->recorder->fulfilWaitingSignal($wait, $payload);
+
+            if ($signal !== null) {
+                $signals[] = $signal;
+            }
+        }
+
+        $this->wake($flowRun);
+
+        return $signals;
+    }
+
+    /**
+     * @throws CannotSignalTerminalFlowException
+     * @throws CannotSignalCancellingFlowException
+     */
+    private function refuseUnsignalable(FlowRun $current): void
+    {
+        if ($current->isTerminal()) {
+            throw CannotSignalTerminalFlowException::for($current);
+        }
+
+        if (! in_array($current->status, FlowStatus::signalable(), true)) {
+            throw CannotSignalCancellingFlowException::for($current);
+        }
     }
 
     /**
@@ -76,6 +125,8 @@ readonly class SignalDispatcher
 
     private function wake(FlowRun $flowRun): void
     {
-        $this->resumer->resume($flowRun);
+        if (config('saga-lara-flow.signals.wake_workflow_on_signal')) {
+            $this->resumer->resume($flowRun);
+        }
     }
 }

@@ -9,19 +9,19 @@ use DiscoveryUkraine\SagaLaraFlow\FlowManager;
 use Illuminate\Console\Command;
 
 /**
- * Delivers an external signal to a run and wakes it. An optional --payload is a
- * JSON-encoded object/array passed to the waiting handle().
+ * Delivers the signal a run's parked step or child waits on, without naming it, and wakes
+ * the run. --signal names the signal instead.
  */
-class FlowSignalCommand extends Command
+class FlowSignalRetryCommand extends Command
 {
     use ReadsPayloadOption;
 
-    protected $signature = 'saga-flow:signal
+    protected $signature = 'saga-flow:signal-retry
         {run : The flow run id}
-        {name : The signal name}
+        {--signal= : The signal name, instead of the one the run is parked on}
         {--payload= : JSON-encoded payload object/array}';
 
-    protected $description = 'Deliver a signal to a saga flow run.';
+    protected $description = 'Deliver the retry signal a saga flow run is parked on.';
 
     public function handle(FlowManager $manager): int
     {
@@ -39,10 +39,11 @@ class FlowSignalCommand extends Command
             return self::FAILURE;
         }
 
-        $name = (string) $this->argument('name');
+        $name = $this->option('signal');
+        $name = is_string($name) && $name !== '' ? $name : null;
 
         try {
-            $handle->signal($name, $payload);
+            $handle->signalRetry($name, $payload);
         } catch (CannotSignalFlowException $refused) {
             $this->warn($refused->getMessage());
 
@@ -53,7 +54,9 @@ class FlowSignalCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("Signal [$name] delivered to flow run [{$handle->id()}].");
+        $this->info($name === null
+            ? "Retry signal delivered to flow run [{$handle->id()}]."
+            : "Signal [$name] delivered to flow run [{$handle->id()}].");
 
         return self::SUCCESS;
     }

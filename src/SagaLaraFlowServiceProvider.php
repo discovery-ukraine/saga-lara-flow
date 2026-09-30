@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowPruneCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowRepairCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowShowCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowSignalCommand;
+use DiscoveryUkraine\SagaLaraFlow\Console\Commands\FlowSignalRetryCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\MakeActionCommand;
 use DiscoveryUkraine\SagaLaraFlow\Console\Commands\MakeWorkflowCommand;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
@@ -59,6 +60,7 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
                 FlowShowCommand::class,
                 FlowCancelCommand::class,
                 FlowSignalCommand::class,
+                FlowSignalRetryCommand::class,
                 FlowPruneCommand::class,
                 FlowMonitorCommand::class,
                 FlowRepairCommand::class,

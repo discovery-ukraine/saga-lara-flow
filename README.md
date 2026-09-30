@@ -444,6 +444,22 @@ downstream steps land identically whether it retried or not. `saga()->step()` mi
 `saga-flow:list` annotates a parked run with the signal it needs, `saga-flow:show` gains a **Retry**
 column, and two events (`ActionAwaitingRetry`, `ActionRetried`) cover the lifecycle.
 
+An operator retrying runs picked in a UI knows their ids, not the signal each one waits on.
+`signalRetry()` reads it from the parked step or child and delivers it as `signal()` would:
+
+```php
+SagaFlow::query()
+    ->whereAwaitingRetrySignal()
+    ->signalable()
+    ->whereId(...$runIds)
+    ->handles()
+    ->each(fn (FlowHandle $handle) => $handle->signalRetry());
+```
+
+A run with nothing parked raises `NoAwaitingRetrySignalException`, and `signalRetryIfRunning()`
+answers `false` instead. `saga-flow:signal-retry {run}` does the same from the CLI.
+[Without naming the signal](https://sagalaraflow.dev/retry-on-signal#without-naming-the-signal)
+
 `child()` takes the same method. A child that fails or expires parks its **parent** on the signal,
 and the signal — delivered to the parent — starts the child again as a new run at the same ordinal.
 `Failed` and `Expired` are retried, `Cancelled` is not, and `$only` / `$when` judge the failure the
@@ -598,6 +614,9 @@ SagaFlow::query()->whereAwaitingSignal('approval')->get();
 
 // runs holding a step or a child parked by retryOnSignal()
 SagaFlow::query()->whereAwaitingRetrySignal('balance-refilled')->handles();
+
+// the runs an operator picked by id; no id given matches no run
+SagaFlow::query()->whereId(...$runIds)->signalable()->handles();
 ```
 
 Status shortcuts: `running()`, `waiting()`, `completed()`, `failed()`, plus `active()` /
@@ -794,6 +813,7 @@ reaches somewhere you chose rather than nowhere. See
 | `saga-flow:list {--status=} {--tag=} {--workflow=} {--limit=50}` | List runs, newest first, with filters.                           |
 | `saga-flow:show {run} {--compact}`                               | Inspect a run: header, actions, signals, compensations, history. |
 | `saga-flow:signal {run} {name} {--payload=}`                     | Deliver a JSON-payload signal and wake the run.                  |
+| `saga-flow:signal-retry {run} {--signal=} {--payload=}`          | Deliver the retry signal the run is parked on and wake it.       |
 | `saga-flow:cancel {run} {--compensate}`                          | Cancel a non-terminal run; `--compensate` rolls back first.      |
 | `saga-flow:kick {run}`                                           | Re-drive a stuck run and the step it is parked on.               |
 | `saga-flow:monitor`                                              | Expire overdue runs/actions and time out waits.                  |

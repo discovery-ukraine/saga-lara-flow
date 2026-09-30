@@ -108,7 +108,8 @@ trying to wake.
 
 A signal can also restart a step that already failed, instead of being awaited at a point in
 `handle()`. `->retryOnSignal('balance-refilled')` on an action parks it when it fails and re-runs it
-when that signal is delivered — using the same delivery API as everything above. See
+when that signal is delivered — using the same delivery API as everything above, or
+`signalRetry()`, which reads the name off the parked step. See
 [Retry on signal](./retry-on-signal.md).
 
 You can also deliver from the CLI — see [Artisan commands](./artisan-commands.md):

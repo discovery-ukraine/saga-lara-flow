@@ -14,6 +14,7 @@ routes** — everything is done through Artisan or the `SagaFlow` facade.
 | `saga-flow:list {--status=} {--tag=} {--workflow=} {--limit=50}` | List runs, newest first, with filters. |
 | `saga-flow:show {run} {--compact}` | Inspect a run: header, actions, signals, compensations, history. |
 | `saga-flow:signal {run} {name} {--payload=}` | Deliver a JSON-payload signal and wake the run. |
+| `saga-flow:signal-retry {run} {--signal=} {--payload=}` | Deliver the retry signal the run is parked on and wake it. |
 | `saga-flow:cancel {run} {--compensate}` | Cancel a non-terminal run; `--compensate` rolls back first. |
 | `saga-flow:kick {run}` | Manually re-drive a stuck run and the step it is parked on. |
 | `saga-flow:monitor` | Expire overdue runs/actions and time out waits. |
@@ -34,6 +35,9 @@ php artisan saga-flow:show 01JABCDEF...
 # Approve a run waiting on a signal
 php artisan saga-flow:signal 01JABCDEF... approval --payload='{"approved":true}'
 
+# Retry a parked step or child without naming its signal
+php artisan saga-flow:signal-retry 01JABCDEF...
+
 # Cancel and roll back
 php artisan saga-flow:cancel 01JABCDEF... --compensate
 
@@ -43,7 +47,9 @@ php artisan saga-flow:kick 01JABCDEF...
 
 A run parked by [retry on signal](./retry-on-signal.md) shows up as `waiting` in `saga-flow:list`,
 annotated with the signal it needs; `saga-flow:show` adds a **Retry** column with the signal, the
-spent budget, and the wait deadline. `saga-flow:signal` delivers the signal that restarts the step.
+spent budget, and the wait deadline. `saga-flow:signal-retry` delivers the signal that restarts the
+step without being told its name; `saga-flow:signal` delivers it by name. A run with nothing parked
+on a retry, a finished run and a run rolling back are refused with a warning.
 
 `saga-flow:kick` re-drives one run by hand. It refills the repair budget of the run and its
 unfinished steps and puts a sequential step's job back on the queue, which is the manual answer to a
