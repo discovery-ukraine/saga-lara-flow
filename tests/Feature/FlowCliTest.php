@@ -148,7 +148,7 @@ it('warns when the run has nothing parked on a retry', function () {
     $run = SagaFlow::create(SignalOnlyWorkflow::class)->runSync();
 
     $this->artisan('saga-flow:signal-retry', ['run' => $run->id])
-        ->expectsOutputToContain('no step or child waiting on a retry signal')
+        ->expectsOutputToContain('no step or child parked on a retry that a signal can still end')
         ->assertSuccessful();
 
     expect($run->fresh()->status)->toBe(FlowStatus::Waiting)
