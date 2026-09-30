@@ -152,7 +152,7 @@ saw it in flight, and the close finds it complete.
 ## A parent that is rolling back
 
 No child starts under a parent that is rolling back. The seam reads the parent's status from the
-connection that wrote it and ends the pass instead: a rollback plans the stack it will undo once, so
+connection that wrote it and ends the pass instead: a rollback unwinds the stack it planned, so
 a child started afterwards would run to completion outside that plan, and under the default
 `Abandon` policy nothing closes it. The child's run and its link are written together, so an ordinal
 that does not finish leaves behind no run without an owner. The `ChildWorkflowStarted` event and the
