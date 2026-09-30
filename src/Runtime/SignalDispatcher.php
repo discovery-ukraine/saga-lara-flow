@@ -70,6 +70,9 @@ readonly class SignalDispatcher
      */
     public function deliverRetry(FlowRun $flowRun, array $payload): array
     {
+        // The waits first: a claim reaches only a wait this call saw open, never one that a
+        // later cycle of the same retry opens at its ordinal.
+        $waits = $this->parked->openWaits($flowRun);
         $names = $this->parked->of($flowRun);
 
         // Read after the parked rows: a run that ended in between settled them, and says so.
@@ -81,7 +84,7 @@ readonly class SignalDispatcher
 
         $signals = [];
 
-        foreach ($this->parked->openWaits($flowRun) as $wait) {
+        foreach ($waits as $wait) {
             $signal = $this->recorder->fulfilWaitingSignal($wait, $payload);
 
             if ($signal !== null) {

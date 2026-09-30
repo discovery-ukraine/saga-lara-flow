@@ -244,6 +244,59 @@ it('fills only the wait of a park it found', function (): void {
         ->and($held->status)->toBe(SignalStatus::Waiting);
 });
 
+it('fills no wait but the ones at its parks', function (): void {
+    $run = parkedOn('balance-refilled');
+
+    // No workflow holds another wait open beside a park, so this one is written by hand.
+    $other = FlowSignal::query()
+        ->where('flow_run_id', $run->id)
+        ->firstOrFail()
+        ->replicate()
+        ->fill(['wait_sequence' => 50, 'name' => 'approval']);
+    $other->save();
+
+    SagaFlow::loadFlow($run->id)->signalRetry();
+
+    expect($other->fresh()->status)->toBe(SignalStatus::Waiting)
+        ->and(FlowSignal::query()->where('flow_run_id', $run->id)->where('wait_sequence', 1)->firstOrFail()->status)
+        ->toBe(SignalStatus::Received);
+});
+
+it('fills no wait of a retry cycle that began after it looked', function (): void {
+    $run = parkedOn('balance-refilled');
+
+    // Another delivery ends the park just as this call first reads it, and the retried step
+    // fails and parks again at the same ordinal before this call fills anything.
+    FlakyPaymentAction::$failures = 2;
+
+    $raced = false;
+
+    $race = function () use ($run, &$raced): void {
+        if (! $raced) {
+            $raced = true;
+
+            SagaFlow::loadFlow($run->id)->signal('balance-refilled');
+            drainQueue();
+        }
+    };
+
+    ActionRun::retrieved(fn (ActionRun $step) => $step->flow_run_id === $run->id ? $race() : null);
+    FlowSignal::retrieved(fn (FlowSignal $wait) => $wait->flow_run_id === $run->id ? $race() : null);
+
+    SagaFlow::loadFlow($run->id)->signalRetry();
+
+    drainQueue();
+
+    $step = ActionRun::query()->where('flow_run_id', $run->id)->where('sequence', 1)->firstOrFail();
+
+    // One cycle, the other delivery's; the new park still waits for a signal of its own.
+    expect($raced)->toBeTrue()
+        ->and($step->status)->toBe(ActionStatus::AwaitingRetry)
+        ->and($step->retry_signal_attempts)->toBe(1)
+        ->and(FlowSignal::query()->where('flow_run_id', $run->id)->orderByDesc('id')->firstOrFail()->status)
+        ->toBe(SignalStatus::Waiting);
+});
+
 it('reads whether the wait is still open from the write connection', function (): void {
     config()->set('saga-lara-flow.models.flow_signal', LaggingReplicaFlowSignal::class);
 
