@@ -2,6 +2,118 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.3.0 - 2026-09-30
+
+> **⚠️ Run `php artisan migrate` immediately after upgrading.** One migration ships with this
+release — `add_retry_on_signal_to_flow_children` — and the engine writes its columns from the
+moment it starts. It runs from the package; do **not** `vendor:publish` it.
+
+This release includes everything in 1.2.1.
+
+Most of the fixes below close ways a rollback could report a complete unwind over steps that stayed
+applied. The class is narrowed, not closed: the paths still known are listed under **Still open**.
+
+### Fixed: nothing new starts under a run that is rolling back (#63, #64, #65)
+
+A run in `Cancelling` still accepted signals it could never consume (#63). A resume queued before
+the sweep expired a run planned and ran the whole rollback a second time, so every compensation
+executed twice (#64). And a replay that outlived the rollback still started child workflows and
+called side-effect factories (#65).
+
+A signal to such a run now raises `CannotSignalCancellingFlowException` and writes nothing; it and
+`CannotSignalTerminalFlowException` share a new parent, `CannotSignalFlowException`. No pass is
+driven for a run outside `Pending`, `Running` and `Waiting`, and a child or a side effect at a new
+ordinal reads the run's status from the writing connection before it starts.
+
+### Fixed: a rollback plan that came back short (#62, #49, #60, #59)
+
+- **A step that completed between the plan and the transition** was in no stack (#62). The plan
+  that is unwound is now drawn with the run already in `Cancelling`, merged with the earlier one;
+  the anomaly log gains `replan_failed` and `replan_incomplete`.
+- **A workflow raising an engine exception itself** ended the planning replay as if a seam had
+  raised it (#49). Planning now ends only on an exception the engine raised in that pass; any other
+  throw surfaces out of `compensate()` with the run untouched.
+- **A lagging read replica** could end the planning replay early (#60). The package's connection
+  now reads from the writer for the length of that pass.
+- **An `Expired` child** was parked on as though still in flight (#59). The parent now gets
+  `ChildWorkflowExpiredException`, and `->continueParentOnFailure()` carries it past.
+
+### Fixed: `saga-flow:kick` reaches the step the doctor gave up on (#67)
+
+`repair.max_attempts` ended a step's recovery for good, and a kick only re-woke the run, which
+parked on the same step again. A kick now refills the repair budget of the run and its unfinished
+steps and sends the parked sequential step its own job.
+
+### Fixed: a nested `drive()` took over the caller's replay state (#36)
+
+An action that started a saga with `runSync()` shared the outer pass's `FlowRuntime`, rewinding its
+ordinals and emptying its compensation stack. Every pass now gets a runtime of its own, and
+`FlowRuntime` is no longer bound in the container.
+
+### Fixed: child runs (#83, #84)
+
+- **A child ignored its own class** — no `#[Tag]`s, no `#[Flow]` name or version, no deadline, and
+  `#[FlowQueue]` did not apply (#84). A child is now created from its class as a root run is.
+- **A queued parent never woke when its child ran on a `sync` connection**, or when a child on
+  another worker ended before the parent had written `Waiting` (#83). A job that runs inside the
+  pass that sent it now resolves in that pass, and parent and child each read the other from the
+  writing connection.
+- **A queued rollback went to the default connection and queue** rather than the run's own, and
+  an expired run with nothing of its own to undo closed its `Cancel` children without rolling them
+  back.
+
+### Added
+
+- **`->compensateWith()` on a child (#22)** — an undo on the parent's stack for a child that
+  completed. [Compensating a child](https://sagalaraflow.dev/child-workflows#compensating-a-child)
+- **`->retryOnSignal()` on a child (#21)** — a child that fails or expires parks its parent on a
+  signal, and the signal starts the child again at the same ordinal.
+  [Retrying a child](https://sagalaraflow.dev/retry-on-signal#retrying-a-child)
+- **`->withTags()` (#85) and `->expiresAt()` (#84) on a child.**
+  [A child's own class](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+- **`signalRetry()`, `whereId()` and `saga-flow:signal-retry` (#34)** — retry runs picked by id
+  without naming the signal each one waits on.
+  [Without naming the signal](https://sagalaraflow.dev/retry-on-signal#without-naming-the-signal)
+- **`whereTagIn()` (#86)** — runs whose tag holds any of several values.
+  [Tags & querying](https://sagalaraflow.dev/tags-and-querying#filters)
+
+### Behaviour changes
+
+They are in
+[UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md). Two ask
+something of you:
+
+- **Children now expire** when their class carries `#[FlowTimeout]` or you set
+  `monitor.expiration.defaults.run`.
+- **A child whose class carries `#[FlowQueue]`** runs where the attribute says, so a worker has to
+  listen there.
+
+### Recommended
+
+- **Turn `repair.enabled` on in production.** Still off by default, and still what recovers a step
+  whose queue job was lost to a dying process.
+- **Set `'sticky' => true` on a read/write split connection.** Planning a rollback reads from the
+  writer on its own; an ordinary replay reads through your routing (#82).
+
+### Still open
+
+Named so this release does not read wider than it is; each is on the
+[1.4.0 milestone](https://github.com/discovery-ukraine/saga-lara-flow/milestone/3) with its
+measurement:
+
+- **A rollback can still report complete over an applied step**: one that completes while an empty
+  first plan is drawn (#73), and a child that completes between its parent's plan and its close
+  (#93).
+- **Child close and rollback ownership**: a close intent lost with a failed close job (#77), and a
+  child rolled back twice when its parent closes mid-rollback (#90).
+- **Ownership and time**: a conditional write cannot fence a cancellation still in flight (#54),
+  reclaim decides on time alone (#32), and deadlines are enforced only by the sweep (#19).
+- **Recovery gaps**: a `Pending` run whose first job was lost (#96), a step park trusted without
+  reading it back (#94), an ordinary replay on a lagging replica (#82), a failing parallel member on
+  `sync` (#98), and the planning replay still writing tags (#50).
+
+**Full Changelog**: https://github.com/discovery-ukraine/saga-lara-flow/compare/v1.2.1...v1.3.0
+
 ## v1.2.1 - 2026-09-13
 
 > ### ⚠️ Run `php artisan migrate`
@@ -54,6 +166,7 @@ engine writes their columns from the moment it starts.
 ```bash
 composer update discovery-ukraine/saga-lara-flow
 php artisan migrate
+
 
 
 ```
@@ -294,6 +407,7 @@ php artisan migrate
 
 
 
+
 ```
 Deploy the two together. See [UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md).
 
@@ -314,6 +428,7 @@ $this->action(ChargeCard::class, $orderId)
         only: [InsufficientBalanceException::class],  // null = park on any exception
     )
     ->run();
+
 
 
 
@@ -348,6 +463,7 @@ $this->tags([
     'attempt'  => 2,      // int values are cast to string
     'orders'   => null,   // a tag with no value
 ]);
+
 
 
 
@@ -492,6 +608,7 @@ fails partway through, registered compensations roll back the completed work in 
 composer require discovery-ukraine/saga-lara-flow
 php artisan vendor:publish --tag="saga-lara-flow-migrations"
 php artisan migrate
+
 
 
 
