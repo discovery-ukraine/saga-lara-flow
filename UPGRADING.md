@@ -16,6 +16,9 @@
   `FlowEventType::ChildRetried`, written for a child retried on a signal. A `match` that was
   exhaustive needs the new arms.
   [Statuses](https://sagalaraflow.dev/statuses)
+- **If you extend `FlowQuery` and override `whereTag()`** *(low)* — its `$value` widens to
+  `string|int|null`. PHP refuses an override whose signature no longer matches, so widen yours.
+  [Tags and querying](https://sagalaraflow.dev/tags-and-querying#filters)
 - **If a child class carries `#[FlowTimeout]`, or you set `monitor.expiration.defaults.run`**
   *(medium)* — children expire. A child's deadline is its class's `#[FlowTimeout]`, else the
   configured default, and the sweep expires it as it does a root run; the parent then gets
@@ -152,6 +155,10 @@ Nothing to do; each is additive.
   `NoAwaitingRetrySignalException`, a `CannotSignalFlowException`, and `signalRetryIfRunning()`
   answers `false` for it.
   [Retry on signal](https://sagalaraflow.dev/retry-on-signal#without-naming-the-signal)
+- **`whereTagIn()`** — runs whose tag holds any of several values, e.g. the runs of a few picked
+  customers. `whereTag()` takes an `int` value as well; both compare values as the strings tags are
+  stored as.
+  [Tags and querying](https://sagalaraflow.dev/tags-and-querying#filters)
 
 ## From 1.2.0 to 1.2.1
 

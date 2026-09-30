@@ -615,6 +615,9 @@ SagaFlow::query()->whereAwaitingSignal('approval')->get();
 // runs holding a step or a child parked by retryOnSignal()
 SagaFlow::query()->whereAwaitingRetrySignal('balance-refilled')->handles();
 
+// runs whose tag holds any of these values; an empty array matches no run
+SagaFlow::query()->whereTagIn('customer', $customerIds)->get();
+
 // the runs an operator picked by id; no id given matches no run
 SagaFlow::query()->whereId(...$runIds)->signalable()->handles();
 ```

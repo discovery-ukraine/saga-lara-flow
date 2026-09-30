@@ -83,7 +83,10 @@ $stuck = SagaFlow::query()
 
 ### Filters
 
-- `whereTag(string $key, ?string $value = null)`
+- `whereTag(string $key, string|int|null $value = null)` — a null `$value` matches any value.
+- `whereTagIn(string $key, array $values)` — runs whose tag holds any of these values. Called with
+  an empty array, it matches no run. Tag values are stored as strings, and both methods compare an
+  `int` as the string it was written as: `7` finds `tag('customer', 7)`, not `'007'`.
 - `whereStatus(FlowStatus ...$statuses)` and shortcuts `running()`, `waiting()`, `completed()`, `failed()`
 - `active()` (alias `signalable()`) — runs that can still receive a signal: `Pending`, `Running`,
   or `Waiting`. Use this to find a run to deliver a signal to: a flow parked on `awaitSignal()` is
@@ -104,6 +107,9 @@ SagaFlow::query()->whereAwaitingSignal('approval')->get();
 
 // only steps that failed and parked
 SagaFlow::query()->whereAwaitingRetrySignal('balance-refilled')->handles();
+
+// the runs of a few picked customers
+SagaFlow::query()->whereTagIn('customer', $customerIds)->get();
 
 // the parked runs an operator picked, whatever signal each one waits on
 SagaFlow::query()->whereAwaitingRetrySignal()->whereId(...$runIds)->handles();

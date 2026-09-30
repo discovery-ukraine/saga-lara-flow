@@ -84,6 +84,41 @@ it('filters by tag key and value', function () {
     expect(SagaFlow::query()->whereTag('order')->count())->toBe(3);
 });
 
+it('filters by any of several values of one tag', function () {
+    makeQueryableRun(FlowStatus::Running, TestWorkflow::class, ['order' => '3', 'shop' => '1']);
+
+    expect(SagaFlow::query()->whereTagIn('order', ['1', '2'])->get()->pluck('id')->all())
+        ->toEqualCanonicalizing([$this->running->id, $this->failed->id, $this->completed->id])
+        ->and(SagaFlow::query()->whereTagIn('order', ['first' => '2', 'second' => '9'])->get()->pluck('id')->all())
+        ->toBe([$this->failed->id])
+        ->and(SagaFlow::query()->whereTagIn('shop', ['2'])->count())->toBe(0)
+        // The key bounds the values: '1' under another key does not count.
+        ->and(SagaFlow::query()->whereTagIn('shop', ['1'])->count())->toBe(1)
+        // Narrowed by the filters around it, before and after alike.
+        ->and(SagaFlow::query()->whereTagIn('order', ['1'])->failed()->count())->toBe(0)
+        ->and(SagaFlow::query()->failed()->whereTagIn('order', ['1'])->count())->toBe(0)
+        ->and(SagaFlow::query()->whereWorkflow(TwoStepWorkflow::class)->whereTagIn('order', ['1', '2'])->get()->pluck('id')->all())
+        ->toBe([$this->completed->id]);
+});
+
+it('matches no run when no tag value is given', function () {
+    expect(SagaFlow::query()->whereTagIn('order', [])->count())->toBe(0)
+        ->and(SagaFlow::query()->whereTagIn('order', [])->get()->all())->toBe([]);
+});
+
+it('compares a numeric tag value as the string it was written as', function () {
+    $seven = makeQueryableRun(FlowStatus::Running, TestWorkflow::class);
+    SagaFlow::query()->whereId($seven->id)->handles()->first()->tag('customer', 7);
+    makeQueryableRun(FlowStatus::Running, TestWorkflow::class, ['customer' => '007']);
+
+    // Handed an integer, MySQL compares the column as a number and takes '007' for 7; SQLite and
+    // PostgreSQL compare it as text either way, so only MySQL tells the cast apart.
+    expect(SagaFlow::query()->whereTagIn('customer', [7, 12])->get()->pluck('id')->all())
+        ->toBe([$seven->id])
+        ->and(SagaFlow::query()->whereTag('customer', 7)->get()->pluck('id')->all())
+        ->toBe([$seven->id]);
+});
+
 it('combines filters', function () {
     $first = SagaFlow::query()
         ->whereWorkflow(TestWorkflow::class)

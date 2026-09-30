@@ -34,14 +34,29 @@ readonly class FlowQuery
         private Builder $builder,
     ) {}
 
-    public function whereTag(string $key, ?string $value = null): static
+    public function whereTag(string $key, string|int|null $value = null): static
     {
         $this->builder->whereHas('tags', function (Builder $query) use ($key, $value): void {
             $query->where('key', $key);
 
             if ($value !== null) {
-                $query->where('value', $value);
+                $query->where('value', (string) $value);
             }
+        });
+
+        return $this;
+    }
+
+    /**
+     * Runs whose tag holds any of the given values. Given none, matches no run.
+     *
+     * @param  array<array-key, string|int>  $values
+     */
+    public function whereTagIn(string $key, array $values): static
+    {
+        $this->builder->whereHas('tags', function (Builder $query) use ($key, $values): void {
+            $query->where('key', $key)
+                ->whereIn('value', array_map(strval(...), $values));
         });
 
         return $this;
