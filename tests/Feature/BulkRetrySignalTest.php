@@ -187,6 +187,35 @@ it('wakes a run whose delivery is already in without delivering again', function
     expect(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Completed);
 });
 
+it('leaves no floating signal when another delivery closes the wait first', function (): void {
+    $run = parkedOn('balance-refilled');
+
+    $signals = signalRows();
+
+    // Another process delivers between this call reading the wait open and writing into it.
+    $competed = false;
+
+    FlowSignal::retrieved(function (FlowSignal $wait) use (&$competed): void {
+        if (! $competed && $wait->status === SignalStatus::Waiting) {
+            $competed = true;
+
+            FlowSignal::query()->whereKey($wait->getKey())->update([
+                'status' => SignalStatus::Received,
+                'received_at' => now(),
+            ]);
+        }
+    });
+
+    SagaFlow::loadFlow($run->id)->signalRetry();
+
+    expect($competed)->toBeTrue()
+        ->and(signalRows())->toBe($signals);
+
+    drainQueue();
+
+    expect(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Completed);
+});
+
 it('reads whether the wait is still open from the write connection', function (): void {
     config()->set('saga-lara-flow.models.flow_signal', LaggingReplicaFlowSignal::class);
 

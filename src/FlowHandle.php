@@ -173,7 +173,8 @@ readonly class FlowHandle
 
     /**
      * Safe variant of signalRetry(): reports whether a signal was delivered, and answers
-     * false wherever signalRetry() refuses — a run with nothing parked included.
+     * false for a run signalRetry() refuses — one with nothing parked included. A call from
+     * the run's own retry predicate still throws, as it does for signalIfRunning().
      *
      * @param  array<int|string, mixed>  $payload
      */

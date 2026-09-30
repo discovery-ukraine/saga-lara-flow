@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 
 final readonly class ParkedRetrySignals
@@ -49,26 +50,31 @@ final readonly class ParkedRetrySignals
     }
 
     /**
-     * @return array<string, bool> keyed by signal name: whether its wait is still open
+     * @return list<string>
      */
     public function of(FlowRun $flowRun): array
     {
-        $names = $this->read([$flowRun->id], fromWriter: true)[$flowRun->id] ?? [];
+        return $this->read([$flowRun->id], fromWriter: true)[$flowRun->id] ?? [];
+    }
 
+    /**
+     * The waits still open for these signals, read from the writer.
+     *
+     * @param  list<string>  $names
+     * @return Collection<int, FlowSignal>
+     */
+    public function openWaits(FlowRun $flowRun, array $names): Collection
+    {
         /** @var class-string<FlowSignal> $signals */
         $signals = config('saga-lara-flow.models.flow_signal');
 
-        $open = $names === [] ? [] : $signals::query()
+        return $signals::query()
             ->useWritePdo()
             ->where('flow_run_id', $flowRun->id)
             ->whereIn('name', $names)
             ->where('status', SignalStatus::Waiting)
             ->whereNotNull('wait_sequence')
-            ->get(['name'])
-            ->pluck('name')
-            ->all();
-
-        return array_combine($names, array_map(fn (string $name): bool => in_array($name, $open, true), $names));
+            ->get();
     }
 
     /**

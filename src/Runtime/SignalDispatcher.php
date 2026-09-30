@@ -39,7 +39,16 @@ readonly class SignalDispatcher
     {
         $this->refuseUnsignalable($this->reread($flowRun));
 
-        $signal = $this->store($flowRun, $name, $payload);
+        $waitingSignal = $this->repository->earliestWaiting($flowRun->id, $name);
+
+        $signal = $waitingSignal === null
+            ? null
+            : $this->recorder->fulfilWaitingSignal($waitingSignal, $payload);
+
+        // No open wait-signal, or the one we found was claimed by a retry seam while
+        // we were writing: keep the delivery as a floating Received row rather than
+        // attaching it to a spent signal, where nothing would look for it again.
+        $signal ??= $this->recorder->storeReceivedSignal($flowRun, $name, $payload);
 
         $this->wake($flowRun);
 
@@ -47,8 +56,9 @@ readonly class SignalDispatcher
     }
 
     /**
-     * Deliver the signal every open wait of the run's parked steps and children waits on, read
-     * from the writer, and wake the run once all of them are recorded.
+     * Fill the open waits of the run's parked steps and children, read from the writer, and
+     * wake the run once. A park whose wait already holds its delivery, or has it closed while
+     * this runs, gets the wake alone: a floating signal would be left for a later awaitSignal().
      *
      * @param  array<int|string, mixed>  $payload
      * @return list<FlowSignal>
@@ -60,44 +70,28 @@ readonly class SignalDispatcher
      */
     public function deliverRetry(FlowRun $flowRun, array $payload): array
     {
-        $parked = $this->parked->of($flowRun);
+        $names = $this->parked->of($flowRun);
 
         // Read after the parked rows: a run that ended in between settled them, and says so.
         $this->refuseUnsignalable($this->reread($flowRun));
 
-        if ($parked === []) {
+        if ($names === []) {
             throw NoAwaitingRetrySignalException::for($flowRun);
         }
 
         $signals = [];
 
-        foreach ($parked as $name => $open) {
-            // A wait that already holds its delivery needs only the resume it never got.
-            if ($open) {
-                $signals[] = $this->store($flowRun, $name, $payload);
+        foreach ($this->parked->openWaits($flowRun, $names) as $wait) {
+            $signal = $this->recorder->fulfilWaitingSignal($wait, $payload);
+
+            if ($signal !== null) {
+                $signals[] = $signal;
             }
         }
 
         $this->wake($flowRun);
 
         return $signals;
-    }
-
-    /**
-     * @param  array<int|string, mixed>  $payload
-     */
-    private function store(FlowRun $flowRun, string $name, array $payload): FlowSignal
-    {
-        $waitingSignal = $this->repository->earliestWaiting($flowRun->id, $name);
-
-        $signal = $waitingSignal === null
-            ? null
-            : $this->recorder->fulfilWaitingSignal($waitingSignal, $payload);
-
-        // No open wait-signal, or the one we found was claimed by a retry seam while
-        // we were writing: keep the delivery as a floating Received row rather than
-        // attaching it to a spent signal, where nothing would look for it again.
-        return $signal ?? $this->recorder->storeReceivedSignal($flowRun, $name, $payload);
     }
 
     /**
