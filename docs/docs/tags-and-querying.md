@@ -105,7 +105,7 @@ $stuck = SagaFlow::query()
 // everything blocked on this name, planned waits included
 SagaFlow::query()->whereAwaitingSignal('approval')->get();
 
-// only steps that failed and parked
+// only steps and children that failed and parked
 SagaFlow::query()->whereAwaitingRetrySignal('balance-refilled')->handles();
 
 // the runs of a few picked customers
@@ -115,20 +115,20 @@ SagaFlow::query()->whereTagIn('customer', $customerIds)->get();
 SagaFlow::query()->whereAwaitingRetrySignal()->whereId(...$runIds)->handles();
 ```
 
-### Waits and parked steps
+### Waits and parked retries {#waits-and-parked-steps}
 
 Both seams park the run as `Waiting` and open a signal row, so `flow_signals` alone cannot tell them
-apart. What separates them lives on `action_runs`:
+apart. What separates them lives on `action_runs`, or on `flow_children` for a child:
 
 | | `awaitSignal('approval')` | `retryOnSignal('balance-refilled')` |
 |---|---|---|
 | `flow_runs.status` | `waiting` | `waiting` |
 | row in `flow_signals` | `approval / waiting` | `balance-refilled / waiting` |
-| row in `action_runs` at that wait | none | `awaiting_retry`, `retry_signal` set |
-| failure snapshot for operators | none | `exception: {class, message, code}` |
+| row at that wait | none | `awaiting_retry` in `action_runs` or `flow_children`, `retry_signal` set |
+| failure snapshot for operators | none | `exception: {class, message, code}`, on the step or the child's run |
 
 The two also stop matching at different moments. Delivery marks the wait `Received` while the parked
-step keeps its `awaiting_retry` status until replay resumes the run. In that gap only
+row keeps its `awaiting_retry` status until replay resumes the run. In that gap only
 `whereAwaitingRetrySignal()` matches — which is what makes it the filter that finds a run whose
 signal arrived but whose resume never did. A timeout marks the wait `TimedOut`, and from then on
 neither matches: the next replay gives the retry up, and no signal can change that.

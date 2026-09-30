@@ -46,10 +46,11 @@ php artisan saga-flow:kick 01JABCDEF...
 ```
 
 A run parked by [retry on signal](./retry-on-signal.md) shows up as `waiting` in `saga-flow:list`,
-annotated with the signal it needs; `saga-flow:show` adds a **Retry** column with the signal, the
-spent budget, and the wait deadline. `saga-flow:signal-retry` delivers the signal that restarts the
-step without being told its name; `saga-flow:signal` delivers it by name. A run with nothing parked
-on a retry, a finished run and a run rolling back are refused with a warning.
+annotated with the signal it needs; for a parked step, `saga-flow:show` adds a **Retry** column with
+the signal, the spent budget, and the wait deadline. `saga-flow:signal-retry` delivers the signal
+that restarts the step or child without being told its name; `saga-flow:signal` delivers it by name.
+A run with nothing parked on a retry, a finished run and a run rolling back are refused with a
+warning.
 
 `saga-flow:kick` re-drives one run by hand. It refills the repair budget of the run and its
 unfinished steps and puts a sequential step's job back on the queue, which is the manual answer to a

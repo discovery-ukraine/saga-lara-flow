@@ -4,161 +4,88 @@
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading
 >
-> One migration ships with this release — `add_retry_on_signal_to_flow_children` — and the engine
-> writes its columns from the moment it starts. Deploy it together with the code. It runs from the
-> package — do **not** `vendor:publish` it, or `migrate` would try both copies.
+> `add_retry_on_signal_to_flow_children` ships with this release, and the engine writes its columns
+> from the moment it starts. It runs from the package — do **not** `vendor:publish` it.
 
 ### Action required
 
-- **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — `ChildStatus::Expired` and
-  `FlowEventType::ChildExpired` are new, written for a child that expired, and so are
-  `ChildStatus::AwaitingRetry`, `FlowEventType::ChildAwaitingRetry` and
-  `FlowEventType::ChildRetried`, written for a child retried on a signal. A `match` that was
-  exhaustive needs the new arms.
-  [Statuses](https://sagalaraflow.dev/statuses)
-- **If you extend `FlowQuery` and override `whereTag()`** *(low)* — its `$value` widens to
-  `string|int|null`. PHP refuses an override whose signature no longer matches, so widen yours.
-  [Tags and querying](https://sagalaraflow.dev/tags-and-querying#filters)
 - **If a child class carries `#[FlowTimeout]`, or you set `monitor.expiration.defaults.run`**
-  *(medium)* — children expire. A child's deadline is its class's `#[FlowTimeout]`, else the
-  configured default, and the sweep expires it as it does a root run; the parent then gets
-  `ChildWorkflowExpiredException`. To keep one child open, pass it a far-future `->expiresAt()`.
-  Children started before the upgrade keep no deadline.
+  *(medium)* — children now expire. A child's deadline is its class's `#[FlowTimeout]`, else the
+  configured default, and the parent gets `ChildWorkflowExpiredException`. To keep a child open,
+  pass it a far-future `->expiresAt()`. Children started before the upgrade keep no deadline.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
-- **If a child class carries `#[FlowQueue]`** *(medium)* — the child moves to the connection and
-  queue it names, each field on its own, instead of following its parent. A worker has to listen
-  there, or the child stays `Pending`. Children started before the upgrade keep their parent's.
+- **If a child class carries `#[FlowQueue]`** *(medium)* — the child runs on the connection or
+  queue it names rather than its parent's, so a worker has to listen there. Children started
+  before the upgrade keep their parent's.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+- **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — add the new cases:
+  `ChildStatus::Expired`, `ChildStatus::AwaitingRetry`, `FlowEventType::ChildExpired`,
+  `FlowEventType::ChildAwaitingRetry` and `FlowEventType::ChildRetried`.
+  [Statuses](https://sagalaraflow.dev/statuses)
+- **If you extend `FlowQuery` and override `whereTag()`** *(low)* — `$value` widens to
+  `string|int|null`; widen your override to match.
 
 ### Behaviour changed
 
-Nothing below asks anything of you. Each links to the page that covers it.
+Nothing below asks anything of you.
 
-- **A signal is refused by a run that is rolling back.** Delivery is held to the three statuses
-  `signalable()` already named — `Pending`, `Running`, `Waiting` — so `Cancelling` raises
+- **A run that is rolling back refuses signals.** `signal()` raises
   `CannotSignalCancellingFlowException` and writes nothing. It and
-  `CannotSignalTerminalFlowException` share a new parent, `CannotSignalFlowException`; catch that
-  to cover both, and `signalIfRunning()` already does.
+  `CannotSignalTerminalFlowException` now extend `CannotSignalFlowException`; `signalIfRunning()`
+  returns `false` for both. [Signals](https://sagalaraflow.dev/signals)
+- **A signal to a pruned run raises `FlowNotFoundException`**; `signalIfRunning()` returns `false`.
   [Signals](https://sagalaraflow.dev/signals)
-- **A signal to a run that has been pruned raises `FlowNotFoundException`** rather than writing a
-  row that references nothing. `signalIfRunning()` absorbs it and returns `false`, as it does every
-  other refusal. [Signals](https://sagalaraflow.dev/signals)
-- **A run that is rolling back is no longer driven.** A pass begins only for a run in one of the
-  three statuses `mayStartWork()` names, decided on the writing connection, and the deadline is
-  weighed after that. A resume queued before the sweep expired the run is turned away rather than
-  planning a second rollback, so each compensation runs once. `drive()` returns such a run as the
-  writer holds it instead of raising `InvalidTransitionException`, and `saga-flow:kick` reports it
-  rather than claiming a re-drive. [Statuses](https://sagalaraflow.dev/statuses)
-- **A replay that outlived a rollback starts no child and calls no side-effect factory.** Both seams
-  read the run's status from the writing connection before they begin, and end the pass when it is
-  no longer one of the three statuses `mayStartWork()` names. A child's run and its link are written
-  in one transaction; the `ChildWorkflowStarted` event and the child's job both follow that commit,
-  so a listener now runs outside that transaction rather than inside it.
-  [Child workflows](https://sagalaraflow.dev/child-workflows)
-- **The rollback that is unwound is planned with the run already in `Cancelling`.** A step whose
-  owed queue attempt completed while an earlier plan was being drawn is compensated rather than left
-  applied under a run reporting a complete unwind. An ordinal the later plan came back without is
-  restored from the earlier one and journalled as `replan_incomplete`; a replay that throws is
-  journalled as `replan_failed` and the rollback goes ahead on the plan in hand.
-  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
-- **A kick reaches the step, not just the run.** `saga-flow:kick` / `SagaFlow::kick()` now refills
-  the repair budget of the run and of every step it has not finished, and sends a fresh job for the
-  sequential step the run is parked on — the rows R1 and R3 read (`Pending`, or `Running` past its
-  reclaim deadline), without their throttle. The refilled rows are held off for `grace_seconds`, as
-  a freshly dispatched row is. `repair.max_attempts` therefore holds the automatic pass off rather
-  than ending a run's recovery. The claim still decides whether that job runs the
-  step, and a parallel block gets its budget back and nothing else.
-  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
-- **A run driven while another is being driven gets replay state of its own.** An action whose body
-  starts a saga, or a `runSync()` written inside `handle()`, no longer rewinds the ordinal counter,
-  empties the compensation stack or unbinds the run of the pass that reached it. `FlowRuntime` is no
-  longer registered in the container — the executor makes one for every pass — so resolving it
-  yourself answers with an instance no pass is driven with.
+- **Nothing new starts under a run that is rolling back.** A stale resume no longer runs the
+  rollback a second time, and a replay still in flight starts no child and calls no side-effect
+  factory. `drive()` returns such a run rather than raising `InvalidTransitionException`.
+  [Statuses](https://sagalaraflow.dev/statuses)
+- **A rollback is planned after the run enters `Cancelling`**, so a step that completed meanwhile
+  is compensated too. [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
+- **A rollback plan ends only where the engine raised the exception.** A workflow that throws
+  `ActionFailedException` or a sibling itself makes `compensate()` surface the throw rather than
+  unwind a shorter plan. [Determinism rules](https://sagalaraflow.dev/determinism-rules)
+- **A rollback is planned from the write connection**, so a lagging read replica cannot shorten it.
+  [Read replicas](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
+- **`saga-flow:kick` reaches the stuck step.** It refills the repair budget and re-sends the job of
+  the step the run is parked on, so `repair.max_attempts` no longer ends a run's recovery.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
+- **`FlowRuntime` is no longer bound in the container.** Each pass makes its own, so a `runSync()`
+  inside an action leaves the outer run intact.
   [Synchronous execution](https://sagalaraflow.dev/synchronous-execution)
-- **A business exception your own code raises now surfaces instead of shortening a rollback plan.**
-  The replay that rebuilds a compensation stack ends only where one of the engine's seams raises
-  `ActionFailedException`, `FlowExpiredException`, `AwaitSignalTimeoutException`,
-  `ChildWorkflowFailedException`, `ChildWorkflowExpiredException` or
-  `ChildWorkflowCancelledException` off the run's history. A
-  workflow raising one of those classes itself is a fault like any other throw: planning stops and
-  the throw surfaces, rather than the stack being cut there and unwound as a complete rollback.
-  `compensate()` leaves the run untouched, the expiration sweep reports
-  `ExpirationNotPlannedException`, and a second plan is journalled as `replan_failed` and unwound on
-  the plan in hand.
-  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
-- **A rollback is planned from the writing connection.** For the length of the replay that rebuilds
-  a compensation stack, the package's connection reads from the writer, so a read replica that has
-  fallen behind cannot cut the plan short. A connection without a `read` / `write` split sees no
-  difference.
-  [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
-- **A child that expired answers its parent.** `child()->run()` raises
-  `ChildWorkflowExpiredException` for a child in `Expired`, and `->continueParentOnFailure()`
-  carries the parent past it as it does past a failed child, rather than the parent parking on it
-  for good. A rollback planned over such a child reads past it too. The link is recorded as
-  `expired`, with a `child.expired` history entry.
+- **An expired child answers its parent** with `ChildWorkflowExpiredException` rather than parking
+  it for good; `continueParentOnFailure()` carries the parent past it.
   [Child workflows](https://sagalaraflow.dev/child-workflows)
-- **A child run is created from its own class.** Its `#[Tag]`s are written with it and `#[Flow]`
-  names and versions it, so `$this->version()` inside a child reads its class's version rather than
-  `null`. Neither comes from the parent. Rows written before the upgrade are not filled in.
+- **A child is created from its own class** — its `#[Tag]`s, and its name and version from
+  `#[Flow]`. Children started before the upgrade are not filled in.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
-- **A queued rollback runs on the run's own connection and queue.** Compensation jobs follow
-  `->onConnection()` / `->onQueue()` and `#[FlowQueue]` as every other job of the run does, rather
-  than going to the default connection and queue, so a run routed away from the default finishes
-  its rollback where its own workers listen. A child closed by its parent's close policy is still
-  rolled back inline, inside the closing job on the parent's connection and queue.
+- **An expired run rolls back the children it closes under `Cancel`**, even with nothing of its
+  own to undo. [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
+- **Compensation jobs follow the run's connection and queue** rather than the defaults.
   [Configuration](https://sagalaraflow.dev/configuration)
-- **An expired run rolls back the children it cancels even with nothing of its own to undo.** A
-  child closed under `ChildClosePolicy::Cancel` rolls back its completed steps rather than landing
-  in `Cancelled` over them.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
-- **A queued run on a `sync` connection is driven to its end or to its first wait.** A step, a
-  parallel block whose members succeed or a child that ran on `sync` inside the pass that sent it is
-  resolved by that pass replaying at once, rather than by a resume the job lock turned away or that
-  a child never sent; a step outside a `parallel()` block that failed there resolves as on any other
-  queue, while a failing member of a block still fails the run with its own exception. The run's
-  history records one pass, with no `flow.waiting` and `flow.resumed` between the steps. A parent
-  whose child ends while it is still writing `Waiting` reads the child again and goes on.
-  [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)
-- **A numeric tag name passed to `SagaFlow::create()->withTags()` is kept as written.** `'2024'`
-  records a tag named `2024` rather than one named after its position in the merged list.
-  [Tags & querying](https://sagalaraflow.dev/tags-and-querying)
-- **`whereAwaitingRetrySignal()` leaves out a park whose wait has timed out.** Between the monitor
-  timing the wait out and the resume that gives the retry up, the run no longer matches, and
-  `saga-flow:list` no longer names its signal: no delivery would be consumed there. A run whose
-  signal arrived but whose resume did not still matches.
+- **A queued run on a `sync` connection runs to its end or its first wait in one pass.**
+  [On a sync connection](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)
+- **A numeric tag name passed to `SagaFlow::create()->withTags()` is kept**: `'2024'` stays `2024`
+  rather than becoming `0`.
+- **`whereAwaitingRetrySignal()` skips a park whose wait has timed out**, and `saga-flow:list`
+  stops naming its signal.
   [Tags & querying](https://sagalaraflow.dev/tags-and-querying#waits-and-parked-steps)
 
 ### Additions
 
-Nothing to do; each is additive.
-
-- **`ChildWorkflowExpiredException`** and the **`ChildWorkflowExpired`** event, the answer and the
-  announcement for a child that expired, beside their `Failed` and `Cancelled` counterparts.
-  [Child workflows](https://sagalaraflow.dev/child-workflows)
-- **`->expiresAt()` on the child builder** — a deadline for one child, over its class's
-  `#[FlowTimeout]` and the configured default.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
-- **`->compensateWith()` and `->onCompensationFailure()` on the child builder** — an undo on the
-  parent's stack for a child that completed. Its `compensation_runs` row has a null
-  `action_run_id`, so a listener reading `$compensationRun->actionRun` gets `null` for it.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#compensating-a-child)
-- **`->retryOnSignal()` on the child builder** — a child that fails or expires parks its parent on a
-  signal, and the signal starts the child again as a new run at the same ordinal. The
-  `ChildWorkflowAwaitingRetry` and `ChildWorkflowRetried` events announce both;
-  `whereAwaitingRetrySignal()` and `saga-flow:list` find a parent parked this way.
-  [Retry on signal](https://sagalaraflow.dev/retry-on-signal#retrying-a-child)
-- **`->withTags()` on the child builder** — the parent tags the child it starts, over the child
-  class's `#[Tag]`s, in the transaction that creates the child.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
-- **`signalRetry()`, `whereId()` and `saga-flow:signal-retry`** — a retry for runs picked by id,
-  without naming the signal each one is parked on. A run with nothing parked raises
-  `NoAwaitingRetrySignalException`, a `CannotSignalFlowException`, and `signalRetryIfRunning()`
-  answers `false` for it.
+- **Child builder:** `->expiresAt()`, `->withTags()`, `->compensateWith()` /
+  `->onCompensationFailure()` and `->retryOnSignal()`. A child's `compensation_runs` row has a null
+  `action_run_id`. [Child workflows](https://sagalaraflow.dev/child-workflows),
+  [Retrying a child](https://sagalaraflow.dev/retry-on-signal#retrying-a-child)
+- **`signalRetry()`, `signalRetryIfRunning()` and `saga-flow:signal-retry`** — retry a parked run
+  without naming its signal; `NoAwaitingRetrySignalException` when nothing is parked.
   [Retry on signal](https://sagalaraflow.dev/retry-on-signal#without-naming-the-signal)
-- **`whereTagIn()`** — runs whose tag holds any of several values, e.g. the runs of a few picked
-  customers. `whereTag()` takes an `int` value as well; both compare values as the strings tags are
-  stored as.
-  [Tags and querying](https://sagalaraflow.dev/tags-and-querying#filters)
+- **`FlowQuery::whereId()` and `whereTagIn()`**.
+  [Tags & querying](https://sagalaraflow.dev/tags-and-querying#filters)
+- **`ChildWorkflowExpiredException`** and the events **`ChildWorkflowExpired`**,
+  **`ChildWorkflowAwaitingRetry`** and **`ChildWorkflowRetried`**.
+  [Events](https://sagalaraflow.dev/events)
+- **Anomaly log reasons `replan_failed` and `replan_incomplete`.**
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation)
 
 ## From 1.2.0 to 1.2.1
 
