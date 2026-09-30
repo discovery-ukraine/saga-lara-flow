@@ -20,7 +20,8 @@
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
 - **If you `match` over `ChildStatus` or `FlowEventType`** *(low)* — add the new cases:
   `ChildStatus::Expired`, `ChildStatus::AwaitingRetry`, `FlowEventType::ChildExpired`,
-  `ChildAwaitingRetry` and `ChildRetried`. [Statuses](https://sagalaraflow.dev/statuses)
+  `FlowEventType::ChildAwaitingRetry` and `FlowEventType::ChildRetried`.
+  [Statuses](https://sagalaraflow.dev/statuses)
 - **If you extend `FlowQuery` and override `whereTag()`** *(low)* — `$value` widens to
   `string|int|null`; widen your override to match.
 
@@ -33,6 +34,7 @@ Nothing below asks anything of you.
   `CannotSignalTerminalFlowException` now extend `CannotSignalFlowException`; `signalIfRunning()`
   returns `false` for both. [Signals](https://sagalaraflow.dev/signals)
 - **A signal to a pruned run raises `FlowNotFoundException`**; `signalIfRunning()` returns `false`.
+  [Signals](https://sagalaraflow.dev/signals)
 - **Nothing new starts under a run that is rolling back.** A stale resume no longer runs the
   rollback a second time, and a replay still in flight starts no child and calls no side-effect
   factory. `drive()` returns such a run rather than raising `InvalidTransitionException`.
