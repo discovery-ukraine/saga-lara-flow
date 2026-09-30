@@ -89,11 +89,13 @@ $stuck = SagaFlow::query()
   or `Waiting`. Use this to find a run to deliver a signal to: a flow parked on `awaitSignal()` is
   `Waiting`, not `Running`, so `running()` would miss it.
 - `whereWorkflow(string $workflowClass)`
+- `whereId(string ...$ids)` — runs with one of these ids. Called with none, it matches no run, so an
+  empty selection stays empty.
 - `whereAwaitingSignal(?string $name = null)` — runs whose wait for a signal is still open,
   whichever seam opened it (`awaitSignal()` or `retryOnSignal()`). A null `$name` matches any.
 - `whereAwaitingRetrySignal(?string $signal = null)` — runs holding a step or a child parked by
-  `retryOnSignal()`, i.e. an `action_runs` or a `flow_children` row in `awaiting_retry`. A null
-  `$signal` matches any.
+  `retryOnSignal()`, i.e. an `action_runs` or a `flow_children` row in `awaiting_retry` whose wait
+  is still open or already holds a delivery. A null `$signal` matches any.
 - `before(DateTimeInterface)` / `after(DateTimeInterface)` (both filter `created_at`)
 
 ```php
@@ -102,6 +104,9 @@ SagaFlow::query()->whereAwaitingSignal('approval')->get();
 
 // only steps that failed and parked
 SagaFlow::query()->whereAwaitingRetrySignal('balance-refilled')->handles();
+
+// the parked runs an operator picked, whatever signal each one waits on
+SagaFlow::query()->whereAwaitingRetrySignal()->whereId(...$runIds)->handles();
 ```
 
 ### Waits and parked steps
@@ -116,10 +121,11 @@ apart. What separates them lives on `action_runs`:
 | row in `action_runs` at that wait | none | `awaiting_retry`, `retry_signal` set |
 | failure snapshot for operators | none | `exception: {class, message, code}` |
 
-The two also stop matching at different moments. Delivery marks the wait `Received`, a timeout marks
-it `TimedOut`, while the parked step keeps its `awaiting_retry` status until replay resumes the run.
-In that gap only `whereAwaitingRetrySignal()` matches — which is what makes it the filter that finds
-a run whose signal arrived but whose resume never did.
+The two also stop matching at different moments. Delivery marks the wait `Received` while the parked
+step keeps its `awaiting_retry` status until replay resumes the run. In that gap only
+`whereAwaitingRetrySignal()` matches — which is what makes it the filter that finds a run whose
+signal arrived but whose resume never did. A timeout marks the wait `TimedOut`, and from then on
+neither matches: the next replay gives the retry up, and no signal can change that.
 
 Both read the rows a run holds rather than the run's own status. A run that finishes settles its open
 wait and its parked step alike (see [statuses](./statuses.md)), so it drops out of both filters on its

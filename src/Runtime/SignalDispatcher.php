@@ -7,6 +7,7 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalCancellingFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalTerminalFlowException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\NoAwaitingRetrySignalException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 
@@ -24,6 +25,7 @@ readonly class SignalDispatcher
         private SignalRepository $repository,
         private SignalRecorder $recorder,
         private FlowResumer $resumer,
+        private ParkedRetrySignals $parked,
     ) {}
 
     /**
@@ -35,16 +37,50 @@ readonly class SignalDispatcher
      */
     public function deliver(FlowRun $flowRun, string $name, array $payload): FlowSignal
     {
-        $current = $this->reread($flowRun);
+        $this->refuseUnsignalable($this->reread($flowRun));
 
-        if ($current->isTerminal()) {
-            throw CannotSignalTerminalFlowException::for($current);
+        $signal = $this->store($flowRun, $name, $payload);
+
+        $this->wake($flowRun);
+
+        return $signal;
+    }
+
+    /**
+     * Deliver every signal the run's parked steps and children wait on, read from the writer,
+     * and wake the run once all of them are recorded.
+     *
+     * @param  array<int|string, mixed>  $payload
+     * @return list<FlowSignal>
+     *
+     * @throws CannotSignalTerminalFlowException
+     * @throws CannotSignalCancellingFlowException
+     * @throws NoAwaitingRetrySignalException
+     * @throws FlowNotFoundException
+     */
+    public function deliverRetry(FlowRun $flowRun, array $payload): array
+    {
+        $names = $this->parked->of($flowRun);
+
+        // Read after the parked rows: a run that ended in between settled them, and says so.
+        $this->refuseUnsignalable($this->reread($flowRun));
+
+        if ($names === []) {
+            throw NoAwaitingRetrySignalException::for($flowRun);
         }
 
-        if (! in_array($current->status, FlowStatus::signalable(), true)) {
-            throw CannotSignalCancellingFlowException::for($current);
-        }
+        $signals = array_map(fn (string $name): FlowSignal => $this->store($flowRun, $name, $payload), $names);
 
+        $this->wake($flowRun);
+
+        return $signals;
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $payload
+     */
+    private function store(FlowRun $flowRun, string $name, array $payload): FlowSignal
+    {
         $waitingSignal = $this->repository->earliestWaiting($flowRun->id, $name);
 
         $signal = $waitingSignal === null
@@ -54,13 +90,22 @@ readonly class SignalDispatcher
         // No open wait-signal, or the one we found was claimed by a retry seam while
         // we were writing: keep the delivery as a floating Received row rather than
         // attaching it to a spent signal, where nothing would look for it again.
-        $signal ??= $this->recorder->storeReceivedSignal($flowRun, $name, $payload);
+        return $signal ?? $this->recorder->storeReceivedSignal($flowRun, $name, $payload);
+    }
 
-        if (config('saga-lara-flow.signals.wake_workflow_on_signal')) {
-            $this->wake($flowRun);
+    /**
+     * @throws CannotSignalTerminalFlowException
+     * @throws CannotSignalCancellingFlowException
+     */
+    private function refuseUnsignalable(FlowRun $current): void
+    {
+        if ($current->isTerminal()) {
+            throw CannotSignalTerminalFlowException::for($current);
         }
 
-        return $signal;
+        if (! in_array($current->status, FlowStatus::signalable(), true)) {
+            throw CannotSignalCancellingFlowException::for($current);
+        }
     }
 
     /**
@@ -76,6 +121,8 @@ readonly class SignalDispatcher
 
     private function wake(FlowRun $flowRun): void
     {
-        $this->resumer->resume($flowRun);
+        if (config('saga-lara-flow.signals.wake_workflow_on_signal')) {
+            $this->resumer->resume($flowRun);
+        }
     }
 }

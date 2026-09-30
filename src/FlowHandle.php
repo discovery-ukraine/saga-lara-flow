@@ -148,6 +148,47 @@ readonly class FlowHandle
     }
 
     /**
+     * Deliver the signal this run's parked step or child waits on, without naming it, and
+     * wake the run. Given a $name, delivers that signal as signal() does.
+     *
+     * @param  array<int|string, mixed>  $payload
+     *
+     * @throws CannotSignalFlowException
+     * @throws FlowNotFoundException
+     */
+    public function signalRetry(?string $name = null, array $payload = []): FlowRun
+    {
+        $this->rejectWhileDeciding('signalRetry()');
+
+        $dispatcher = app(SignalDispatcher::class);
+
+        if ($name === null) {
+            $dispatcher->deliverRetry($this->flowRun, $payload);
+        } else {
+            $dispatcher->deliver($this->flowRun, $name, $payload);
+        }
+
+        return $this->flowRun;
+    }
+
+    /**
+     * Safe variant of signalRetry(): reports whether a signal was delivered, and answers
+     * false wherever signalRetry() refuses — a run with nothing parked included.
+     *
+     * @param  array<int|string, mixed>  $payload
+     */
+    public function signalRetryIfRunning(?string $name = null, array $payload = []): bool
+    {
+        try {
+            $this->signalRetry($name, $payload);
+
+            return true;
+        } catch (CannotSignalFlowException|FlowNotFoundException) {
+            return false;
+        }
+    }
+
+    /**
      * Cancel this run directly, without compensation (compensation-aware cancel is
      * compensate()). The optional $reason is recorded on the flow.cancelled event
      * and carried on the FlowCancelled event. Throws on a terminal run.

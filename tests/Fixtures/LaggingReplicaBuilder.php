@@ -3,6 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures;
 
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Database\Eloquent\Builder;
@@ -10,8 +11,8 @@ use ReflectionProperty;
 
 /**
  * A replica that has not caught up, for reads the connection does not route to the writer:
- * it shows the given runs as still Running and holds no link rows yet. The suite runs one
- * PDO, so only a read's own routing can tell the two apart.
+ * it shows the given runs as still Running and holds no link or step rows yet. The suite
+ * runs one PDO, so only a read's own routing can tell the two apart.
  *
  * @template TModel of \Illuminate\Database\Eloquent\Model
  *
@@ -24,10 +25,13 @@ final class LaggingReplicaBuilder extends Builder
 
     public static bool $noLinks = false;
 
+    public static bool $noSteps = false;
+
     public static function reset(): void
     {
         self::$runningRuns = [];
         self::$noLinks = false;
+        self::$noSteps = false;
     }
 
     public function getModels($columns = ['*'])
@@ -43,6 +47,10 @@ final class LaggingReplicaBuilder extends Builder
 
         if (self::$noLinks) {
             $models = array_values(array_filter($models, fn ($model): bool => ! $model instanceof FlowChild));
+        }
+
+        if (self::$noSteps) {
+            $models = array_values(array_filter($models, fn ($model): bool => ! $model instanceof ActionRun));
         }
 
         // A read of one column carries no key, so the run it asked for is in the bindings.

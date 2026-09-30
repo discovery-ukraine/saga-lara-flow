@@ -195,10 +195,10 @@ delivery already made under the old name. That is true of the plain string form 
 :::
 
 A predicate may not write to the run it is deciding for — no `action()`, `awaitSignal()`, `child()`,
-`sideEffect()` or `tag()`, and no `signal()`, `cancel()`, `compensate()` or `withTags()` on that
-run's own handle. It is not asked again once the step it guards succeeds, so an ordinal it consumed
-would be left unclaimed and the next step would land in the wrong slot, and a run it cancelled would
-be handed a live wait a moment later.
+`sideEffect()` or `tag()`, and no `signal()`, `signalRetry()`, `cancel()`, `compensate()` or
+`withTags()` on that run's own handle. It is not asked again once the step it guards succeeds, so
+an ordinal it consumed would be left unclaimed and the next step would land in the wrong slot, and a
+run it cancelled would be handed a live wait a moment later.
 
 Nor may it drive *any* run, its own or somebody else's — `runSync()` and `compensate()` are refused
 too. The predicate is asked between a step's failure and the parking that answers for it, and a pass
@@ -358,10 +358,54 @@ The signal's **payload is not passed to the action**. Action arguments must stay
 replays, so the retried step runs with the arguments it was given originally; the payload is stored
 on the signal row for auditing. If the retry needs new data, read it inside the action.
 
+### Without naming the signal {#without-naming-the-signal}
+
+An operator who retries failed runs picked in a UI knows which runs, not which signal each one
+waits on. `signalRetry()` reads the signal from the run's parked step or child and delivers it:
+
+```php
+use DiscoveryUkraine\SagaLaraFlow\FlowHandle;
+
+SagaFlow::query()
+    ->whereWorkflow(CheckoutWorkflow::class)
+    ->whereTag('tenant', $tenantId)
+    ->whereAwaitingRetrySignal()
+    ->signalable()
+    ->whereId(...$runIds)
+    ->handles()
+    ->each(fn (FlowHandle $handle) => $handle->signalRetry());
+```
+
+```bash
+php artisan saga-flow:signal-retry 01JABCDEF...
+```
+
+It is `signal()` with the name filled in: the same delivery and the same wake. A payload you pass,
+`signalRetry(payload: [...])` or `--payload=`, is stored on the signal row as `signal()` stores it.
+Given a name, `signalRetry('balance-refilled')` or `--signal=`, it delivers that name exactly as
+`signal()` does.
+
+It finds what `whereAwaitingRetrySignal()` finds: a step or a child in `awaiting_retry` whose wait
+is still open or already holds a delivery. A run whose signal arrived but whose resume never did is
+signalled again; the second delivery is kept as a floating signal, and the wake that comes with it
+resumes the run. A park whose wait timed out is left out: the next replay gives it up.
+
+What it refuses, it refuses with a `CannotSignalFlowException`:
+
+- **`NoAwaitingRetrySignalException`** — nothing on the run is parked on a retry, or no signal can
+  end what is parked: its wait has timed out.
+- **`CannotSignalTerminalFlowException`** and **`CannotSignalCancellingFlowException`** — the run
+  has finished, or is rolling back, as for `signal()`.
+
+`signalRetryIfRunning()` answers `false` for each of them instead of throwing. The parked rows and
+the run's status are read from the writing connection, so a handle taken before the run finished is
+refused for the state the run is in now.
+
 ## Observing parked runs
 
-`saga-flow:list` annotates a parked run with the signal it is waiting for, and `saga-flow:show`
-gains a **Retry** column showing the signal, the spent budget, and the current deadline:
+`saga-flow:list` annotates a parked run with the signal it is waiting for until the wait times out,
+and `saga-flow:show` gains a **Retry** column showing the signal, the spent budget, and the current
+deadline:
 
 ```
 Seq  Status          Action       Attempts  Retry                                  Finished

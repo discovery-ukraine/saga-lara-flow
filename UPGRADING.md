@@ -119,6 +119,11 @@ Nothing below asks anything of you. Each links to the page that covers it.
 - **A numeric tag name passed to `SagaFlow::create()->withTags()` is kept as written.** `'2024'`
   records a tag named `2024` rather than one named after its position in the merged list.
   [Tags & querying](https://sagalaraflow.dev/tags-and-querying)
+- **`whereAwaitingRetrySignal()` leaves out a park whose wait has timed out.** Between the monitor
+  timing the wait out and the resume that gives the retry up, the run no longer matches, and
+  `saga-flow:list` no longer names its signal: no delivery would be consumed there. A run whose
+  signal arrived but whose resume did not still matches.
+  [Tags & querying](https://sagalaraflow.dev/tags-and-querying#waits-and-parked-steps)
 
 ### Additions
 
@@ -142,6 +147,11 @@ Nothing to do; each is additive.
 - **`->withTags()` on the child builder** — the parent tags the child it starts, over the child
   class's `#[Tag]`s, in the transaction that creates the child.
   [Child workflows](https://sagalaraflow.dev/child-workflows#a-childs-own-class)
+- **`signalRetry()`, `whereId()` and `saga-flow:signal-retry`** — a retry for runs picked by id,
+  without naming the signal each one is parked on. A run with nothing parked raises
+  `NoAwaitingRetrySignalException`, a `CannotSignalFlowException`, and `signalRetryIfRunning()`
+  answers `false` for it.
+  [Retry on signal](https://sagalaraflow.dev/retry-on-signal#without-naming-the-signal)
 
 ## From 1.2.0 to 1.2.1
 

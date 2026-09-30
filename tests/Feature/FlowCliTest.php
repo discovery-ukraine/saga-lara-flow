@@ -6,8 +6,11 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FlakyPaymentAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ManualCompensateWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\NamedRetryWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SignalOnlyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\TwoStepWorkflow;
 use Illuminate\Support\Facades\Artisan;
@@ -114,6 +117,56 @@ it('delivers a signal to a waiting run', function () {
         ->assertSuccessful();
 
     expect($run->fresh()->status)->toBe(FlowStatus::Completed);
+});
+
+it('delivers a retry signal to a parked run without naming it', function () {
+    FlakyPaymentAction::reset(failures: 1);
+
+    $run = SagaFlow::create(NamedRetryWorkflow::class)->withArguments('balance-refilled')->runSync();
+
+    expect($run->status)->toBe(FlowStatus::Waiting);
+
+    $this->artisan('saga-flow:signal-retry', ['run' => $run->id, '--payload' => '{"by":"operator"}'])
+        ->expectsOutputToContain('Retry signal delivered')
+        ->assertSuccessful();
+
+    expect($run->fresh()->status)->toBe(FlowStatus::Completed)
+        ->and(FlowSignal::query()->where('flow_run_id', $run->id)->firstOrFail()->payload)->toBe(['by' => 'operator']);
+});
+
+it('delivers the retry signal given with --signal', function () {
+    $run = SagaFlow::create(SignalOnlyWorkflow::class)->runSync();
+
+    $this->artisan('saga-flow:signal-retry', ['run' => $run->id, '--signal' => 'go'])
+        ->expectsOutputToContain('Signal [go] delivered')
+        ->assertSuccessful();
+
+    expect($run->fresh()->status)->toBe(FlowStatus::Completed);
+});
+
+it('warns when the run has nothing parked on a retry', function () {
+    $run = SagaFlow::create(SignalOnlyWorkflow::class)->runSync();
+
+    $this->artisan('saga-flow:signal-retry', ['run' => $run->id])
+        ->expectsOutputToContain('no step or child waiting on a retry signal')
+        ->assertSuccessful();
+
+    expect($run->fresh()->status)->toBe(FlowStatus::Waiting)
+        ->and(FlowSignal::query()->where('flow_run_id', $run->id)->count())->toBe(1);
+});
+
+it('rejects a retry payload that is not a JSON object or array', function () {
+    $run = SagaFlow::create(SignalOnlyWorkflow::class)->runSync();
+
+    $this->artisan('saga-flow:signal-retry', ['run' => $run->id, '--signal' => 'go', '--payload' => '"text"'])
+        ->expectsOutputToContain('Payload must be a JSON object or array.')
+        ->assertFailed();
+
+    expect($run->fresh()->status)->toBe(FlowStatus::Waiting);
+});
+
+it('errors when retrying a missing run', function () {
+    $this->artisan('saga-flow:signal-retry', ['run' => 'missing'])->assertFailed();
 });
 
 it('prunes old terminal runs and their related rows', function () {

@@ -60,6 +60,17 @@ it('filters to signalable (non-terminal, non-cancelling) runs', function () {
         ->toEqualCanonicalizing($expected);
 });
 
+it('filters by run id', function () {
+    expect(SagaFlow::query()->whereId($this->running->id, $this->completed->id)->count())->toBe(2)
+        ->and(SagaFlow::query()->whereId($this->failed->id)->first()?->id)->toBe($this->failed->id)
+        ->and(SagaFlow::query()->whereId($this->running->id, $this->completed->id)->signalable()->count())->toBe(1);
+});
+
+it('matches no run when no id is given', function () {
+    expect(SagaFlow::query()->whereId()->count())->toBe(0)
+        ->and(SagaFlow::query()->whereId(...[])->get()->all())->toBe([]);
+});
+
 it('filters by workflow class', function () {
     expect(SagaFlow::query()->whereWorkflow(TwoStepWorkflow::class)->get()->pluck('id')->all())
         ->toBe([$this->completed->id]);
