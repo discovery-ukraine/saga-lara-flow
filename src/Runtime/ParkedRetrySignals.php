@@ -58,22 +58,35 @@ final readonly class ParkedRetrySignals
     }
 
     /**
-     * The waits still open for these signals, read from the writer.
+     * The waits still open at the ordinals of the run's parked steps and children, read from
+     * the writer.
      *
-     * @param  list<string>  $names
      * @return Collection<int, FlowSignal>
      */
-    public function openWaits(FlowRun $flowRun, array $names): Collection
+    public function openWaits(FlowRun $flowRun): Collection
     {
         /** @var class-string<FlowSignal> $signals */
         $signals = config('saga-lara-flow.models.flow_signal');
 
+        /** @var class-string<ActionRun> $steps */
+        $steps = config('saga-lara-flow.models.action_run');
+
+        /** @var class-string<FlowChild> $children */
+        $children = config('saga-lara-flow.models.flow_child');
+
         return $signals::query()
             ->useWritePdo()
             ->where('flow_run_id', $flowRun->id)
-            ->whereIn('name', $names)
             ->where('status', SignalStatus::Waiting)
-            ->whereNotNull('wait_sequence')
+            ->where(fn (Builder $waits) => $waits
+                ->whereIn('wait_sequence', $steps::query()
+                    ->select('sequence')
+                    ->where('flow_run_id', $flowRun->id)
+                    ->where('status', ActionStatus::AwaitingRetry))
+                ->orWhereIn('wait_sequence', $children::query()
+                    ->select('sequence')
+                    ->where('parent_flow_run_id', $flowRun->id)
+                    ->where('status', ChildStatus::AwaitingRetry)))
             ->get();
     }
 

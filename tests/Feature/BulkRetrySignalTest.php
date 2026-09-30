@@ -52,7 +52,7 @@ beforeEach(function (): void {
 /**
  * A run of NamedRetryWorkflow left parked on $signal, its first attempt failed.
  */
-function parkedOn(string $signal, bool $child = false, bool $hold = false): FlowRun
+function parkedOn(string $signal, bool $child = false, ?string $hold = null): FlowRun
 {
     FlakyPaymentAction::$failures++;
 
@@ -216,6 +216,34 @@ it('leaves no floating signal when another delivery closes the wait first', func
     expect(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Completed);
 });
 
+it('fills only the wait of a park it found', function (): void {
+    // After the retry, the run waits on an ordinary signal of the same name.
+    $run = parkedOn('balance-refilled', hold: 'balance-refilled');
+
+    // Another delivery ends the park just after this call has read it, and the run moves
+    // on to that ordinary wait before this call looks for a wait to fill.
+    $raced = false;
+
+    ActionRun::retrieved(function (ActionRun $step) use ($run, &$raced): void {
+        if (! $raced && $step->flow_run_id === $run->id) {
+            $raced = true;
+
+            SagaFlow::loadFlow($run->id)->signal('balance-refilled');
+            drainQueue();
+        }
+    });
+
+    SagaFlow::loadFlow($run->id)->signalRetry();
+
+    drainQueue();
+
+    $held = FlowSignal::query()->where('flow_run_id', $run->id)->orderByDesc('id')->firstOrFail();
+
+    expect($raced)->toBeTrue()
+        ->and(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Waiting)
+        ->and($held->status)->toBe(SignalStatus::Waiting);
+});
+
 it('reads whether the wait is still open from the write connection', function (): void {
     config()->set('saga-lara-flow.models.flow_signal', LaggingReplicaFlowSignal::class);
 
@@ -279,7 +307,7 @@ it('refuses a run with nothing parked on a retry', function (): void {
 });
 
 it('does not count a retry that already went through', function (bool $child): void {
-    $run = parkedOn('balance-refilled', $child, hold: true);
+    $run = parkedOn('balance-refilled', $child, hold: 'hold');
 
     SagaFlow::loadFlow($run->id)->signalRetry();
 
@@ -300,7 +328,7 @@ it('leaves out a park whose wait timed out', function (bool $child): void {
     FlakyPaymentAction::reset(failures: 1);
 
     $run = SagaFlow::create(NamedRetryWorkflow::class)
-        ->withArguments('balance-refilled', $child, false, 60)
+        ->withArguments('balance-refilled', $child, null, 60)
         ->run();
 
     drainQueue();

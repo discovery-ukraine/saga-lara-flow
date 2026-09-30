@@ -81,7 +81,7 @@ readonly class SignalDispatcher
 
         $signals = [];
 
-        foreach ($this->parked->openWaits($flowRun, $names) as $wait) {
+        foreach ($this->parked->openWaits($flowRun) as $wait) {
             $signal = $this->recorder->fulfilWaitingSignal($wait, $payload);
 
             if ($signal !== null) {

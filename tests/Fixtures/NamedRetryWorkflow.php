@@ -9,15 +9,15 @@ use Throwable;
  * Parks on a retry signal the test names, either on a step or on a child, so runs parked
  * on different signals can sit side by side. Both the step and the child run
  * FlakyPaymentAction: reset its failures to decide how many attempts fail. The first step
- * is compensated, so an expired run rolls back through Cancelling. $hold parks the run on
- * an ordinary signal once the retried work is done.
+ * is compensated, so an expired run rolls back through Cancelling. $hold names an ordinary
+ * signal the run waits on once the retried work is done.
  */
 final class NamedRetryWorkflow extends Workflow
 {
     /**
      * @throws Throwable
      */
-    public function handle(string $signal, bool $child = false, bool $hold = false, ?int $waitSeconds = null): void
+    public function handle(string $signal, bool $child = false, ?string $hold = null, ?int $waitSeconds = null): void
     {
         $this->action(MakeValueAction::class, 'created')
             ->compensateWith(UndoAction::class, 'created')
@@ -35,8 +35,8 @@ final class NamedRetryWorkflow extends Workflow
 
         $this->action(MakeValueAction::class, 'shipped')->run();
 
-        if ($hold) {
-            $this->awaitSignal('hold');
+        if ($hold !== null) {
+            $this->awaitSignal($hold);
         }
     }
 }
