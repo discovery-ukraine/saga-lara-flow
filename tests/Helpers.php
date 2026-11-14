@@ -2,8 +2,12 @@
 
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use PHPUnit\Framework\Assert;
 
 /**
  * Shared test helpers, loaded once via tests/Pest.php so every test file can use
@@ -66,19 +70,102 @@ if (! function_exists('useDatabaseQueue')) {
 
     function drainQueue(): void
     {
-        // --sleep=0 matters more than it looks: Worker::daemon() sleeps BEFORE it
-        // checks stopWhenEmpty, so every drain would otherwise pay the default three
-        // seconds after the queue is already empty.
-        //
-        // --memory is measured against the whole PHP process, not the jobs. The worker
-        // runs inside the test run, so at the default 128 it stops silently the moment
-        // the suite's own footprint passes it, leaving the queue full and the run parked.
-        Artisan::call('queue:work', [
-            '--stop-when-empty' => true,
-            '--sleep' => 0,
-            '--memory' => 4096,
-            '--no-interaction' => true,
-        ]);
+        $waitedOut = null;
+
+        while (true) {
+            // --sleep=0 matters more than it looks: Worker::daemon() sleeps BEFORE it
+            // checks stopWhenEmpty, so every drain would otherwise pay the default three
+            // seconds after the queue is already empty.
+            //
+            // --memory is measured against the whole PHP process, not the jobs. The worker
+            // runs inside the test run, so at the default 128 it stops silently the moment
+            // the suite's own footprint passes it, leaving the queue full and the run parked.
+            Artisan::call('queue:work', [
+                '--stop-when-empty' => true,
+                '--sleep' => 0,
+                '--memory' => 4096,
+                '--no-interaction' => true,
+            ]);
+
+            $left = DB::connection('testing')->table('jobs')->orderBy('id')->get();
+
+            if ($left->isEmpty()) {
+                return;
+            }
+
+            // The clock DatabaseQueue compares available_at and reserved_at against.
+            $now = Carbon::now()->getTimestamp();
+
+            $wait = drainQueueClockStepBack($left, $now);
+
+            // The same jobs still there after a wait: the clock did not catch up with them.
+            if ($wait === null || $left->pluck('id')->all() === $waitedOut) {
+                drainQueueFailWith($left, $now);
+            }
+
+            $waitedOut = $left->pluck('id')->all();
+
+            // Bounded by hrtime, which never steps: a clock that stalls or steps back again
+            // must end in the failure above, not in a wait on itself.
+            $until = hrtime(true) + $wait * 1_000_000_000;
+
+            while (Carbon::now()->getTimestamp() < $now + $wait && hrtime(true) < $until) {
+                usleep(50_000);
+            }
+        }
+    }
+
+    /**
+     * Nothing in the engine delays a job, so a job the worker could not take yet was
+     * pushed before the wall clock stepped back: available_at is stored to the second,
+     * and a step of a second or more hides it until the clock catches up. WSL2's clock
+     * has been measured stepping back by up to 1.27 s, which with the second's rounding
+     * puts such a job at most 3 s ahead. Anything else is a real leftover.
+     *
+     * @param  Collection<int, object>  $left
+     * @return ?int seconds to wait, or null when the leftovers are not a clock step
+     */
+    function drainQueueClockStepBack(Collection $left, int $now): ?int
+    {
+        $ahead = $left->map(fn (object $row): int => $row->available_at - $now);
+
+        if ($ahead->contains(fn (int $seconds): bool => $seconds < 1 || $seconds > 3)) {
+            return null;
+        }
+
+        return $ahead->max();
+    }
+
+    /**
+     * The worker stops at the first pop that finds nothing it may take and says nothing
+     * about what it left. Fail where it stopped, naming each job, rather than at a status
+     * assertion further down that only shows a run come up short.
+     *
+     * @param  Collection<int, object>  $left
+     */
+    function drainQueueFailWith(Collection $left, int $now): never
+    {
+        $lines = $left->map(function (object $row) use ($now): string {
+            $payload = json_decode((string) $row->payload, true);
+
+            return sprintf(
+                '#%d %s on "%s": attempts %d, reserved_at %s, available_at %d (%+d s from now)',
+                $row->id,
+                is_array($payload) ? ($payload['displayName'] ?? '?') : '?',
+                $row->queue,
+                $row->attempts,
+                $row->reserved_at === null ? 'null' : sprintf('%d (%+d s from now)', $row->reserved_at, $row->reserved_at - $now),
+                $row->available_at,
+                $row->available_at - $now,
+            );
+        });
+
+        Assert::fail(sprintf(
+            "drainQueue() stopped with %d job(s) still on the queue at %d:\n%s",
+            $left->count(),
+            $now,
+            $lines->implode("\n"),
+        ));
     }
 
     /**

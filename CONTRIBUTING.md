@@ -195,7 +195,12 @@ late for what the boundary actually costs, which is work already performed. So i
 - **Do not weaken an existing test to fit new behaviour.** If a test carries a comment explaining
   what it guards, that guard has to survive somewhere — move it, don't delete it.
 - **Queued tests** run against a real database queue driven with `queue:work --stop-when-empty`,
-  not the `sync` driver.
+  not the `sync` driver. `drainQueue()` fails the test where the worker stopped if a job is still
+  on the queue, and names each one — a run that comes up short several assertions later says
+  nothing about why. One leftover it waits out instead: a job up to three seconds ahead of the
+  clock. Nothing in the engine delays a job, so that is the wall clock stepping back between the
+  push and the pop, which WSL2's does by more than a second. The wait is timed by `hrtime()`, which
+  never steps, and a job still there after it fails the test like any other leftover.
 - **Run the suite on MySQL before you commit.** SQLite answers a conditional write differently,
   and a test that fences on one is meaningless there — see `ConditionalWriteFenceTest`, which is
   load-bearing on MySQL and trivially green on SQLite.
