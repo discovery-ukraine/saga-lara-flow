@@ -239,9 +239,10 @@ the run id, its workflow class, its status and the repair count the run holds:
   `ActionOutcomeRejected` / `CompensationOutcomeRejected` to receive the payload this line cannot carry (see
   [Events](./events.md#refused-outcome)).
 - **`batch_finished_early`** — a parallel step completed after a duplicate delivery had closed its batch.
-- **`claim_not_committed`** — a write the engine reads back was gone once its transaction closed: a step's or a
-  compensation's claim, a child's start or park, or the repair budget a kick refills. For a claim the line carries both
-  attempt counts, the claimed one and the one the row actually holds.
+- **`claim_not_committed`** — a write the engine reads back was gone once its transaction closed: a
+  step's or a compensation's claim, a step's or a child's park, a child's start, or the repair
+  budget a kick refills. For a claim the line carries both attempt counts, the claimed one and the
+  one the row actually holds.
 - **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
   the next. The line carries the throw and how many times this run has failed that way. The run stays overdue and is
   tried again once its hold-off window opens.
@@ -270,7 +271,11 @@ window — and nothing resets the count, so a run that has been failing for a we
 unusable. On PostgreSQL a single failed statement aborts a transaction and turns the eventual commit into a rollback
 while still reporting success, so a listener on `ActionStarted` or a model observer that runs a failing query and
 swallows it discards the claim without anything raising. The claim is read back after the transaction closes for
-exactly this reason, and the step does not run. Fix the listener; nothing on the engine's side is tunable here.
+exactly this reason, and the step does not run.
+A step's park on its retry signal is read back the same way: a discarded one is not announced with
+`ActionAwaitingRetry`, the run waits with nothing recorded for it, and the doctor's lost-resume pass
+or a delivery of the signal parks the step again. Fix the listener; nothing on the engine's side is
+tunable here.
 
 ## Observability
 

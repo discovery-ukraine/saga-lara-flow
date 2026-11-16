@@ -5,6 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowEvent;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowSignal;
 use Illuminate\Database\Eloquent\Builder;
@@ -12,7 +13,7 @@ use ReflectionProperty;
 
 /**
  * A replica that has not caught up, for reads the connection does not route to the writer:
- * it shows the given runs as still Running and holds no link, step or signal rows yet. The
+ * it shows the given runs as still Running and holds no link, step, signal or event rows yet. The
  * suite runs one PDO, so only a read's own routing can tell the two apart.
  *
  * @template TModel of \Illuminate\Database\Eloquent\Model
@@ -30,23 +31,36 @@ final class LaggingReplicaBuilder extends Builder
 
     public static bool $noSignals = false;
 
+    public static bool $noEvents = false;
+
     public static function reset(): void
     {
         self::$runningRuns = [];
         self::$noLinks = false;
         self::$noSteps = false;
         self::$noSignals = false;
+        self::$noEvents = false;
+    }
+
+    public function exists(): bool
+    {
+        if (self::$noEvents && $this->getModel() instanceof FlowEvent && ! $this->readsTheWriter()) {
+            return false;
+        }
+
+        return $this->toBase()->exists();
     }
 
     public function getModels($columns = ['*'])
     {
         $models = parent::getModels($columns);
 
-        $connection = $this->getQuery()->getConnection();
-        $pinned = (bool) new ReflectionProperty($connection, 'readOnWriteConnection')->getValue($connection);
-
-        if ($this->getQuery()->useWritePdo || $pinned) {
+        if ($this->readsTheWriter()) {
             return $models;
+        }
+
+        if (self::$noEvents) {
+            $models = array_values(array_filter($models, fn ($model): bool => ! $model instanceof FlowEvent));
         }
 
         if (self::$noLinks) {
@@ -73,5 +87,13 @@ final class LaggingReplicaBuilder extends Builder
         }
 
         return $models;
+    }
+
+    private function readsTheWriter(): bool
+    {
+        $connection = $this->getQuery()->getConnection();
+        $pinned = (bool) new ReflectionProperty($connection, 'readOnWriteConnection')->getValue($connection);
+
+        return $this->getQuery()->useWritePdo || $pinned;
     }
 }

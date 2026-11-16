@@ -297,7 +297,7 @@ final readonly class ActionRecorder
     /**
      * Record the step's failure under the same ownership check as completeAction().
      */
-    public function failAction(ActionRun $actionRun, Throwable $exception): bool
+    public function failAction(ActionRun $actionRun, Throwable $exception, bool $inline = false): bool
     {
         $claimedAttempts = $actionRun->attempts;
         $exceptionArray = $this->exceptionToArray($exception);
@@ -305,6 +305,12 @@ final readonly class ActionRecorder
         $actionRun->status = ActionStatus::Failed;
         $actionRun->exception = $exceptionArray;
         $actionRun->finished_at = Carbon::now();
+
+        // No job will try an inline attempt again, so a replay from the queue must not
+        // wait for one before it parks the step or gives up on it.
+        if ($inline) {
+            $actionRun->queue_attempts_exhausted = true;
+        }
 
         if (! $this->writeOutcome($actionRun, $claimedAttempts, FlowEventType::ActionFailed, exception: $exception)) {
             return false;
@@ -596,16 +602,17 @@ final readonly class ActionRecorder
 
     /**
      * Park a failed step on its retry signal: flip it to AwaitingRetry and append an
-     * action.awaiting_retry event. The step is NOT terminal — the recorded exception
-     * and finished_at of the last attempt are kept so the seam can decide again once
-     * the signal arrives (or the wait-signal times out).
+     * action.awaiting_retry event, returned so the caller can read the parking back once
+     * its transaction closes; null when the fence refused the write. The step is NOT
+     * terminal — the recorded exception and finished_at of the last attempt are kept so
+     * the seam can decide again once the signal arrives (or the wait-signal times out).
      *
      * Fenced on the failure being parked and the cycle it belongs to. A park that lands
      * after terminal settlement would give a finished run a step claiming to be waiting
      * and a wait nothing will ever resolve: settlement runs once, and every sweep that
      * could reach them skips a finished run on purpose.
      */
-    public function awaitRetry(ActionRun $actionRun, string $signal, ?int $maxAttempts = null): bool
+    public function awaitRetry(ActionRun $actionRun, string $signal, ?int $maxAttempts = null): ?Model
     {
         $asRead = [
             'status' => $actionRun->getOriginal('status'),
@@ -621,10 +628,10 @@ final readonly class ActionRecorder
         $actionRun->retry_signal_max_attempts ??= $maxAttempts;
 
         if (! $this->writeFenced($actionRun, $asRead, 'await_retry')) {
-            return false;
+            return null;
         }
 
-        $this->events->record(
+        return $this->events->record(
             $actionRun->flowRun,
             FlowEventType::ActionAwaitingRetry,
             $actionRun->sequence,
@@ -635,10 +642,15 @@ final readonly class ActionRecorder
                 'retry_signal_max_attempts' => $actionRun->retry_signal_max_attempts,
             ]
         );
+    }
 
+    /**
+     * Separate from awaitRetry() for the reason publishRetried() is: the caller announces
+     * a parking only once it has read it back after its transaction closed.
+     */
+    public function publishAwaitingRetry(ActionRun $actionRun, string $signal): void
+    {
         event(new ActionAwaitingRetry($actionRun, $signal));
-
-        return true;
     }
 
     /**

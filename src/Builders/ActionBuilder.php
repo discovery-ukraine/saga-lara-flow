@@ -31,6 +31,7 @@ use DiscoveryUkraine\SagaLaraFlow\Retry\RetryContext;
 use DiscoveryUkraine\SagaLaraFlow\Retry\RetryPolicy;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\CompensationEntry;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowSuspender;
@@ -38,6 +39,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\HistoryContractGuard;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Throwable;
@@ -649,7 +651,8 @@ class ActionBuilder
      *
      * A parking that loses its fence writes neither row, fires no ActionAwaitingRetry, and
      * suspends like a won one: whatever moved the row wrote where the step really is, and the
-     * suspension leaves no wait behind because none was recorded.
+     * suspension leaves no wait behind because none was recorded. So does a parking its
+     * transaction discarded, which leaves the step Failed for the next replay to park again.
      *
      * @throws FlowSuspended
      * @throws Throwable
@@ -657,7 +660,7 @@ class ActionBuilder
     private function park(ActionRun $step, string $signal, int $sequence, bool $record = true): never
     {
         try {
-            $this->connection()->transaction(function () use ($step, $signal, $sequence, $record): void {
+            $parking = $this->connection()->transaction(function () use ($step, $signal, $sequence, $record): Model {
                 if ($record) {
                     app(SignalRecorder::class)->recordSignalWaiting(
                         $this->runtime->run(),
@@ -667,12 +670,11 @@ class ActionBuilder
                     );
                 }
 
-                if (! app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step))) {
-                    // The wait-signal must go back with the transition it was recorded
-                    // for: left standing, it is the newest open wait for its name, so a
-                    // delivery would be swallowed by a park that never happened.
-                    throw new FencedWriteLost;
-                }
+                // The wait-signal must go back with the transition it was recorded for:
+                // left standing, it is the newest open wait for its name, so a delivery
+                // would be swallowed by a park that never happened.
+                return app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step))
+                    ?? throw new FencedWriteLost;
             });
         } catch (FencedWriteLost) {
             // Nothing was written, and there is nothing left to resolve from: whatever
@@ -681,7 +683,39 @@ class ActionBuilder
             app(FlowSuspender::class)->suspend('action', $sequence);
         }
 
+        if ($this->parkSurvivedCommit($step, $parking)) {
+            app(ActionRecorder::class)->publishAwaitingRetry($step, $signal);
+        }
+
         app(FlowSuspender::class)->suspend('action', $sequence);
+    }
+
+    /**
+     * Whether the parking is on record now its transaction has closed, for the reason
+     * retrySurvivedCommit() reads back a rewind. The witness is the parking's own history
+     * row: written in the same transaction and never changed after, so a delivery or a
+     * cancellation that moves the step on in between does not read as a lost parking. It is
+     * read past the model's scopes, which decide what a host sees, not what was written.
+     */
+    private function parkSurvivedCommit(ActionRun $step, Model $parking): bool
+    {
+        $parked = $parking->newQueryWithoutScopes()
+            ->useWritePdo()
+            ->whereKey($parking->getKey())
+            ->exists();
+
+        if (! $parked) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_CLAIM_NOT_COMMITTED, [
+                'entity' => 'action',
+                'site' => 'await_retry',
+                'flow_run_id' => $step->flow_run_id,
+                'action_run_id' => $step->id,
+                'sequence' => $step->sequence,
+                'action_class' => $step->action_class,
+            ]);
+        }
+
+        return $parked;
     }
 
     /**
@@ -830,7 +864,7 @@ class ActionBuilder
                 // claim here is a broken invariant. Being superseded afterwards is not
                 // — the monitor and the doctor act on this row from their own
                 // processes — and the replay below resolves whatever they left.
-                if ($dispatcher->execute($step) === StepExecution::ClaimLost) {
+                if ($dispatcher->execute($step, inline: true) === StepExecution::ClaimLost) {
                     throw ActionClaimFailedException::forAction($step->action_class, $sequence);
                 }
             } catch (ActionClaimFailedException $exception) {

@@ -22,7 +22,7 @@ final readonly class EventLog
         ?int $sequence,
         ?Model $subject,
         array $payload = []
-    ): void {
+    ): Model {
         /** @var class-string<Model> $model */
         $model = config('saga-lara-flow.models.flow_event');
 
@@ -39,5 +39,7 @@ final readonly class EventLog
         ]);
 
         $event->save();
+
+        return $event;
     }
 }
