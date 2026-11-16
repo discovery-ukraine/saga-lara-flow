@@ -13,7 +13,7 @@
 Nothing below asks anything of you.
 
 - **`ActionAwaitingRetry` fires only for a park that is on record.** The park is read back from the
-  write connection after its transaction closes. One the database discarded is journalled as
+  write connection after its transaction closes. A park the database discarded is journalled as
   `claim_not_committed` instead of announced, and the step is parked again when the doctor or a
   delivery of the signal wakes the run.
   [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery#finding-these-races-in-your-logs)
