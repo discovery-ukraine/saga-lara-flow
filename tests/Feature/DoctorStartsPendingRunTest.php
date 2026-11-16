@@ -360,3 +360,28 @@ it('leaves a child alone whose parent is closed between the pick and the lock', 
         ->and(rewakeReasons($child->id))->toBe([])
         ->and(DB::connection('testing')->table('jobs')->count())->toBe(0);
 });
+
+it('starts a run from a RunWorkflowJob queued before the job could be marked start-only', function () {
+    $run = SagaFlow::create(CountedActionWorkflow::class)->run();
+
+    // The payload a worker finds on the queue after an upgrade: the job as it was
+    // serialized before it had the property.
+    $job = DB::connection('testing')->table('jobs')->first();
+    $payload = json_decode($job->payload, true);
+    $command = preg_replace('/s:9:"startOnly";b:0;/', '', $payload['data']['command'], 1, $stripped);
+
+    if ($stripped === 1) {
+        $command = preg_replace_callback(
+            '/^(O:\\d+:"[^"]+":)(\\d+)/',
+            fn (array $match): string => $match[1].($match[2] - 1),
+            $command,
+        );
+    }
+
+    $payload['data']['command'] = $command;
+    DB::connection('testing')->table('jobs')->where('id', $job->id)->update(['payload' => json_encode($payload)]);
+
+    drainQueue();
+
+    expect(SagaFlow::findRun($run->id)->status)->toBe(FlowStatus::Completed);
+});

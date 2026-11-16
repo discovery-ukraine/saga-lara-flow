@@ -19,13 +19,18 @@ class RunWorkflowJob implements ShouldQueue
 {
     use Queueable;
 
+    /** Declared here, not promoted: a job queued before it existed unserializes without it. */
+    public bool $startOnly = false;
+
     /**
      * @param  bool  $startOnly  a copy sent by the doctor or a kick: it drives the run only from Pending
      */
     public function __construct(
         public string $flowRunId,
-        public bool $startOnly = false,
-    ) {}
+        bool $startOnly = false,
+    ) {
+        $this->startOnly = $startOnly;
+    }
 
     /**
      * @throws Throwable

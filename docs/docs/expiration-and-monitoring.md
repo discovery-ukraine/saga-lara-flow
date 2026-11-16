@@ -166,7 +166,8 @@ Every parameter:
   `grace_seconds` gets a second job too. That job is a `RunWorkflowJob` like the first, so while
   [locks](./queues-locks-idempotency.md#locks) are enabled it waits for an original that is still being
   worked rather than driving the run beside it, and it drives the run only if it is still `Pending` when
-  it gets there. A child whose parent has closed, or is closing, is left to the parent's close policy
+  it gets there. So a copy whose worker dies once it has started the run is not driven again on
+  redelivery: the run stays `Running`, where the doctor does not look, until `saga-flow:kick`. A child whose parent has closed, or is closing, is left to the parent's close policy
   unless that policy is `Abandon`. With the package on a [dedicated connection](./queues-locks-idempotency.md#host-transactions)
   the rule cannot tell a lost job from one your own open transaction still holds back.
 - **`queue_looping`** — drive the repair pass off the queue worker's idle loop instead of cron (same idea as
