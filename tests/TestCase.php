@@ -3,6 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Tests;
 
 use DiscoveryUkraine\SagaLaraFlow\SagaLaraFlowServiceProvider;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Harness\ForkedRival;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Orchestra\Testbench\TestCase as Orchestra;
@@ -30,6 +31,20 @@ class TestCase extends Orchestra
     {
         $app['config']->set('database.default', 'testing');
         $app['config']->set('database.connections.testing', self::connectionConfig());
+
+        // A second session on the same database, for a rival whose transaction must be
+        // the server's own and not the engine's.
+        $app['config']->set('database.connections.testing_rival', self::connectionConfig());
+
+        // Reads the server's lock catalog. MySQL shows another session's lock waits only
+        // to a user with PROCESS, which the suite's own user does not have.
+        $app['config']->set('database.connections.testing_observer', [
+            ...self::connectionConfig(),
+            ...(self::driver() === 'mysql' ? [
+                'username' => env('SAGA_TEST_DB_ROOT_USERNAME', 'root'),
+                'password' => env('SAGA_TEST_DB_ROOT_PASSWORD', 'saga'),
+            ] : []),
+        ]);
     }
 
     /**
@@ -110,8 +125,13 @@ class TestCase extends Orchestra
      */
     protected function tearDown(): void
     {
+        // A rival still holding a lock would stall the next test's reset on it.
+        ForkedRival::reapAll();
+
         if (self::driver() !== 'sqlite' && $this->app !== null) {
-            $this->app['db']->purge('testing');
+            foreach (['testing_rival', 'testing_observer', 'testing'] as $name) {
+                $this->app['db']->purge($name);
+            }
         }
 
         parent::tearDown();
