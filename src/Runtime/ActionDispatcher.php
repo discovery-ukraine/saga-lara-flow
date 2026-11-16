@@ -135,7 +135,7 @@ class ActionDispatcher
     {
         $actionRun = $this->recorder->scheduleAction($run, $sequence, $schedule);
 
-        $execution = $this->execute($actionRun);
+        $execution = $this->execute($actionRun, inline: true);
 
         // A row created in this very call is not reachable by anyone else yet, so
         // losing the claim is not a race but a broken invariant. Being superseded
@@ -160,12 +160,15 @@ class ActionDispatcher
      *
      * @throws Throwable
      */
-    public function execute(ActionRun $actionRun, ?int $expectedRetryGeneration = null): StepExecution
-    {
+    public function execute(
+        ActionRun $actionRun,
+        ?int $expectedRetryGeneration = null,
+        bool $inline = false,
+    ): StepExecution {
         return app(TenancyManager::class)->for(
             $actionRun->flowRun,
             $actionRun->action_class,
-            function () use ($actionRun, $expectedRetryGeneration): StepExecution {
+            function () use ($actionRun, $expectedRetryGeneration, $inline): StepExecution {
                 if (! $this->recorder->startAction($actionRun, $expectedRetryGeneration)) {
                     return StepExecution::ClaimLost;
                 }
@@ -182,7 +185,7 @@ class ActionDispatcher
                     // ran, so its failure settles nothing. Rethrowing would fail a job
                     // whose work is already discarded, and RunActionJob::failed() would
                     // then write queue bookkeeping into a row it no longer owns.
-                    if (! $this->recorder->failAction($actionRun, $e)) {
+                    if (! $this->recorder->failAction($actionRun, $e, $inline)) {
                         return StepExecution::Superseded;
                     }
 

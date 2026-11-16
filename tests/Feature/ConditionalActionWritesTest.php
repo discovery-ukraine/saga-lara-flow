@@ -331,8 +331,8 @@ it('does not let a losing park take the row the winning park wrote', function ()
 
     $recorder = app(ActionRecorder::class);
 
-    expect($recorder->awaitRetry($winner, 'balance-refilled', null))->toBeTrue()
-        ->and($recorder->awaitRetry($loser, 'balance-refilled', null))->toBeFalse();
+    expect($recorder->awaitRetry($winner, 'balance-refilled', null))->not->toBeNull()
+        ->and($recorder->awaitRetry($loser, 'balance-refilled', null))->toBeNull();
 
     // A refused write leaves the model saying what the database says, so nothing it
     // failed to write is carried into the next one.

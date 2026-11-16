@@ -12,7 +12,7 @@ use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
  * for the wait to time out). Exactly one fires per parking.
  *
  * Dispatched after the surrounding transaction commits, so a listener never reacts
- * to a retry the database rolled back.
+ * to a parking the database rolled back.
  */
 final readonly class ActionAwaitingRetry implements ShouldDispatchAfterCommit
 {

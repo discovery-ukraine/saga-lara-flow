@@ -416,7 +416,8 @@ Seq  Status          Action       Attempts  Retry                               
 
 Two events cover the lifecycle — see [Events](./events.md):
 
-- **`ActionAwaitingRetry`** — fires once per park, carrying the step and the signal name.
+- **`ActionAwaitingRetry`** — fires once per park, once the park is read back as recorded, carrying
+  the step and the signal name.
 - **`ActionRetried`** — fires once per cycle, when the step is about to run again.
 
 A child has its own pair: **`ChildWorkflowAwaitingRetry`**, carrying the attempt that failed and the

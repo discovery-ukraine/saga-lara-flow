@@ -1,5 +1,26 @@
 # Upgrading
 
+## From 1.3.x to 1.4.0
+
+### Action required
+
+- **If you call `ActionRecorder::awaitRetry()` yourself** *(low)* — it returns the
+  `action.awaiting_retry` row it recorded, or `null` when the write was refused, instead of a
+  `bool`, and no longer dispatches `ActionAwaitingRetry`: `publishAwaitingRetry()` does.
+
+### Behaviour changed
+
+Nothing below asks anything of you.
+
+- **`ActionAwaitingRetry` fires only for a park that is on record.** The park is read back from the
+  write connection after its transaction closes. A park the database discarded is journalled as
+  `claim_not_committed` instead of announced, and the step is parked again when the doctor or a
+  delivery of the signal wakes the run.
+  [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery#finding-these-races-in-your-logs)
+- **A step that fails inline is recorded with `queue_attempts_exhausted` set**, under `runSync()`
+  as on a retried attempt run inline. A later replay from the queue parks it or gives up on it
+  instead of waiting for queue attempts no job will make.
+
 ## From 1.2.x to 1.3.0
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading
