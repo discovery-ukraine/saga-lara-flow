@@ -46,4 +46,14 @@ interface FlowRepository
      * @return iterable<int, FlowRun>
      */
     public function dueForRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
+
+    /**
+     * Pending runs older than the grace window whose repair window is open and attempts are
+     * not exhausted, leaving out a child whose parent may no longer start work unless it is
+     * abandoned to itself, oldest first, capped at $limit. Used by the doctor to send again
+     * the first job of a run that never started.
+     *
+     * @return iterable<int, FlowRun>
+     */
+    public function dueForStartRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
 }

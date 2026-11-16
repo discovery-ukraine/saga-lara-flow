@@ -652,8 +652,8 @@ signal delivered after its deadline but before the next sweep is still accepted.
 expanded in [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
 For runs whose progress was lost to a *dropped job* (rather than a deadline), the **doctor** can
-re-dispatch missing actions (`repair.redispatch_lost_actions`) and re-wake stuck waits (`repair.wake_stuck_flows`) —
-enable `repair.enabled` and either schedule `saga-flow:repair` or loop
+re-dispatch missing actions (`repair.redispatch_lost_actions`), re-wake stuck waits (`repair.wake_stuck_flows`) and
+start runs whose first job was lost (`repair.redispatch_lost_starts`) — enable `repair.enabled` and either schedule `saga-flow:repair` or loop
 it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
 `saga-flow:kick {run}` / `SagaFlow::kick($id)`. A kick refills the repair budget that
 `repair.max_attempts` caps and sends the sequential step the run is parked on its own job back, so

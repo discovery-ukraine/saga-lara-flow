@@ -7,6 +7,9 @@
 - **If you call `ActionRecorder::awaitRetry()` yourself** *(low)* — it returns the
   `action.awaiting_retry` row it recorded, or `null` when the write was refused, instead of a
   `bool`, and no longer dispatches `ActionAwaitingRetry`: `publishAwaitingRetry()` does.
+- **If you published the config file and run the doctor** *(low)* — package config is merged only
+  at the top level, so add `repair.redispatch_lost_starts => true` to your `repair` array; without
+  the key the new rule stays off.
 
 ### Behaviour changed
 
@@ -20,6 +23,18 @@ Nothing below asks anything of you.
 - **A step that fails inline is recorded with `queue_attempts_exhausted` set**, under `runSync()`
   as on a retried attempt run inline. A later replay from the queue parks it or gives up on it
   instead of waiting for queue attempts no job will make.
+- **The doctor starts a run whose first job was lost.** With `repair.enabled`, a run still
+  `Pending` after `repair.grace_seconds` — a root run, a child, or a child retried on a signal —
+  gets its `RunWorkflowJob` again under the same budget and backoff as a re-woken run, recorded as
+  `flow.rewoken` with reason `lost_start` and counted among the re-woken flows. A child whose parent
+  has closed, or is closing, is left to the parent's close policy unless it is `Abandon`. With the
+  package on a dedicated `database.connection`, a `run()` inside your own transaction that rolls
+  back, or stays open past the grace window, leaves a `Pending` run the doctor now starts: call
+  `run()` after you commit, or turn the rule off with `repair.redispatch_lost_starts`.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
+- **`saga-flow:kick` sends a run that has not started a `RunWorkflowJob`**, not a
+  `ResumeWorkflowJob`, so while locks are enabled it waits for an original job that is still being
+  worked, and it drives the run only if it is still `Pending` when it gets there.
 
 ## From 1.2.x to 1.3.0
 
