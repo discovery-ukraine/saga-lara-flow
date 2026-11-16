@@ -177,6 +177,7 @@ it('fails by timeout naming a barrier the rival never reaches', function () {
 
 it('fails by timeout even when signals interrupt the wait', function () {
     // A handler makes a delivered signal interrupt the select the wait sleeps in.
+    $previous = pcntl_signal_get_handler(SIGUSR1);
     pcntl_signal(SIGUSR1, static function (): void {});
 
     try {
@@ -198,7 +199,10 @@ it('fails by timeout even when signals interrupt the wait', function () {
 
         expect((hrtime(true) - $started) / 1e9)->toBeLessThan(2.0);
     } finally {
-        pcntl_signal(SIGUSR1, SIG_DFL);
+        // The rival is still signalling: under the default handler one more would end the
+        // whole run, so it goes before the handler does.
+        ForkedRival::reapAll();
+        pcntl_signal(SIGUSR1, $previous);
     }
 });
 
