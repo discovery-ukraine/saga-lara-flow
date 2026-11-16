@@ -3,6 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Jobs;
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
+use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\RunMode;
 use DiscoveryUkraine\SagaLaraFlow\Middleware\LockMiddlewareFactory;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
@@ -18,9 +19,18 @@ class RunWorkflowJob implements ShouldQueue
 {
     use Queueable;
 
+    /** Declared here, not promoted: a job queued before it existed unserializes without it. */
+    public bool $startOnly = false;
+
+    /**
+     * @param  bool  $startOnly  a copy sent by the doctor or a kick: it drives the run only from Pending
+     */
     public function __construct(
         public string $flowRunId,
-    ) {}
+        bool $startOnly = false,
+    ) {
+        $this->startOnly = $startOnly;
+    }
 
     /**
      * @throws Throwable
@@ -30,6 +40,10 @@ class RunWorkflowJob implements ShouldQueue
         $flowRun = $repository->find($this->flowRunId);
 
         if ($flowRun === null || ! $flowRun->status->canStartWork()) {
+            return;
+        }
+
+        if ($this->startOnly && $flowRun->status !== FlowStatus::Pending) {
             return;
         }
 

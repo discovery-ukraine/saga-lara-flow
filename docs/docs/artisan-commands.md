@@ -54,7 +54,7 @@ warning.
 
 `saga-flow:kick` re-drives one run by hand. It refills the repair budget of the run and its
 unfinished steps and puts a sequential step's job back on the queue, which is the manual answer to a
-step the doctor has given up on.
+step the doctor has given up on. A run that has not started gets its first job again.
 
 Schedule `saga-flow:monitor` and `saga-flow:repair` for background maintenance — see
 [Expiration & monitoring](./expiration-and-monitoring.md).

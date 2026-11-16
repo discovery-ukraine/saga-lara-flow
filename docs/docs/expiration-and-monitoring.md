@@ -119,7 +119,7 @@ carries exactly one compensatable step.
 ## Repair (the doctor)
 
 Separate from expiration: the **doctor** recovers a run whose progress was lost to a *dropped job* — an action that
-never ran, a resume that never fired — rather than one that hit a deadline. It only ever re-dispatches existing jobs or
+never ran, a resume that never fired, a run that never started — rather than one that hit a deadline. It only ever re-dispatches existing jobs or
 re-wakes flows (replay decides the rest); it never creates duplicate work.
 
 ```php
@@ -132,6 +132,7 @@ re-wakes flows (replay decides the rest); it never creates duplicate work.
     'redispatch_lost_actions' => true,
     'redispatch_stale_running_actions' => true,
     'wake_stuck_flows' => true,
+    'redispatch_lost_starts' => true,
     'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],
 ],
 ```
@@ -158,6 +159,17 @@ Every parameter:
   reclaim configured nowhere, no row carries one and the rule is inert. Parallel actions and compensations are out of
   scope for it. See
   [Reclaim & recovery](./reclaim-and-recovery.md).
+- **`redispatch_lost_starts`** — enable R4: send the first job again for a run still `Pending` after the
+  grace window — a root run, a child, or a child started again by a retry signal whose `RunWorkflowJob`
+  never arrived. A run started with `runSync()` whose process died before it began is started on the
+  queue. The doctor judges by time alone, so a run that is merely queued behind a backlog longer than
+  `grace_seconds` gets a second job too. That job is a `RunWorkflowJob` like the first, so while
+  [locks](./queues-locks-idempotency.md#locks) are enabled it waits for an original that is still being
+  worked rather than driving the run beside it, and it drives the run only if it is still `Pending` when
+  it gets there. So a copy whose worker dies once it has started the run is not driven again on
+  redelivery: the run stays `Running`, where the doctor does not look, until `saga-flow:kick`. A child whose parent has closed, or is closing, is left to the parent's close policy
+  unless that policy is `Abandon`. With the package on a [dedicated connection](./queues-locks-idempotency.md#host-transactions)
+  the rule cannot tell a lost job from one your own open transaction still holds back.
 - **`queue_looping`** — drive the repair pass off the queue worker's idle loop instead of cron (same idea as
   `monitor.queue_looping`). When `enabled`, the pass runs at most once per `throttle_seconds`.
 
@@ -187,6 +199,9 @@ SagaFlow::kick($runId);          // or:
 
 A kick re-drives a run that may still start work. A run that has finished, or is rolling back, is left exactly as it
 was; the command reports its status instead of claiming a re-drive.
+
+A run that has not started yet gets its first job again, a `RunWorkflowJob` that drives it only from
+`Pending`, for the reason given under `redispatch_lost_starts`; any other run gets a resume.
 
 It also refills the repair budget of the run and of every step it has not finished, and sends a fresh job for the
 sequential step the run is parked on — so a run stopped at a step the doctor gave up on moves again, rather than

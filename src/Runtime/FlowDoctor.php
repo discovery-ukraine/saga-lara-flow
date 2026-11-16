@@ -6,9 +6,11 @@ use Closure;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
+use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Database\ConnectionInterface;
@@ -29,9 +31,10 @@ use Throwable;
  *   R1  a stuck sequential Pending action (its RunActionJob was lost) → re-dispatch.
  *   R2  a stuck Waiting run with nothing in flight (its resume was lost) → re-wake.
  *   R3  a stuck sequential Running action past its own reclaim window → re-dispatch.
+ *   R4  a stuck Pending run (its RunWorkflowJob was lost) → re-dispatch.
  *
  * repair_attempts + repair_available_at throttle a pass per entity and give up after max_attempts.
- * saga-flow:kick is the manual answer to all three: it refills that budget for the run and its
+ * saga-flow:kick is the manual answer to all four: it refills that budget for the run and its
  * unfinished steps and sends the sequential step its own job back. Batch-bound work (parallel
  * actions, compensations) is out of scope even for R3 and for a kick: adding a job back into a
  * Bus::batch needs an id this package does not store.
@@ -75,13 +78,19 @@ final readonly class FlowDoctor
         [$rewokenFlows, $skippedFlows] = $this->applyRule(
             'wake_stuck_flows',
             fn (): iterable => $this->flowRepository->dueForRepair($limit, $grace, $maxAttempts),
-            fn (FlowRun $run): bool => $this->wakeWaiting($run, $maxAttempts),
+            fn (FlowRun $run): bool => $this->rewake($run, FlowStatus::Waiting, 'lost_resume', $maxAttempts),
+        );
+
+        [$lostStarts, $skippedStarts] = $this->applyRule(
+            'redispatch_lost_starts',
+            fn (): iterable => $this->flowRepository->dueForStartRepair($limit, $grace, $maxAttempts),
+            fn (FlowRun $run): bool => $this->rewake($run, FlowStatus::Pending, 'lost_start', $maxAttempts),
         );
 
         return new FlowRepairReport(
             $lostActions + $staleActions,
-            $rewokenFlows,
-            $skippedLost + $skippedStale + $skippedFlows,
+            $rewokenFlows + $lostStarts,
+            $skippedLost + $skippedStale + $skippedFlows + $skippedStarts,
         );
     }
 
@@ -199,33 +208,34 @@ final readonly class FlowDoctor
     }
 
     /**
-     * R2: re-wake a stuck Waiting run whose resume was lost. Re-verifies it is still
-     * Waiting under a row lock, bumps the throttle, records the re-wake, then
-     * dispatches ResumeWorkflowJob after commit so replay decides what happens next.
+     * R2 (a Waiting run whose resume was lost) and R4 (a Pending run whose first job was
+     * lost). Re-verifies the status under a row lock, bumps the throttle, records the
+     * re-wake, then dispatches the run's job after commit so replay decides what happens next.
      *
      * @throws Throwable
      */
-    private function wakeWaiting(FlowRun $run, int $maxAttempts): bool
+    private function rewake(FlowRun $run, FlowStatus $stuckIn, string $reason, int $maxAttempts): bool
     {
-        $confirmed = $this->connection()->transaction(function () use ($run, $maxAttempts): bool {
+        $confirmed = $this->connection()->transaction(function () use ($run, $stuckIn, $reason, $maxAttempts): bool {
             $locked = $this->lockFlow($run->id);
 
             if ($locked === null
-                || $locked->status !== FlowStatus::Waiting
+                || $locked->status !== $stuckIn
                 || $locked->repair_attempts >= $maxAttempts
-                || ! $this->repairWindowOpen($locked->repair_available_at)) {
+                || ! $this->repairWindowOpen($locked->repair_available_at)
+                || ($stuckIn === FlowStatus::Pending && ! $this->parentLetsItStart($locked))) {
                 return false;
             }
 
             $this->bumpThrottle($locked);
 
-            $this->lifecycle->flowRewoken($locked, 'lost_resume');
+            $this->lifecycle->flowRewoken($locked, $reason);
 
             return true;
         });
 
         if ($confirmed) {
-            $this->dispatchResume($run->fresh() ?? $run);
+            $this->dispatchDrive($run->fresh() ?? $run, start: $stuckIn === FlowStatus::Pending);
         }
 
         return $confirmed;
@@ -282,7 +292,7 @@ final readonly class FlowDoctor
 
         $kickedRun = $this->budgetSurvivedCommit($locked);
 
-        $this->dispatchResume($kickedRun);
+        $this->dispatchDrive($kickedRun, start: $locked->status === FlowStatus::Pending);
 
         if ($step !== null) {
             // The writer already answered with this run; lazy-loading the relation
@@ -375,6 +385,21 @@ final readonly class FlowDoctor
             })
             ->orderBy('sequence')
             ->first();
+    }
+
+    /**
+     * A child its parent has closed, or is closing, is left to the parent's close policy.
+     */
+    private function parentLetsItStart(FlowRun $run): bool
+    {
+        if ($run->parent_id === null || $run->parent_close_policy === ChildClosePolicy::Abandon->value) {
+            return true;
+        }
+
+        /** @var ?FlowStatus $parent */
+        $parent = $run->newQuery()->useWritePdo()->whereKey($run->parent_id)->value('status');
+
+        return $parent?->canStartWork() ?? false;
     }
 
     private function rereadFlow(FlowRun $run): FlowRun
@@ -481,9 +506,14 @@ final readonly class FlowDoctor
         }
     }
 
-    private function dispatchResume(FlowRun $run): void
+    /**
+     * A run not yet started gets its first job again: only that class waits on a late original's lock.
+     */
+    private function dispatchDrive(FlowRun $run, bool $start): void
     {
-        $job = ResumeWorkflowJob::dispatch($run->id);
+        $job = $start
+            ? RunWorkflowJob::dispatch($run->id, startOnly: true)
+            : ResumeWorkflowJob::dispatch($run->id);
 
         if ($run->connection !== null) {
             $job->onConnection($run->connection);

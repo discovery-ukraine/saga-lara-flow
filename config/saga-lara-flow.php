@@ -166,6 +166,8 @@ return [
         // own job_batches table, a detail of the database batch driver specifically
         // and not guaranteed for every host.
         'redispatch_stale_running_actions' => true,
+        // R4: send the first job again for a Pending run whose RunWorkflowJob was lost.
+        'redispatch_lost_starts' => true,
 
         'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],
     ],
