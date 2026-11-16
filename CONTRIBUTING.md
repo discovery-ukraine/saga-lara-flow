@@ -257,10 +257,11 @@ helpers live in `tests/Helpers.php`:
   // ['waited' => bool, 'returned' => mixed, 'threw' => ?Throwable]
   ```
 
-  Whether the engine waits is read from the server's own catalog: `pg_stat_activity` on
-  PostgreSQL, `performance_schema.data_lock_waits` on MySQL. MySQL shows another session's lock
-  waits only to a user with `PROCESS`, so that read goes through `testing_observer`, which
-  connects as `root` (`SAGA_TEST_DB_ROOT_USERNAME`, `SAGA_TEST_DB_ROOT_PASSWORD`).
+  Whether the engine waits, and on the rival's session rather than on anything else, is read from
+  the server itself: `pg_blocking_pids()` on PostgreSQL, `performance_schema.data_lock_waits` on
+  MySQL. MySQL shows another session's lock waits only to a user with `PROCESS`, so that read goes
+  through `testing_observer`, which connects as `root` (`SAGA_TEST_DB_ROOT_USERNAME`,
+  `SAGA_TEST_DB_ROOT_PASSWORD`).
 
 Every wait ends in a failure that names its barrier rather than in a hang: a barrier gives up after
 5 s, and a staged session waits on a lock for 10 s — longer, so a rival that gives up dies, frees
