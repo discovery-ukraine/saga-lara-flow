@@ -1,6 +1,8 @@
 <?php
 
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Harness\ForkedRival;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -8,6 +10,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Assert;
+use PHPUnit\Framework\AssertionFailedError;
 
 /**
  * Shared test helpers, loaded once via tests/Pest.php so every test file can use
@@ -223,5 +226,188 @@ if (! function_exists('logToFile')) {
         ]);
 
         config()->set('saga-lara-flow.logging.channel', 'saga_test');
+    }
+}
+
+if (! function_exists('rivalSession')) {
+    /**
+     * The rival's session: its own server session, transaction, locks and snapshot.
+     * In a forked rival it is a session of the child's own.
+     */
+    function rivalSession(): Connection
+    {
+        return DB::connection('testing_rival');
+    }
+
+    /**
+     * The server's id for a session, as its lock catalog names it.
+     */
+    function sessionId(Connection $session): int
+    {
+        return (int) $session->scalar(match ($session->getDriverName()) {
+            'pgsql' => 'select pg_backend_pid()',
+            'mysql' => 'select connection_id()',
+        });
+    }
+
+    /**
+     * How long a statement in this session waits on another session's lock before it
+     * fails. A test that stages a lock fails on it instead of hanging.
+     */
+    function lockTimeout(Connection $session, int $seconds): void
+    {
+        $session->statement(match ($session->getDriverName()) {
+            'pgsql' => "set lock_timeout = '{$seconds}s'",
+            'mysql' => "set session innodb_lock_wait_timeout = {$seconds}",
+        });
+    }
+
+    /**
+     * The isolation level of this session's next transactions, read back so a level the
+     * server did not take fails here rather than in what the test goes on to measure.
+     */
+    function isolation(Connection $session, string $level): void
+    {
+        $session->statement(match ($session->getDriverName()) {
+            'pgsql' => "set session characteristics as transaction isolation level {$level}",
+            'mysql' => "set session transaction isolation level {$level}",
+        });
+
+        $taken = (string) $session->scalar(match ($session->getDriverName()) {
+            'pgsql' => 'show default_transaction_isolation',
+            'mysql' => 'select @@session.transaction_isolation',
+        });
+
+        Assert::assertSame($level, strtolower(str_replace('-', ' ', $taken)), 'The session did not take the isolation level.');
+    }
+
+    /**
+     * Run $move once, immediately before the first statement on $connection whose SQL
+     * matches $pattern. The engine's statement then runs against the state $move left.
+     *
+     * @return Closure(): bool whether the break point was reached
+     */
+    function beforeStatement(string $pattern, Closure $move, string $connection = 'testing'): Closure
+    {
+        $reached = false;
+
+        DB::connection($connection)->beforeExecuting(function (string $query) use ($pattern, $move, &$reached): void {
+            if ($reached || preg_match($pattern, $query) !== 1) {
+                return;
+            }
+
+            $reached = true;
+            $move();
+        });
+
+        return function () use (&$reached): bool {
+            return $reached;
+        };
+    }
+
+    /**
+     * Whether $session is waiting right now on a lock $holder holds, by the server's own
+     * catalog. Naming the holder keeps a brief wait on anything else from counting.
+     */
+    function waitsOnLock(int $session, int $holder): bool
+    {
+        $observer = DB::connection('testing_observer');
+
+        return (bool) $observer->scalar(match ($observer->getDriverName()) {
+            'pgsql' => 'select count(*) from unnest(pg_blocking_pids(?)) as blocker where blocker = ?',
+            'mysql' => 'select count(*) from performance_schema.data_lock_waits w '
+                .'join performance_schema.threads waiting on waiting.thread_id = w.requesting_thread_id '
+                .'join performance_schema.threads holding on holding.thread_id = w.blocking_thread_id '
+                .'where waiting.processlist_id = ? and holding.processlist_id = ?',
+        }, [$session, $holder]);
+    }
+
+    /**
+     * Run $engineWrite against $rivalMove held uncommitted in a forked rival on a session
+     * of its own. The rival commits the moment the engine is seen waiting on it, or once
+     * the engine has finished without waiting, so either order is reached without a sleep
+     * and the result says which one the server chose. $isolation, when given, is set on
+     * both sessions: the rival's is a fresh one and would otherwise run at the server's
+     * default, whatever the test set on the engine's.
+     *
+     * @return array{waited: bool, returned: mixed, threw: ?Throwable}
+     */
+    function againstUncommitted(Closure $rivalMove, Closure $engineWrite, ?string $isolation = null, float $seconds = 5.0): array
+    {
+        if ($isolation !== null) {
+            isolation(DB::connection('testing'), $isolation);
+        }
+
+        $engineSession = sessionId(DB::connection('testing'));
+
+        $rival = ForkedRival::start(function (ForkedRival $engine) use ($rivalMove, $engineSession, $isolation, $seconds): bool {
+            $session = DB::connection('testing');
+            lockTimeout($session, 10);
+
+            if ($isolation !== null) {
+                isolation($session, $isolation);
+            }
+
+            $rivalSession = sessionId($session);
+            $session->beginTransaction();
+
+            $rivalMove();
+
+            $engine->arrive('rival move in flight');
+
+            $deadline = hrtime(true) + (int) ($seconds * 1e9);
+
+            while (! $engine->reached('engine write done')) {
+                if (waitsOnLock($engineSession, $rivalSession)) {
+                    $session->commit();
+
+                    return true;
+                }
+
+                if (hrtime(true) >= $deadline) {
+                    throw new AssertionFailedError(sprintf(
+                        "Barrier 'engine write done': the engine neither waited on the rival nor finished within %.1f s.", $seconds,
+                    ));
+                }
+
+                usleep(1000);
+            }
+
+            $session->commit();
+
+            return false;
+        });
+
+        $rival->await('rival move in flight', $seconds);
+
+        $returned = $threw = null;
+
+        try {
+            $returned = $engineWrite();
+        } catch (Throwable $e) {
+            $threw = $e;
+        }
+
+        $rival->arrive('engine write done');
+
+        return ['waited' => $rival->finish($seconds), 'returned' => $returned, 'threw' => $threw];
+    }
+
+    /**
+     * Wait until $session is seen waiting on a lock $holder holds, or fail naming the barrier.
+     */
+    function awaitLockWait(int $session, int $holder, string $barrier, float $seconds = 5.0): void
+    {
+        $deadline = hrtime(true) + (int) ($seconds * 1e9);
+
+        while (! waitsOnLock($session, $holder)) {
+            if (hrtime(true) >= $deadline) {
+                throw new AssertionFailedError(sprintf(
+                    "Barrier '%s': session %d was not seen waiting on session %d within %.1f s.", $barrier, $session, $holder, $seconds,
+                ));
+            }
+
+            usleep(1000);
+        }
     }
 }

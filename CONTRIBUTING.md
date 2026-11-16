@@ -227,15 +227,59 @@ vendor/bin/pest tests/Feature/CreateWorkflowTest.php
 vendor/bin/pest --filter="cancels a non-terminal run"
 ```
 
+### Staging a second session
+
+On MySQL and PostgreSQL a test can put a rival on a server session of its own, next to the
+engine's `testing` connection. These tests skip on SQLite: `:memory:` is a database per connection,
+and a file database admits one writer at a time, so the interleavings cannot occur there. The
+helpers live in `tests/Helpers.php`:
+
+- **`rivalSession()`** is the `testing_rival` connection, with its own transaction, locks and
+  snapshot. A rival that writes inside a transaction there and has not committed is invisible to
+  the engine. `isolation()` and `lockTimeout()` set either session's isolation level and how long
+  its statements wait on a lock.
+- **`beforeStatement($pattern, $move)`** runs `$move` once, immediately before the first engine
+  statement whose SQL matches — a break point without a mock. It returns whether it was reached.
+- **A rival the engine would block on needs a process of its own**, since a statement waiting on a
+  lock holds its whole process. `ForkedRival::start()` forks one; the two sides pass barriers with
+  `arrive()` and `await()`, and `finish()` returns what the rival's body returned. The forked
+  rival opens sessions of its own and ends with `SIGKILL` — closing a session it inherited would
+  end it on the server for the test too. A rival's body must not call `exit` or `die`: the child
+  still kills itself before it closes anything, but Pest's own shutdown hooks run first.
+- **`againstUncommitted($rivalMove, $engineWrite)`** holds the rival's move uncommitted while the
+  engine writes, commits once the engine is seen waiting on it or has finished, and reports which:
+
+  ```php
+  $outcome = againstUncommitted(
+      fn () => SagaFlow::loadFlow($runId)->cancel(),
+      fn () => app(ActionRecorder::class)->startAction($step),
+  );
+  // ['waited' => bool, 'returned' => mixed, 'threw' => ?Throwable]
+  ```
+
+  Whether the engine waits, and on the rival's session rather than on anything else, is read from
+  the server itself: `pg_blocking_pids()` on PostgreSQL, `performance_schema.data_lock_waits` on
+  MySQL. MySQL shows another session's lock waits only to a user with `PROCESS`, so that read goes
+  through `testing_observer`, which connects as `root` (`SAGA_TEST_DB_ROOT_USERNAME`,
+  `SAGA_TEST_DB_ROOT_PASSWORD`).
+
+Every wait ends in a failure that names its barrier rather than in a hang: a barrier gives up after
+5 s, and a staged session waits on a lock for 10 s — longer, so a rival that gives up dies, frees
+its rows, and the test fails on the barrier's name. `tearDown()` kills every forked rival and
+closes the rival's session whatever the test did; a rival left holding a lock would stall the next
+test's reset, and on PostgreSQL, which waits on a lock for ever by default, hang it.
+
 ### What CI does not check
 
 CI runs the suite on SQLite across the `os × stability` matrix, and once more on each of **MySQL**
-and **PostgreSQL**. Two gaps remain, and a green suite is not evidence in either:
+and **PostgreSQL**, where the tests above stage a second session. Two gaps remain, and a green
+suite is not evidence in either:
 
-- **Real concurrency.** Every interleaving in the suite is staged from one process. Nothing runs
-  two workers at once, so a lock held too long or a deadlock retried wrongly would pass.
-- **Transaction isolation.** For the same reason: `READ COMMITTED` and `REPEATABLE READ` differ
-  only for a read-back that races another writer, and nothing here races.
+- **Interleavings nobody staged.** Each test stages one order on purpose. Nothing runs two workers
+  freely against each other, so a race no test names would pass.
+- **Isolation levels other than each server's default**, outside the tests that set one. The suite
+  runs under MySQL's `REPEATABLE READ` and PostgreSQL's `READ COMMITTED`, and
+  `InFlightCancellationTest` shows the engine's fences answering differently under the other level.
 
 ## Documentation
 
