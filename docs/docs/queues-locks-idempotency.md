@@ -187,17 +187,25 @@ The engine queries the package's connection (`saga-lara-flow.database.connection
 writer. The engine takes these reads from the writer instead:
 
 - every read a write is decided on, such as a run's status checked before work starts or a signal
-  is accepted, or a write read back to confirm it landed;
-- every read of the pass that plans a rollback. That pass replays `handle()` to learn which
-  completed steps carry compensations, and a replica that has not caught up ends it early, with a
-  shorter plan that would be unwound and reported as complete. So for the length of the pass the
-  package's connection reads from the writer, reads your own code makes on it included, and goes
-  back to its routing when the pass ends.
+  is accepted, whether a rollback's level finished before the next one starts, or a write read back
+  to confirm it landed;
+- a job's reads of the run, step or compensation it was sent for and of the run it belongs to,
+  which decide whether the job has anything to do;
+- every read of a pass that drives a run or plans its rollback. Both replay `handle()` over the
+  run's history, and a replica that has not caught up shows them a step recorded a moment earlier
+  as missing or unfinished: a drive would schedule the step again or wait on it with nothing left
+  to wake the run, and a plan would come back short and be unwound and reported as complete. So for
+  the length of the pass the package's connection reads from the writer, reads your own code makes
+  on it included — a step run inline by `runSync()` or on a `sync` connection, say, though not one
+  sent to a queue, which runs in a job of its own — and goes back to its routing when the pass ends.
+  A connection opened under the same name while the pass runs, as a tenancy hook that reconnects
+  does, reads from the writer too.
 
-The replay that drives a run reads its history through the connection's routing like any other
-query, so a replica that is behind can show it a step recorded a moment earlier as missing or
-unfinished. Set `'sticky' => true` on a split connection: it reads from the writer once it has
-changed a row, which the transition a drive writes before it replays normally does.
+The engine does not need `'sticky' => true`. Reads your own code makes outside a pass, such as
+`SagaFlow::findRun()`, follow the connection's routing as usual. So does `SagaFlow::loadFlow()`: a
+handle loaded from a replica that is behind has `cancel()` or `compensate()` refused with
+`ConcurrentFlowTransitionException`, as for any run that moved on after it was read, rather than
+acting on what the replica showed.
 
 ## When a step is quietly skipped
 

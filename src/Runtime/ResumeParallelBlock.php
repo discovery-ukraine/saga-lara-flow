@@ -20,7 +20,7 @@ final readonly class ResumeParallelBlock
 
     public function __invoke(Batch $batch): void
     {
-        $flowRun = app(FlowRepository::class)->find($this->flowRunId);
+        $flowRun = app(FlowRepository::class)->findOnWriter($this->flowRunId);
 
         if ($flowRun === null) {
             return;

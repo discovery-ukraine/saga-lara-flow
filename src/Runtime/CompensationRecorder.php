@@ -346,6 +346,7 @@ final readonly class CompensationRecorder
     private function nextSequence(FlowRun $flowRun): int
     {
         return $this->newCompensation()->newQuery()
+            ->useWritePdo()
             ->where('flow_run_id', $flowRun->id)
             ->count();
     }

@@ -27,6 +27,7 @@ class EloquentFlowChildRepository implements FlowChildRepository
                 |> array_values(...);
 
         return $this->model()::query()
+            ->useWritePdo()
             ->where('parent_flow_run_id', $parentFlowRunId)
             ->whereNotIn('status', $terminal)
             ->get();

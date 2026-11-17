@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionDispatcher;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ActionRecorder;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowResumer;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
@@ -119,6 +120,9 @@ class RunActionJob implements ShouldQueue
         /** @var class-string<ActionRun> $model */
         $model = config('saga-lara-flow.models.action_run');
 
-        return $model::query()->find($this->actionRunId);
+        return $model::query()
+            ->useWritePdo()
+            ->with(['flowRun' => fn (Relation $run) => $run->useWritePdo()])
+            ->find($this->actionRunId);
     }
 }

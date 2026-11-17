@@ -81,7 +81,7 @@ class SagaRunner
         FlowStatus $finalState,
         array $ranCompensationIds
     ): void {
-        $flowRun = $this->repository->find($flowRunId);
+        $flowRun = $this->repository->findOnWriter($flowRunId);
 
         if ($flowRun === null) {
             return;
@@ -306,6 +306,7 @@ class SagaRunner
         }
 
         return $this->compensationModel()->newQuery()
+            ->useWritePdo()
             ->whereIn('id', $compensationIds)
             ->whereNot('status', CompensationStatus::Completed)
             ->where('continue_on_failure', false)
@@ -315,6 +316,7 @@ class SagaRunner
     private function firstFailedCompensation(FlowRun $flowRun): ?CompensationRun
     {
         return $this->compensationModel()->newQuery()
+            ->useWritePdo()
             ->where('flow_run_id', $flowRun->id)
             ->where('status', CompensationStatus::Failed)
             ->orderBy('sequence')
@@ -329,6 +331,7 @@ class SagaRunner
     private function firstUnfinishedCompensation(FlowRun $flowRun): ?CompensationRun
     {
         return $this->compensationModel()->newQuery()
+            ->useWritePdo()
             ->where('flow_run_id', $flowRun->id)
             ->whereIn('status', [CompensationStatus::Pending, CompensationStatus::Running])
             ->orderBy('sequence')

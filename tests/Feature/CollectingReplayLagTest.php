@@ -11,7 +11,6 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ProbeHostThrowWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ProbeLaggingReplicaWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\TestCase;
-use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 
@@ -47,14 +46,6 @@ function laggingReplicaScene(): array
         'parent' => $parent->id,
         'child' => $parent->children()->sole()->child_flow_run_id,
     ];
-}
-
-/**
- * Whether the connection has been told to read from the writer, which it keeps to itself.
- */
-function readsFromWriter(Connection $connection): bool
-{
-    return (bool) (new ReflectionProperty($connection, 'readOnWriteConnection'))->getValue($connection);
 }
 
 /**

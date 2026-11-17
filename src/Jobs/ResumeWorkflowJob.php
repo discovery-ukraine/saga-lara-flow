@@ -28,7 +28,7 @@ class ResumeWorkflowJob implements ShouldQueue
      */
     public function handle(FlowExecutor $executor, FlowRepository $repository): void
     {
-        $flowRun = $repository->find($this->flowRunId);
+        $flowRun = $repository->findOnWriter($this->flowRunId);
 
         if ($flowRun === null || ! $flowRun->status->canStartWork()) {
             return;

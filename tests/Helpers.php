@@ -16,7 +16,7 @@ use PHPUnit\Framework\AssertionFailedError;
  * Shared test helpers, loaded once via tests/Pest.php so every test file can use
  * them regardless of execution order.
  */
-if (! function_exists('useDatabaseQueue')) {
+if (!function_exists('useDatabaseQueue')) {
     /**
      * Switch to a real database queue and a worker that drains it. This exercises
      * the genuine async path — RunWorkflowJob → RunActionJob → ResumeWorkflowJob,
@@ -43,7 +43,7 @@ if (! function_exists('useDatabaseQueue')) {
             'table' => 'job_batches',
         ]);
 
-        if (! Schema::connection('testing')->hasTable('jobs')) {
+        if (!Schema::connection('testing')->hasTable('jobs')) {
             Schema::connection('testing')->create('jobs', function (Blueprint $table) {
                 $table->bigIncrements('id');
                 $table->string('queue')->index();
@@ -55,7 +55,7 @@ if (! function_exists('useDatabaseQueue')) {
             });
         }
 
-        if (! Schema::connection('testing')->hasTable('job_batches')) {
+        if (!Schema::connection('testing')->hasTable('job_batches')) {
             Schema::connection('testing')->create('job_batches', function (Blueprint $table) {
                 $table->string('id')->primary();
                 $table->string('name');
@@ -130,9 +130,9 @@ if (! function_exists('useDatabaseQueue')) {
      */
     function drainQueueClockStepBack(Collection $left, int $now): ?int
     {
-        $ahead = $left->map(fn (object $row): int => $row->available_at - $now);
+        $ahead = $left->map(fn(object $row): int => $row->available_at - $now);
 
-        if ($ahead->contains(fn (int $seconds): bool => $seconds < 1 || $seconds > 3)) {
+        if ($ahead->contains(fn(int $seconds): bool => $seconds < 1 || $seconds > 3)) {
             return null;
         }
 
@@ -157,7 +157,8 @@ if (! function_exists('useDatabaseQueue')) {
                 is_array($payload) ? ($payload['displayName'] ?? '?') : '?',
                 $row->queue,
                 $row->attempts,
-                $row->reserved_at === null ? 'null' : sprintf('%d (%+d s from now)', $row->reserved_at, $row->reserved_at - $now),
+                $row->reserved_at === null ? 'null' : sprintf('%d (%+d s from now)', $row->reserved_at,
+                    $row->reserved_at - $now),
                 $row->available_at,
                 $row->available_at - $now,
             );
@@ -200,7 +201,7 @@ if (! function_exists('useDatabaseQueue')) {
         $actions = $run->actions()
             ->orderBy('sequence')
             ->get()
-            ->map(fn ($action) => [
+            ->map(fn($action) => [
                 'sequence' => $action->sequence,
                 'status' => $action->status,
                 'action_class' => $action->action_class,
@@ -212,7 +213,7 @@ if (! function_exists('useDatabaseQueue')) {
     }
 }
 
-if (! function_exists('logToFile')) {
+if (!function_exists('logToFile')) {
     /**
      * Point the package's anomaly log at a real single-file channel. The project uses
      * no mocks, so the assertions read the file an operator would actually grep.
@@ -229,7 +230,17 @@ if (! function_exists('logToFile')) {
     }
 }
 
-if (! function_exists('rivalSession')) {
+if (!function_exists('readsFromWriter')) {
+    /**
+     * Whether the connection has been told to read from the writer, which it keeps to itself.
+     */
+    function readsFromWriter(Connection $connection): bool
+    {
+        return (bool) (new ReflectionProperty($connection, 'readOnWriteConnection'))->getValue($connection);
+    }
+}
+
+if (!function_exists('rivalSession')) {
     /**
      * The rival's session: its own server session, transaction, locks and snapshot.
      * In a forked rival it is a session of the child's own.
@@ -278,7 +289,8 @@ if (! function_exists('rivalSession')) {
             'mysql' => 'select @@session.transaction_isolation',
         });
 
-        Assert::assertSame($level, strtolower(str_replace('-', ' ', $taken)), 'The session did not take the isolation level.');
+        Assert::assertSame($level, strtolower(str_replace('-', ' ', $taken)),
+            'The session did not take the isolation level.');
     }
 
     /**
@@ -332,15 +344,24 @@ if (! function_exists('rivalSession')) {
      *
      * @return array{waited: bool, returned: mixed, threw: ?Throwable}
      */
-    function againstUncommitted(Closure $rivalMove, Closure $engineWrite, ?string $isolation = null, float $seconds = 5.0): array
-    {
+    function againstUncommitted(
+        Closure $rivalMove,
+        Closure $engineWrite,
+        ?string $isolation = null,
+        float $seconds = 5.0
+    ): array {
         if ($isolation !== null) {
             isolation(DB::connection('testing'), $isolation);
         }
 
         $engineSession = sessionId(DB::connection('testing'));
 
-        $rival = ForkedRival::start(function (ForkedRival $engine) use ($rivalMove, $engineSession, $isolation, $seconds): bool {
+        $rival = ForkedRival::start(function (ForkedRival $engine) use (
+            $rivalMove,
+            $engineSession,
+            $isolation,
+            $seconds
+        ): bool {
             $session = DB::connection('testing');
             lockTimeout($session, 10);
 
@@ -357,7 +378,7 @@ if (! function_exists('rivalSession')) {
 
             $deadline = hrtime(true) + (int) ($seconds * 1e9);
 
-            while (! $engine->reached('engine write done')) {
+            while (!$engine->reached('engine write done')) {
                 if (waitsOnLock($engineSession, $rivalSession)) {
                     $session->commit();
 
@@ -366,7 +387,8 @@ if (! function_exists('rivalSession')) {
 
                 if (hrtime(true) >= $deadline) {
                     throw new AssertionFailedError(sprintf(
-                        "Barrier 'engine write done': the engine neither waited on the rival nor finished within %.1f s.", $seconds,
+                        "Barrier 'engine write done': the engine neither waited on the rival nor finished within %.1f s.",
+                        $seconds,
                     ));
                 }
 
@@ -400,10 +422,11 @@ if (! function_exists('rivalSession')) {
     {
         $deadline = hrtime(true) + (int) ($seconds * 1e9);
 
-        while (! waitsOnLock($session, $holder)) {
+        while (!waitsOnLock($session, $holder)) {
             if (hrtime(true) >= $deadline) {
                 throw new AssertionFailedError(sprintf(
-                    "Barrier '%s': session %d was not seen waiting on session %d within %.1f s.", $barrier, $session, $holder, $seconds,
+                    "Barrier '%s': session %d was not seen waiting on session %d within %.1f s.", $barrier, $session,
+                    $holder, $seconds,
                 ));
             }
 

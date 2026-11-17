@@ -37,6 +37,11 @@ class EloquentFlowRepository implements FlowRepository
         return $this->flowRunClass()::query()->find($id);
     }
 
+    public function findOnWriter(string $id): ?FlowRun
+    {
+        return $this->flowRunClass()::query()->useWritePdo()->find($id);
+    }
+
     public function findOrFail(string $id): FlowRun
     {
         return $this->find($id) ?? throw FlowNotFoundException::for($id);
