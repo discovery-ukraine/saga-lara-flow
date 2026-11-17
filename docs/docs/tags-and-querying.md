@@ -59,11 +59,25 @@ Re-tagging an existing key overwrites its value rather than adding a second tag 
 enforces one row per `(flow_run_id, key)`. Both `tag()` and `tags()` / `withTags()` are idempotent
 across replays — safe to call unconditionally at the top of `handle()`.
 
-:::caution Outside tags vs workflow tags
+:::caution Workflow tags re-run on every replay
 Tags are not history: they carry no sequence and are never consulted during replay. A workflow
-calling `$this->tag('x', ...)` in `handle()` re-runs that write on **every replay**, overwriting
-whatever a host, or a parent through `child()->withTags()`, set under the same key. Keys written
-from outside or by a parent should not collide with keys the workflow writes itself.
+calling `$this->tag('x', ...)` in `handle()` re-runs that write on **every replay that reaches
+it**, the one that plans a rollback included. Two things follow:
+
+- Whatever a host, or a parent through `child()->withTags()`, set under the same key is
+  overwritten. Keys written from outside or by a parent should not collide with keys the workflow
+  writes itself.
+- A key whose value changes over the course of `handle()` — a `stage` that goes from `started` to
+  `charged` — is written back to its earlier value and forward again on every replay that reaches
+  the later call. Each write is committed on its own, so until `handle()` gets to that call, a query
+  by that key can match the earlier value and miss the current one. A replay that stops in between —
+  `handle()` throws, the rollback plan cannot be finished, or the process dies — leaves the earlier
+  value in place until a later replay reaches that call, which a run that has ended never gets.
+  Where that matters, write the key once, with its final value.
+
+A tag whose value has not changed is not written again, and a tag write leaves the run's own
+`updated_at` alone. Reading a tag back from the database to branch on it is a direct database read,
+which the [determinism rules](./determinism-rules.md) rule out.
 :::
 
 ## Querying runs

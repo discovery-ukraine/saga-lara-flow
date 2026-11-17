@@ -593,8 +593,8 @@ class FlowExecutor
         $primary = $this->exceptionToArray(FlowExpiredException::forFlowRun($flowRun));
 
         // Named, because what the sweep does about a failure depends entirely on
-        // whether it happened here. Nothing has been written yet, so a run whose
-        // rollback cannot be planned is still exactly where it was found.
+        // whether it happened here. The run has not been moved yet, so one whose
+        // rollback cannot be planned keeps the status it was found in.
         try {
             $entries = $this->collectCompensations($flowRun);
         } catch (Throwable $planning) {

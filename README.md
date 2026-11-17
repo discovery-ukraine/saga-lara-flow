@@ -592,7 +592,11 @@ A child run gets the `#[Tag]`s of its own class and whatever its parent passes t
 `child()`, not its parent's tags.
 
 Tag keys written from outside or by a parent should not collide with keys the workflow writes in
-`handle()`: a workflow `$this->tag('x', ...)` re-runs on every replay and would overwrite them.
+`handle()`: a workflow `$this->tag('x', ...)` re-runs on every replay that reaches it, the one that
+plans a rollback included, and would overwrite them. A key the workflow changes over the course of
+`handle()` is written back to its earlier value on each of those replays, and a query by it can
+match that value until the replay reaches the later call — or for good, if the replay stops before
+it. Write such a key once, with its final value.
 
 Query runs with the fluent, type-safe `FlowQuery`:
 

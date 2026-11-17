@@ -7,7 +7,7 @@ use Throwable;
 
 /**
  * An overdue run whose rollback could not be planned: the compensation-only replay
- * threw before anything was written, so the run is exactly where it was found.
+ * threw before the run was moved, so it keeps the status it was found in.
  *
  * It exists so the monitor's sweep can tell that failure from every other one by its
  * type rather than by guessing from the run's status afterwards — Cancelling is
