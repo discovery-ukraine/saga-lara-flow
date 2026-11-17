@@ -96,10 +96,12 @@ to claim its row, a [child workflow](./child-workflows.md) and a [side effect](.
 pass still replaying reaches for the first time, and a replacement the
 [doctor](./expiration-and-monitoring.md#repair-the-doctor) would otherwise send.
 
-That is what moving the run first is for. A plan is drawn before the move as well, but
-only to find out whether one can be drawn at all: it writes nothing, so a run whose replay throws is
-left exactly where it was found. The plan that is unwound is the one made afterwards, and it holds
-the step whose owed queue attempt completed while the first was being drawn.
+That is what moving the run first is for. A plan is drawn before the move as well, but only to find
+out whether one can be drawn at all: it moves nothing, so a run whose replay throws keeps its status
+and history exactly as they were found. Only the workflow's own
+[tags](./tags-and-querying.md#tagging-runs) are written again, as on every replay that reaches
+them. The plan that is unwound is the one made afterwards, and it holds the step whose owed queue
+attempt completed while the first was being drawn.
 
 The later plan is not always the longer one. An attempt that claimed a failed step in the same gap
 leaves it `Running`, and what `compensateStepOnSelfFailure()` registers for a failed step is not

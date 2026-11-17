@@ -537,8 +537,8 @@ class ActionBuilder
     {
         $suspender = app(FlowSuspender::class);
 
-        // Compensation-only planning never restarts work and never mutates: the
-        // parked step is the live frontier, so stop here.
+        // Compensation-only planning never restarts work and never mutates the parked
+        // step: it is the live frontier, so stop here.
         if ($this->runtime->isCollecting()) {
             $suspender->suspend('action', $sequence);
         }
@@ -887,7 +887,7 @@ class ActionBuilder
      * outside only): resolve the step exactly as it would have resolved without the
      * policy. An optional step is marked OptionalFailed here — the queued give-up
      * hook deliberately leaves that to the seam for a step with a retry signal —
-     * unless this pass is only collecting compensations, which writes nothing.
+     * unless this pass is only collecting compensations, which settles no step.
      */
     private function giveUpAfterRetry(ActionRun $step, int $sequence): mixed
     {
