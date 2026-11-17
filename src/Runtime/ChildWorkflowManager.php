@@ -29,6 +29,7 @@ use DiscoveryUkraine\SagaLaraFlow\Retry\RecordedFailure;
 use DiscoveryUkraine\SagaLaraFlow\Retry\RetryContext;
 use DiscoveryUkraine\SagaLaraFlow\Support\AttributeReader;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Throwable;
 
@@ -700,6 +701,7 @@ readonly class ChildWorkflowManager
 
         return $model::query()
             ->useWritePdo()
+            ->with(['parent' => fn (Relation $parent) => $parent->useWritePdo()])
             ->where('parent_flow_run_id', $run->parent_id)
             ->where('child_flow_run_id', $run->id)
             ->first();

@@ -3,6 +3,7 @@
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ParentClosedException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
@@ -16,6 +17,7 @@ use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaFlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\MakeValueAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ManualCompensateWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParallelEchoWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParentFailPolicyWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\SagaRollbackWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\StealsRunCompensation;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\StolenRollbackWorkflow;
@@ -331,3 +333,17 @@ it('keeps reading from the writer when a tenancy hook reconnects mid-pass', func
         DB::purge('testing');
     }
 })->skip(fn () => TestCase::driver() === 'sqlite', 'Reconnecting an in-memory SQLite database empties it.');
+
+it('records why a child failed although the replica does not hold its parent yet', function (): void {
+    config()->set('saga-lara-flow.models.flow_run', LaggingReplicaFlowRun::class);
+
+    $parent = SagaFlow::create(ParentFailPolicyWorkflow::class)->runSync();
+    $child = $parent->children()->sole()->child_flow_run_id;
+
+    LaggingReplicaBuilder::$missingRuns = [$parent->id];
+
+    dispatch_sync(new CancelChildWorkflowJob($child, FlowStatus::Failed, true));
+
+    expect(driveReplayLagRun($child)->status)->toBe(FlowStatus::Failed)
+        ->and(driveReplayLagRun($child)->exception['class'] ?? null)->toBe(ParentClosedException::class);
+});

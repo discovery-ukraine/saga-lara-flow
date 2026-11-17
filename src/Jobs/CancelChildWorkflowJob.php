@@ -181,7 +181,7 @@ class CancelChildWorkflowJob implements ShouldQueue
             return null;
         }
 
-        $parent = $repository->find($child->parent_id);
+        $parent = $repository->findOnWriter($child->parent_id);
 
         if ($parent === null) {
             return null;
