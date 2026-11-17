@@ -10,23 +10,30 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
+use DiscoveryUkraine\SagaLaraFlow\Jobs\RunParallelActionJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ChildEchoWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\CompensationLog;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\FailedStepWithCompensationWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaBuilder;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaFlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\LaggingReplicaFlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\MakeValueAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParallelEchoWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParallelFailFastWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParallelOptionalWorkflow;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ParallelWaitAllWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\RaceOnTransition;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\ThrowingAction;
+use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UndoAction;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\UngivableUpActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Fixtures\WaitingChildWorkflow;
 use DiscoveryUkraine\SagaLaraFlow\Workflow;
 use Illuminate\Queue\Events\JobExceptionOccurred;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -110,6 +117,75 @@ final class SyncWakeStepThenParallelWorkflow extends Workflow
         return ['results' => $this->parallel()
             ->action(MakeValueAction::class, 'b')
             ->action(MakeValueAction::class, 'c')
+            ->run()];
+    }
+}
+
+final class SyncWakeParallelFailFastMidBlockWorkflow extends Workflow
+{
+    /**
+     * @return list<mixed>
+     */
+    public function handle(): array
+    {
+        return $this->parallel()
+            ->action(MakeValueAction::class, 'a')
+            ->compensateWith(UndoAction::class, 'a')
+            ->action(ThrowingAction::class)
+            ->action(MakeValueAction::class, 'c')
+            ->compensateWith(UndoAction::class, 'c')
+            ->failFast()
+            ->run();
+    }
+}
+
+final class SyncWakeParallelWaitAllMidBlockWorkflow extends Workflow
+{
+    /**
+     * @return list<mixed>
+     */
+    public function handle(): array
+    {
+        return $this->parallel()
+            ->action(MakeValueAction::class, 'a')
+            ->compensateWith(UndoAction::class, 'a')
+            ->action(ThrowingAction::class)
+            ->action(MakeValueAction::class, 'c')
+            ->compensateWith(UndoAction::class, 'c')
+            ->waitAllThenFail()
+            ->run();
+    }
+}
+
+#[FlowQueue(connection: 'sync')]
+final class SyncConnectionParallelWorkflow extends Workflow
+{
+    /**
+     * @return list<mixed>
+     */
+    public function handle(): array
+    {
+        return $this->parallel()
+            ->action(MakeValueAction::class, 'a')
+            ->compensateWith(UndoAction::class, 'a')
+            ->action(ThrowingAction::class)
+            ->action(MakeValueAction::class, 'c')
+            ->failFast()
+            ->run();
+    }
+}
+
+#[FlowQueue(connection: 'database')]
+final class DatabaseConnectionParallelWorkflow extends Workflow
+{
+    /**
+     * @return array{results: list<mixed>}
+     */
+    public function handle(): array
+    {
+        return ['results' => $this->parallel()
+            ->action(MakeValueAction::class, 'a')
+            ->action(MakeValueAction::class, 'b')
             ->run()];
     }
 }
@@ -352,6 +428,126 @@ it('resolves a step that failed on a sync connection as a queue would', function
         ->and($step->status)->toBe(ActionStatus::AwaitingRetry)
         ->and($step->retry_signal_attempts)->toBe(1);
 })->with([[true], [false]]);
+
+it('resolves a parallel block with a failed step on a sync connection as a queue would', function (string $workflow, bool $locks): void {
+    useDatabaseQueue();
+
+    $queued = SagaFlow::create($workflow)->run();
+    drainQueue();
+
+    $queued = FlowRun::query()->findOrFail($queued->id);
+    $expected = [
+        runStateSnapshot($queued->id),
+        $queued->result,
+        $queued->exception['class'] ?? null,
+        CompensationLog::all(),
+    ];
+
+    CompensationLog::reset();
+    useSyncQueueConnection(locks: $locks);
+
+    $sync = SagaFlow::create($workflow)->run();
+
+    // Every step runs, the block resolves from what each step recorded, and the steps
+    // that completed are rolled back when the block fails.
+    $sync = FlowRun::query()->findOrFail($sync->id);
+
+    expect([
+        runStateSnapshot($sync->id),
+        $sync->result,
+        $sync->exception['class'] ?? null,
+        CompensationLog::all(),
+    ])->toBe($expected);
+})->with([
+    [ParallelFailFastWorkflow::class],
+    [ParallelOptionalWorkflow::class],
+    [ParallelWaitAllWorkflow::class],
+    [SyncWakeParallelFailFastMidBlockWorkflow::class],
+    [SyncWakeParallelWaitAllMidBlockWorkflow::class],
+])->with([[true], [false]]);
+
+it('sends a parallel block member by member on a run whose own connection is sync', function (): void {
+    useDatabaseQueue();
+
+    $run = SagaFlow::create(SyncConnectionParallelWorkflow::class)->run();
+
+    // Resolved within the call that started it, with nothing left on the default queue.
+    $run = FlowRun::query()->findOrFail($run->id);
+
+    expect($run->status)->toBe(FlowStatus::Failed)
+        ->and($run->exception['class'] ?? null)->toBe(ActionFailedException::class)
+        ->and(runStateSnapshot($run->id)['actions'])->sequence(
+            fn ($step) => $step->status->toBe(ActionStatus::Completed),
+            fn ($step) => $step->status->toBe(ActionStatus::Failed),
+            fn ($step) => $step->status->toBe(ActionStatus::Cancelled),
+        )
+        ->and(CompensationLog::all())->toBe(['undo:a'])
+        ->and(DB::table('jobs')->count())->toBe(0);
+});
+
+it('batches a parallel block on a run whose own connection is a queue', function (): void {
+    useSyncQueueConnection();
+
+    $run = SagaFlow::create(DatabaseConnectionParallelWorkflow::class)->run();
+
+    // drainQueue() works the default connection, which is sync here.
+    Artisan::call('queue:work', [
+        'connection' => 'database',
+        '--stop-when-empty' => true,
+        '--sleep' => 0,
+        '--memory' => 4096,
+    ]);
+
+    // Members sent one by one to a real queue would leave the join with nothing to wake it.
+    $run = FlowRun::query()->findOrFail($run->id);
+
+    expect($run->status)->toBe(FlowStatus::Completed)
+        ->and($run->result['results'] ?? null)->toBe([['label' => 'a'], ['label' => 'b']])
+        ->and(DB::table('job_batches')->count())->toBe(1);
+});
+
+it('fails the run on a sync parallel member whose failure is not on record', function (string $workflow, string $event, string $message): void {
+    useSyncQueueConnection();
+
+    Event::listen($event, function (object $fired) use ($message): void {
+        if ($fired->job->resolveName() === RunParallelActionJob::class) {
+            throw new RuntimeException($message);
+        }
+    });
+
+    $run = SagaFlow::create($workflow)->run();
+
+    // A member that never ran, or an optional one the failure hook never gave up, leaves
+    // nothing for the join to resolve: the throw is the answer.
+    $run = FlowRun::query()->findOrFail($run->id);
+
+    expect($run->status)->toBe(FlowStatus::Failed)
+        ->and($run->exception['message'] ?? null)->toBe($message);
+})->with([
+    'broke before it ran' => [ParallelFailFastWorkflow::class, JobProcessing::class, 'the queue broke first'],
+    'optional, hook never ran' => [ParallelOptionalWorkflow::class, JobExceptionOccurred::class, 'a listener broke the failure hook'],
+]);
+
+it('reads a failed sync parallel member from the writer', function (): void {
+    config()->set('saga-lara-flow.models.action_run', LaggingReplicaActionRun::class);
+    useSyncQueueConnection();
+
+    // Once the failure hook has run, the replica has not seen the member's row yet; the
+    // next member's job reads one that has caught up.
+    Event::listen(JobFailed::class, function (JobFailed $event): void {
+        if ($event->job->resolveName() === RunParallelActionJob::class) {
+            LaggingReplicaBuilder::$noSteps = true;
+        }
+    });
+    Queue::before(fn () => LaggingReplicaBuilder::reset());
+
+    $run = SagaFlow::create(ParallelOptionalWorkflow::class)->run();
+
+    $run = FlowRun::query()->findOrFail($run->id);
+
+    expect($run->status)->toBe(FlowStatus::Completed)
+        ->and($run->result['results'] ?? null)->toBe([['label' => 'a'], 'skipped', ['label' => 'c']]);
+});
 
 it('hands the workflow the failure a queue would, not the one the sync queue rethrows', function (string $connection): void {
     $connection === 'database' ? useDatabaseQueue() : useSyncQueueConnection();

@@ -17,18 +17,23 @@ suspension point (a signal wait, a queued action). Each operation is identified 
 ### On a sync connection {#sync-connection}
 
 A job sent to a connection with the `sync` driver runs before the dispatch returns, inside the pass
-that sent it. When a step, a parallel block whose members succeed or a child finishes that way, the
-pass replays at once and goes on rather than waiting for a resume. A queued run on `sync` — a fresh
+that sent it. When a step, a parallel block or a child finishes that way, the pass replays at once
+and goes on rather than waiting for a resume. A queued run on `sync` — a fresh
 install's default and many test suites' — is driven by the call that starts it, to its end or to its
 first wait nothing in the pass can answer. Its history records that as one pass, with no
 `flow.waiting` and `flow.resumed` between the steps.
 
-A step outside a `parallel()` block that fails there is resolved from what its job recorded, as on
-any other queue: a retry policy parks it, an optional step falls back, and a required one fails the
-run with `ActionFailedException`. The sync queue also rethrows the step's exception out of the
-dispatch; the workflow does not see it. A failing member of a `parallel()` block is not resolved
-that way: its exception fails the run and the block's members are left `Cancelled`. A signal a
-step sends its own run is taken up by the same pass.
+A step that fails there is resolved from what its job recorded, as on any other queue: a retry
+policy parks it, an optional step falls back, and a required one fails the run with
+`ActionFailedException`. The sync queue also rethrows the step's exception out of the dispatch; the
+workflow does not see it. A `parallel()` block on `sync` is not sent as a batch: the sync queue
+would run the whole batch inside one transaction and roll back what every member recorded when one
+of them throws. Its members are sent one at a time instead, each as its own job. A failed member
+ends the block's sending under `failFast()`, as a cancelled batch would, and leaves the members not
+yet sent `Pending` until the run closes them as `Cancelled`. A `failover` connection is not
+recognised as `sync`: while its chain has fallen through to a `sync` connection, a block with a
+failed member fails the run with that member's exception, leaves the members `Cancelled` and rolls
+back none of those that completed. A signal a step sends its own run is taken up by the same pass.
 
 ## Idempotency
 

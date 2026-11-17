@@ -16,9 +16,9 @@ use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
 /**
- * Executes one step of a parallel() block as part of a Bus::batch. Unlike
- * RunActionJob it does NOT resume the workflow itself — the batch's finally
- * callback (ResumeParallelBlock) drives the single join after every step settles.
+ * Executes one step of a parallel() block, as part of a Bus::batch or, on a sync
+ * connection, on its own. Unlike RunActionJob it does NOT resume the workflow itself —
+ * the batch's finally callback (ResumeParallelBlock) or the sending pass drives the join.
  *
  * On final failure: an optional step is recorded OptionalFailed (it never fails the
  * flow); a hard failure under the FailFast policy cancels the batch so pending

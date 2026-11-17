@@ -19,9 +19,10 @@ use Throwable;
 /**
  * Runs a parallel() block under the same replay model as a single action: it
  * assigns each step a deterministic (flow_run_id, sequence) ordinal, dispatches
- * them all together (a Bus::batch of RunParallelActionJob in queued mode, inline
- * in sync), then joins — suspending until every step is terminal, then returning
- * the ordered results or surfacing the first hard failure.
+ * them all together (a Bus::batch of RunParallelActionJob in queued mode, one job
+ * after another on a sync connection, inline in sync), then joins — suspending until
+ * every step is terminal, then returning the ordered results or surfacing the first
+ * hard failure.
  *
  * The whole block shares one parallel group id (written to action_runs.parallel_group
  * and carried on each CompensationEntry), so completed steps roll back together as a
@@ -75,9 +76,11 @@ final readonly class ParallelRunner
                 $this->suspender->suspend('parallel', $slots[0]['sequence']);
             }
 
-            return $runtime->mode() === RunMode::Sync
-                ? $this->dispatchSync($flowRun, $slots, $policy, $groupId)
-                : $this->dispatchQueued($flowRun, $slots, $policy, $groupId);
+            return match (true) {
+                $runtime->mode() === RunMode::Sync => $this->dispatchSync($flowRun, $slots, $policy, $groupId),
+                $this->onSyncConnection($flowRun) => $this->dispatchEachOnSync($flowRun, $slots, $policy, $groupId),
+                default => $this->dispatchQueued($flowRun, $slots, $policy, $groupId),
+            };
         }
 
         return $this->join($runtime, $slots, $groupId);
@@ -140,21 +143,7 @@ final readonly class ParallelRunner
         ParallelFailurePolicy $policy,
         int $groupId
     ): array {
-        $jobs = [];
-
-        foreach ($slots as $slot) {
-            $step = $slot['step'];
-
-            $actionRun = $this->recorder->scheduleAction(
-                $flowRun,
-                $slot['sequence'],
-                $this->scheduleFor($step, $groupId),
-            );
-
-            $jobs[] = new RunParallelActionJob($actionRun->id, $step->actionClass(), $policy);
-        }
-
-        $batch = Bus::batch($jobs)
+        $batch = Bus::batch($this->scheduleMembers($flowRun, $slots, $policy, $groupId))
             ->name("parallel:{$flowRun->id}:{$groupId}")
             ->allowFailures()
             ->finally(new ResumeParallelBlock($flowRun->id));
@@ -170,6 +159,100 @@ final readonly class ParallelRunner
         $batch->dispatch();
 
         $this->suspender->suspend('parallel', $slots[0]['sequence']);
+    }
+
+    /**
+     * A sync queue runs a batch inside one transaction of its own and stops at the first
+     * member that throws, so each member goes as its own job and the replay joins them.
+     *
+     * @param  list<array{step: ParallelStepBuilder, sequence: int, row: ?ActionRun}>  $slots
+     * @return list<mixed>
+     *
+     * @throws Throwable
+     */
+    private function dispatchEachOnSync(
+        FlowRun $flowRun,
+        array $slots,
+        ParallelFailurePolicy $policy,
+        int $groupId
+    ): array {
+        foreach ($this->scheduleMembers($flowRun, $slots, $policy, $groupId) as $job) {
+            if ($flowRun->connection !== null) {
+                $job->onConnection($flowRun->connection);
+            }
+
+            if ($flowRun->queue !== null) {
+                $job->onQueue($flowRun->queue);
+            }
+
+            try {
+                Bus::dispatch($job);
+            } catch (Throwable $thrown) {
+                $status = $this->recordedFailure($job->actionRunId);
+
+                if ($status === null) {
+                    throw $thrown;
+                }
+
+                if ($status === ActionStatus::Failed && $policy === ParallelFailurePolicy::FailFast) {
+                    break;
+                }
+            }
+        }
+
+        $this->suspender->suspendInline('parallel', $slots[0]['sequence']);
+    }
+
+    /**
+     * @param  list<array{step: ParallelStepBuilder, sequence: int, row: ?ActionRun}>  $slots
+     * @return list<RunParallelActionJob>
+     */
+    private function scheduleMembers(
+        FlowRun $flowRun,
+        array $slots,
+        ParallelFailurePolicy $policy,
+        int $groupId
+    ): array {
+        $jobs = [];
+
+        foreach ($slots as $slot) {
+            $step = $slot['step'];
+
+            $actionRun = $this->recorder->scheduleAction(
+                $flowRun,
+                $slot['sequence'],
+                $this->scheduleFor($step, $groupId),
+            );
+
+            $jobs[] = new RunParallelActionJob($actionRun->id, $step->actionClass(), $policy);
+        }
+
+        return $jobs;
+    }
+
+    private function onSyncConnection(FlowRun $flowRun): bool
+    {
+        $connection = $flowRun->connection ?? config('queue.default');
+
+        return config("queue.connections.{$connection}.driver") === 'sync';
+    }
+
+    /**
+     * The outcome RunParallelActionJob::failed() leaves a member with, or null when the
+     * failure is not on record.
+     */
+    private function recordedFailure(string $actionRunId): ?ActionStatus
+    {
+        /** @var class-string<ActionRun> $model */
+        $model = config('saga-lara-flow.models.action_run');
+
+        $row = $model::query()->useWritePdo()->find($actionRunId);
+
+        return match ($row?->status) {
+            ActionStatus::OptionalFailed => ActionStatus::OptionalFailed,
+            ActionStatus::Failed => $row->continue_on_failure ? null : ActionStatus::Failed,
+            default => null,
+        };
     }
 
     /**

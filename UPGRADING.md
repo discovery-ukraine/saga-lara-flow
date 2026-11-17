@@ -32,6 +32,12 @@ Nothing below asks anything of you.
   back, or stays open past the grace window, leaves a `Pending` run the doctor now starts: call
   `run()` after you commit, or turn the rule off with `repair.redispatch_lost_starts`.
   [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
+- **A `parallel()` block on a `sync` queue connection resolves as it does on any other queue.** Its
+  members are sent one at a time rather than as a batch, so a block with a failed member falls back
+  on an optional one, rolls back the members that completed and fails the run with
+  `ActionFailedException`, instead of failing with the member's own exception and leaving every
+  member `Cancelled`. No batch is stored for it in `job_batches`.
+  [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)
 - **`saga-flow:kick` sends a run that has not started a `RunWorkflowJob`**, not a
   `ResumeWorkflowJob`, so while locks are enabled it waits for an original job that is still being
   worked, and it drives the run only if it is still `Pending` when it gets there.
