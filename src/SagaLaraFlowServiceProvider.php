@@ -31,6 +31,7 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Serialization\LaravelSerializer;
 use DiscoveryUkraine\SagaLaraFlow\States\FlowStateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
+use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Facades\Event;
 use Laravel\SerializableClosure\SerializableClosure;
@@ -92,6 +93,12 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
         if (is_string($key = config('app.key')) && $key !== '') {
             SerializableClosure::setSecretKey($key);
         }
+
+        Event::listen(ConnectionEstablished::class, function (ConnectionEstablished $event): void {
+            if ($this->app->resolved(FlowExecutor::class)) {
+                $this->app->make(FlowExecutor::class)->joinWriterPass($event->connection);
+            }
+        });
 
         // Opt-in: drive the monitor off the queue worker's idle loop, throttled in
         // FlowMonitor. Off by default — prefer Schedule::command('saga-flow:monitor').

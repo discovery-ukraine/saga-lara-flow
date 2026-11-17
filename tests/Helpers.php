@@ -157,7 +157,8 @@ if (! function_exists('useDatabaseQueue')) {
                 is_array($payload) ? ($payload['displayName'] ?? '?') : '?',
                 $row->queue,
                 $row->attempts,
-                $row->reserved_at === null ? 'null' : sprintf('%d (%+d s from now)', $row->reserved_at, $row->reserved_at - $now),
+                $row->reserved_at === null ? 'null' : sprintf('%d (%+d s from now)', $row->reserved_at,
+                    $row->reserved_at - $now),
                 $row->available_at,
                 $row->available_at - $now,
             );
@@ -229,6 +230,16 @@ if (! function_exists('logToFile')) {
     }
 }
 
+if (! function_exists('readsFromWriter')) {
+    /**
+     * Whether the connection has been told to read from the writer, which it keeps to itself.
+     */
+    function readsFromWriter(Connection $connection): bool
+    {
+        return (bool) (new ReflectionProperty($connection, 'readOnWriteConnection'))->getValue($connection);
+    }
+}
+
 if (! function_exists('rivalSession')) {
     /**
      * The rival's session: its own server session, transaction, locks and snapshot.
@@ -278,7 +289,8 @@ if (! function_exists('rivalSession')) {
             'mysql' => 'select @@session.transaction_isolation',
         });
 
-        Assert::assertSame($level, strtolower(str_replace('-', ' ', $taken)), 'The session did not take the isolation level.');
+        Assert::assertSame($level, strtolower(str_replace('-', ' ', $taken)),
+            'The session did not take the isolation level.');
     }
 
     /**
@@ -332,15 +344,24 @@ if (! function_exists('rivalSession')) {
      *
      * @return array{waited: bool, returned: mixed, threw: ?Throwable}
      */
-    function againstUncommitted(Closure $rivalMove, Closure $engineWrite, ?string $isolation = null, float $seconds = 5.0): array
-    {
+    function againstUncommitted(
+        Closure $rivalMove,
+        Closure $engineWrite,
+        ?string $isolation = null,
+        float $seconds = 5.0
+    ): array {
         if ($isolation !== null) {
             isolation(DB::connection('testing'), $isolation);
         }
 
         $engineSession = sessionId(DB::connection('testing'));
 
-        $rival = ForkedRival::start(function (ForkedRival $engine) use ($rivalMove, $engineSession, $isolation, $seconds): bool {
+        $rival = ForkedRival::start(function (ForkedRival $engine) use (
+            $rivalMove,
+            $engineSession,
+            $isolation,
+            $seconds
+        ): bool {
             $session = DB::connection('testing');
             lockTimeout($session, 10);
 
@@ -366,7 +387,8 @@ if (! function_exists('rivalSession')) {
 
                 if (hrtime(true) >= $deadline) {
                     throw new AssertionFailedError(sprintf(
-                        "Barrier 'engine write done': the engine neither waited on the rival nor finished within %.1f s.", $seconds,
+                        "Barrier 'engine write done': the engine neither waited on the rival nor finished within %.1f s.",
+                        $seconds,
                     ));
                 }
 
@@ -403,7 +425,8 @@ if (! function_exists('rivalSession')) {
         while (! waitsOnLock($session, $holder)) {
             if (hrtime(true) >= $deadline) {
                 throw new AssertionFailedError(sprintf(
-                    "Barrier '%s': session %d was not seen waiting on session %d within %.1f s.", $barrier, $session, $holder, $seconds,
+                    "Barrier '%s': session %d was not seen waiting on session %d within %.1f s.", $barrier, $session,
+                    $holder, $seconds,
                 ));
             }
 

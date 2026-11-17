@@ -36,7 +36,7 @@ class RunCompensationJob implements ShouldQueue
             return;
         }
 
-        $flowRun = $repository->find($this->flowRunId);
+        $flowRun = $repository->findOnWriter($this->flowRunId);
 
         if ($flowRun === null) {
             return;
@@ -73,6 +73,6 @@ class RunCompensationJob implements ShouldQueue
         /** @var class-string<CompensationRun> $model */
         $model = config('saga-lara-flow.models.compensation_run');
 
-        return $model::query()->find($this->compensationRunId);
+        return $model::query()->useWritePdo()->find($this->compensationRunId);
     }
 }

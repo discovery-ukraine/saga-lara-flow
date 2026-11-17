@@ -148,8 +148,8 @@ it('turns a stale job away before the pass is set up', function (string $job): v
 
     app()->call([new $job($run->id), 'handle']);
 
-    // The job answers from its own read: no pass is entered, so the executor never
-    // reaches the writer, and nothing new is queued.
-    expect(WriterRoutedFlowRun::$writerReads)->toBe(0)
+    // The job answers from its own read of the writer: no pass is entered, so the
+    // executor's reread never comes, and nothing new is queued.
+    expect(WriterRoutedFlowRun::$writerReads)->toBe(1)
         ->and(DB::connection('testing')->table('jobs')->count())->toBe($jobs);
 })->with([ResumeWorkflowJob::class, RunWorkflowJob::class]);

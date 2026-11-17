@@ -38,6 +38,14 @@ Nothing below asks anything of you.
   `ActionFailedException`, instead of failing with the member's own exception and leaving every
   member `Cancelled`. No batch is stored for it in `job_batches`.
   [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)
+- **A run's history is read from the write connection.** With a `read` / `write` split on the
+  package's connection, a pass that drives a run reads from the writer for its whole length, reads
+  your steps make on that connection while they run inline included, and every job reads the run,
+  step or compensation it was sent for, and the run it belongs to, from the writer. A replica that
+  has not caught up no longer fails a `runSync()` with `UniqueConstraintViolationException` or
+  leaves a run `Pending` or `Waiting` with nothing to wake it, nor stops a queued rollback after its
+  first level, and `'sticky' => true` is not needed for that.
+  [Read replicas](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
 - **`saga-flow:kick` sends a run that has not started a `RunWorkflowJob`**, not a
   `ResumeWorkflowJob`, so while locks are enabled it waits for an original job that is still being
   worked, and it drives the run only if it is still `Pending` when it gets there.

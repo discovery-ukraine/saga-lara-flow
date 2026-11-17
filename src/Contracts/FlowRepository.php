@@ -23,6 +23,11 @@ interface FlowRepository
     public function find(string $id): ?FlowRun;
 
     /**
+     * Read from the writer, for a caller deciding whether to act on the run.
+     */
+    public function findOnWriter(string $id): ?FlowRun;
+
+    /**
      * @throws FlowNotFoundException
      */
     public function findOrFail(string $id): FlowRun;

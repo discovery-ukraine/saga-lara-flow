@@ -22,6 +22,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
+use Illuminate\Database\Connection;
 use ReflectionProperty;
 use Throwable;
 
@@ -47,6 +48,13 @@ class FlowExecutor
      * @var list<FlowRuntime>
      */
     private array $runtimes = [];
+
+    /**
+     * The passes reading from the writer, outermost first.
+     *
+     * @var list<array{name: ?string, joined: list<Connection>}>
+     */
+    private array $writerPasses = [];
 
     public function __construct(
         private readonly StateMachine $stateMachine,
@@ -138,7 +146,10 @@ class FlowExecutor
             return $this->inOwnRuntime(fn (FlowRuntime $runtime): FlowRun => $this->tenancy->for(
                 $flowRun,
                 $flowRun->workflow_class,
-                fn (): FlowRun => $this->driveInner($runtime, $flowRun, $mode),
+                fn (): FlowRun => $this->onWriter(
+                    $flowRun,
+                    fn (): FlowRun => $this->driveInner($runtime, $flowRun, $mode),
+                ),
             ));
         } catch (ConcurrentFlowTransitionException) {
             // Somebody else owns this run now. Returning it rather than throwing lets
@@ -152,9 +163,9 @@ class FlowExecutor
     /**
      * The deadline is weighed after this check, never before: a run already rolling back
      * would otherwise be expired a second time, and a second plan runs every
-     * compensation on it twice. Only the check reads from the writer; the pass goes on
-     * with the caller's snapshot, which is the value every transition below is fenced
-     * on, and a second driver holding a stale one must not match it.
+     * compensation on it twice. The check rereads the run; the pass goes on with the
+     * caller's snapshot, which is the value every transition below is fenced on, and a
+     * second driver holding a stale one must not match it.
      *
      * @throws Throwable
      */
@@ -256,7 +267,10 @@ class FlowExecutor
         return $this->inOwnRuntime(fn (FlowRuntime $runtime): array => $this->tenancy->for(
             $flowRun,
             $flowRun->workflow_class,
-            fn (): array => $this->collectCompensationsInner($runtime, $flowRun),
+            fn (): array => $this->onWriter(
+                $flowRun,
+                fn (): array => $this->collectCompensationsInner($runtime, $flowRun),
+            ),
         ));
     }
 
@@ -359,16 +373,9 @@ class FlowExecutor
         $runtime->reset();
         $runtime->beginCollecting();
 
-        // Every read of the pass comes from the writer. A drive pass is left to the connection's
-        // routing, where a sticky connection follows the row its transition normally changes.
-        $connection = $flowRun->getConnection();
-        $pinned = (bool) new ReflectionProperty($connection, 'readOnWriteConnection')->getValue($connection);
-
         // Every exit unbinds, including the ones that leave by throwing, so nothing
         // that escapes this pass can be read as though a run were still bound.
         try {
-            $connection->useWriteConnectionWhenReading();
-
             // Only the throws below end the pass. Swallowing any other hands back a stack
             // truncated at that point, for compensate() to unwind and report as a complete
             // rollback. It leaves here instead, before the run has been touched, so the
@@ -395,14 +402,12 @@ class FlowExecutor
         } finally {
             $runtime->endCollecting();
             $runtime->clear();
-            $connection->useWriteConnectionWhenReading($pinned);
         }
     }
 
     /**
      * A child that ended before Waiting was on record found this run awake, so the pass goes
-     * on. It reads from the writer, which is what said so: a replay routed as usual can
-     * still find the child in flight.
+     * on.
      *
      * @throws Throwable
      */
@@ -417,15 +422,55 @@ class FlowExecutor
             return $flowRun;
         }
 
+        return $this->driveInner($runtime, $flowRun, $mode);
+    }
+
+    /**
+     * Run a pass with the package's connection reading from the writer, then hand it back
+     * reading as it did.
+     *
+     * @template TPass
+     *
+     * @param  callable(): TPass  $pass
+     * @return TPass
+     *
+     * @throws Throwable
+     */
+    private function onWriter(FlowRun $flowRun, callable $pass): mixed
+    {
         $connection = $flowRun->getConnection();
+
         $pinned = (bool) new ReflectionProperty($connection, 'readOnWriteConnection')->getValue($connection);
+
+        $this->writerPasses[] = ['name' => $connection->getName(), 'joined' => []];
 
         try {
             $connection->useWriteConnectionWhenReading();
 
-            return $this->driveInner($runtime, $flowRun, $mode);
+            return $pass();
         } finally {
+            foreach (array_pop($this->writerPasses)['joined'] as $joined) {
+                $joined->useWriteConnectionWhenReading(false);
+            }
+
             $connection->useWriteConnectionWhenReading($pinned);
+        }
+    }
+
+    /**
+     * A connection opened under the name a pass reads from — a tenancy hook reconnecting it
+     * mid-pass, say — reads from the writer until the outermost such pass ends.
+     */
+    public function joinWriterPass(Connection $connection): void
+    {
+        foreach ($this->writerPasses as $index => $pass) {
+            if ($pass['name'] === $connection->getName()) {
+                $connection->useWriteConnectionWhenReading();
+
+                $this->writerPasses[$index]['joined'][] = $connection;
+
+                return;
+            }
         }
     }
 

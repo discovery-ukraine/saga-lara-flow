@@ -49,7 +49,7 @@ class CancelChildWorkflowJob implements ShouldQueue
         FlowLifecycleRecorder $lifecycle,
         TenancyManager $tenancy,
     ): void {
-        $child = $repository->find($this->childFlowRunId);
+        $child = $repository->findOnWriter($this->childFlowRunId);
 
         if ($child === null || $child->isTerminal()) {
             return;
@@ -64,7 +64,7 @@ class CancelChildWorkflowJob implements ShouldQueue
             // once another rollback owns its landing — a child still live is one this
             // job was sent to close, and dropping it here would strand it with a
             // terminal parent and no close policy left to apply.
-            $current = $repository->find($this->childFlowRunId);
+            $current = $repository->findOnWriter($this->childFlowRunId);
 
             if ($current !== null && ! $current->isTerminal() && $current->status !== FlowStatus::Cancelling) {
                 throw $lost;
@@ -181,7 +181,7 @@ class CancelChildWorkflowJob implements ShouldQueue
             return null;
         }
 
-        $parent = $repository->find($child->parent_id);
+        $parent = $repository->findOnWriter($child->parent_id);
 
         if ($parent === null) {
             return null;
