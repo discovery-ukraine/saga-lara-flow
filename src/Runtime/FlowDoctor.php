@@ -289,15 +289,20 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Counted in the database rather than from the scanned model: the replay behind a
-     * takeover can outlast the grace window, and a second takeover counted meanwhile must
-     * not be written over.
+     * Counted in the database rather than from the scanned model, and the next window is
+     * set from the count read back: the replay behind a takeover can outlast the grace
+     * window, and a second takeover counted meanwhile must neither be written over nor
+     * shorten the backoff.
      */
     private function spendRollbackBudget(FlowRun $run): void
     {
-        $run->newQuery()->whereKey($run->getKey())->increment('repair_attempts', 1, [
-            'repair_available_at' => now()->addSeconds($this->backoff($run->repair_attempts + 1)),
-        ]);
+        $row = $run->newQuery()->whereKey($run->getKey());
+
+        (clone $row)->increment('repair_attempts');
+
+        $attempts = (int) (clone $row)->useWritePdo()->value('repair_attempts');
+
+        (clone $row)->update(['repair_available_at' => now()->addSeconds($this->backoff($attempts))]);
     }
 
     /**

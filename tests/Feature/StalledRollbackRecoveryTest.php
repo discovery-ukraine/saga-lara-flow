@@ -575,8 +575,15 @@ it('counts a takeover against the budget the run holds, not the one it was scann
         FlowRun::query()->toBase()->where('id', $run->id)->update(['repair_attempts' => 4]);
     };
 
-    expect(app(FlowDoctor::class)->repair()->resumedRollbacks)->toBe(1)
-        ->and(FlowRun::query()->findOrFail($run->id)->repair_attempts)->toBe(5);
+    $this->freezeTime();
+
+    expect(app(FlowDoctor::class)->repair()->resumedRollbacks)->toBe(1);
+
+    $counted = FlowRun::query()->findOrFail($run->id);
+
+    // The fifth attempt waits the fifth window: 10 s doubled four times.
+    expect($counted->repair_attempts)->toBe(5)
+        ->and($counted->repair_available_at?->toDateTimeString())->toBe(now()->addSeconds(160)->toDateTimeString());
 });
 
 it('leaves a stalled expiry to the monitor', function (): void {
