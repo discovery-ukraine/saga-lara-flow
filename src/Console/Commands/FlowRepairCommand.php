@@ -28,9 +28,10 @@ class FlowRepairCommand extends Command
         $report = $doctor->repair();
 
         $this->info(sprintf(
-            'Doctor repaired: %d action(s) re-dispatched, %d flow(s) re-woken, %d skipped.',
+            'Doctor repaired: %d action(s) re-dispatched, %d flow(s) re-woken, %d stalled rollback(s) resumed, %d skipped.',
             $report->redispatchedActions,
             $report->rewokenFlows,
+            $report->resumedRollbacks,
             $report->skipped,
         ));
 

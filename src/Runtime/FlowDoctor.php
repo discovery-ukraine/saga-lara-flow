@@ -3,11 +3,13 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
 use Closure;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RollbackNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunActionJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
@@ -22,30 +24,36 @@ use Throwable;
 
 /**
  * The opt-in repair pass — the "doctor". Distinct from the expiration monitor
- * (FlowMonitor): it recovers progress lost to a *dropped job*, not a passed deadline. It only ever
- * re-dispatches an existing job or re-wakes a run, so it writes no step and no outcome of its own
- * and cannot duplicate an ordinal — the run carries on normally from there, scheduling whatever
+ * (FlowMonitor): it recovers progress lost to a *dropped job*, not a passed deadline. R1–R4 only
+ * ever re-dispatch an existing job or re-wake a run, so they write no step and no outcome of their
+ * own and cannot duplicate an ordinal — the run carries on normally from there, scheduling whatever
  * comes next. R3 can still start a second execution of one step, since a reclaim window expiring
- * does not prove the first worker is dead.
+ * does not prove the first worker is dead. R5 resumes a rollback as its owner would have, reusing
+ * every compensation that owner registered.
  *
  *   R1  a stuck sequential Pending action (its RunActionJob was lost) → re-dispatch.
  *   R2  a stuck Waiting run with nothing in flight (its resume was lost) → re-wake.
  *   R3  a stuck sequential Running action past its own reclaim window → re-dispatch.
  *   R4  a stuck Pending run (its RunWorkflowJob was lost) → re-dispatch.
+ *   R5  a rollback to Failed or Cancelled that stalled → take it over and carry it to the end
+ *       (FlowExecutor::resumeRollback()). An expiry is the monitor's to resume.
  *
  * repair_attempts + repair_available_at throttle a pass per entity and give up after max_attempts.
- * saga-flow:kick is the manual answer to all four: it refills that budget for the run and its
+ * saga-flow:kick is the manual answer to R1–R4: it refills that budget for the run and its
  * unfinished steps and sends the sequential step its own job back. Batch-bound work (parallel
  * actions, compensations) is out of scope even for R3 and for a kick: adding a job back into a
  * Bus::batch needs an id this package does not store.
  */
 final readonly class FlowDoctor
 {
+    use NormalizesExceptions;
+
     public function __construct(
         private FlowRepository $flowRepository,
         private ActionRunRepository $actionRunRepository,
         private ActionRecorder $actionRecorder,
         private FlowLifecycleRecorder $lifecycle,
+        private FlowExecutor $executor,
     ) {}
 
     /**
@@ -87,10 +95,17 @@ final readonly class FlowDoctor
             fn (FlowRun $run): bool => $this->rewake($run, FlowStatus::Pending, 'lost_start', $maxAttempts),
         );
 
+        [$resumedRollbacks, $skippedRollbacks] = $this->applyRule(
+            'resume_stalled_rollbacks',
+            fn (): iterable => $this->flowRepository->dueForRollbackRepair($limit, $grace, $maxAttempts),
+            fn (FlowRun $run): bool => $this->resumeRollback($run),
+        );
+
         return new FlowRepairReport(
             $lostActions + $staleActions,
             $rewokenFlows + $lostStarts,
-            $skippedLost + $skippedStale + $skippedFlows + $skippedStarts,
+            $skippedLost + $skippedStale + $skippedFlows + $skippedStarts + $skippedRollbacks,
+            $resumedRollbacks,
         );
     }
 
@@ -239,6 +254,55 @@ final readonly class FlowDoctor
         }
 
         return $confirmed;
+    }
+
+    /**
+     * R5. The scan decides the rollback stalled; the takeover inside resumeRollback() makes
+     * sure one recoverer acts on it. The budget is spent only by a takeover, so a run that
+     * keeps losing the jobs of its rollback is given up on after max_attempts.
+     *
+     * @throws Throwable
+     */
+    private function resumeRollback(FlowRun $run): bool
+    {
+        try {
+            $resumed = $this->executor->resumeRollback($run);
+        } catch (RollbackNotPlannedException $failure) {
+            $this->spendRollbackBudget($run);
+
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_ROLLBACK_RESUME_FAILED, [
+                'entity' => 'flow',
+                'flow_run_id' => $run->id,
+                'workflow_class' => $run->workflow_class,
+                'rollback_target' => $run->rollback_target?->value,
+                'exception' => $this->exceptionToArray($failure->getPrevious() ?? $failure),
+            ]);
+
+            return false;
+        }
+
+        if ($resumed) {
+            $this->spendRollbackBudget($run);
+        }
+
+        return $resumed;
+    }
+
+    /**
+     * Counted in the database rather than from the scanned model, and the next window is
+     * set from the count read back: the replay behind a takeover can outlast the grace
+     * window, and a second takeover counted meanwhile must neither be written over nor
+     * shorten the backoff.
+     */
+    private function spendRollbackBudget(FlowRun $run): void
+    {
+        $row = $run->newQuery()->whereKey($run->getKey());
+
+        (clone $row)->increment('repair_attempts');
+
+        $attempts = (int) (clone $row)->useWritePdo()->value('repair_attempts');
+
+        (clone $row)->update(['repair_available_at' => now()->addSeconds($this->backoff($attempts))]);
     }
 
     /**

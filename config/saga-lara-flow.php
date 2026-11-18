@@ -117,6 +117,13 @@ return [
             // keeps a permanent one cheap.
             'backoff' => ['base_seconds' => 60, 'max_seconds' => 3600],
 
+            // An expiry whose rollback nothing has moved for this long — the sweep died
+            // after taking the run, or a compensation job was lost — is carried to the end
+            // by the sweep. The same wait the doctor gives a lost job (repair.grace_seconds);
+            // keep it above the longest your queue makes a job wait. Each takeover holds
+            // the next one off by the backoff above.
+            'rollback_grace_seconds' => 60,
+
             // Default deadlines (in seconds) applied at write time when none is set
             // explicitly: 'run' on create, 'action' on schedule, 'signal' on await.
             // null = off (no implicit deadline). There is no per-entity opt-out flag;
@@ -168,6 +175,10 @@ return [
         'redispatch_stale_running_actions' => true,
         // R4: send the first job again for a Pending run whose RunWorkflowJob was lost.
         'redispatch_lost_starts' => true,
+        // R5: carry a rollback to Failed or Cancelled to its end once nothing has moved it
+        // for grace_seconds — a process that died mid-rollback, or a compensation job that
+        // was lost. A rollback to Expired is the monitor's (monitor.expiration).
+        'resume_stalled_rollbacks' => true,
 
         'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],
     ],

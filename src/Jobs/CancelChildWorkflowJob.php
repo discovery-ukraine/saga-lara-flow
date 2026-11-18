@@ -94,8 +94,8 @@ class CancelChildWorkflowJob implements ShouldQueue
         ): void {
             // Plan once before taking control, and throw the result away. Planning
             // starts no work of its own, so a child whose rollback cannot be planned
-            // is left where this job found it instead of in Cancelling, which the
-            // monitor and the doctor both pass over on purpose. One already Cancelling
+            // is left where this job found it instead of in Cancelling with a rollback
+            // nobody can draw. One already Cancelling
             // was fenced by an earlier attempt that then failed to plan: both plans
             // fail or neither does, so a retry recovers it once the replay can read
             // what it could not.
@@ -107,11 +107,14 @@ class CancelChildWorkflowJob implements ShouldQueue
                 $executor->collectCompensations($child);
             }
 
+            $cause = $this->cause($repository, $child);
+
             // Take control of the child from any non-terminal state (Pending/Running/
             // Waiting) — the state machine allows each into Cancelling.
-            $stateMachine->transition($child, FlowStatus::Cancelling);
-
-            $cause = $this->cause($repository, $child);
+            $stateMachine->transition(
+                $child->intendRollback($this->finalState, $cause, $this->withCompensation),
+                FlowStatus::Cancelling,
+            );
 
             if ($this->withCompensation) {
                 // The plan that is acted on is made here, with the child fenced:

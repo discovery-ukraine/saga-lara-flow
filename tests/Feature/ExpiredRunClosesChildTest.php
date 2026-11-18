@@ -12,8 +12,8 @@ use DiscoveryUkraine\SagaLaraFlow\Workflow;
 
 /**
  * An expired run closes its children under their close policy with a rollback, whether or
- * not it had anything of its own to undo. With nothing of its own, the run skips Cancelling
- * and lands straight in Expired — which must not also spare its children the rollback.
+ * not it had anything of its own to undo. With nothing of its own, the run passes through
+ * Cancelling with an empty rollback — which must not also spare its children theirs.
  */
 beforeEach(function (): void {
     CompensationLog::reset();

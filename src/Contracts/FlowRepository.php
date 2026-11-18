@@ -61,4 +61,22 @@ interface FlowRepository
      * @return iterable<int, FlowRun>
      */
     public function dueForStartRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
+
+    /**
+     * Runs whose rollback to Expired has stalled for the grace window (FlowRun::rollbackStalled())
+     * and whose hold-off window is open, oldest first, capped at $limit. Used by the monitor
+     * to carry an expiry it started to the end.
+     *
+     * @return iterable<int, FlowRun>
+     */
+    public function dueForRollbackRecovery(int $limit, int $graceSeconds): iterable;
+
+    /**
+     * Runs whose rollback to Failed or Cancelled has stalled for the grace window
+     * (FlowRun::rollbackStalled()) whose repair window is open and attempts are not
+     * exhausted, oldest first, capped at $limit. Used by the doctor.
+     *
+     * @return iterable<int, FlowRun>
+     */
+    public function dueForRollbackRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
 }

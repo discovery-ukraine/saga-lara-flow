@@ -225,14 +225,15 @@ discarded (see [Events](./events.md#refused-outcome)):
 ],
 ```
 
-Eleven reason codes exist; the seven raised on the paths this page covers are below. The other four
+Twelve reason codes exist; the eight raised on the paths this page covers are below. The other four
 are `transition_lost`, which belongs to [run transitions](./queues-locks-idempotency.md),
 `retry_policy_threw`, which belongs to [retry policies](./retry-on-signal.md), and `replan_failed`
-and `replan_incomplete`, which belong to
-[planning a rollback](./sagas-and-compensation.md#while-a-rollback-runs). Most of the seven carry
-the run id, row id, sequence and class. Two are about a run rather than a row: `expiry_failed`
-carries the run id, its workflow class and the throw, and `claim_not_committed` for a kick carries
-the run id, its workflow class, its status and the repair count the run holds:
+and `replan_incomplete`, which belong to [planning a
+rollback](./sagas-and-compensation.md#while-a-rollback-runs). Most of the seven carry the run id,
+row id, sequence and class. Three are about a run rather than a row: `expiry_failed` and
+`rollback_resume_failed` carry the run id, its workflow class and the throw, and
+`claim_not_committed` for a kick carries the run id, its workflow class, its status and the repair
+count the run holds:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped. Listen for
@@ -246,6 +247,9 @@ the run id, its workflow class, its status and the repair count the run holds:
 - **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
   the next. The line carries the throw and how many times this run has failed that way. The run stays overdue and is
   tried again once its hold-off window opens.
+- **`rollback_resume_failed`** — a stalled rollback was taken over, but its plan could not be
+  drawn again, so it stays in `Cancelling`. The line carries the throw and the rollback's target.
+  See [A rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls).
 - **`write_refused`** — a write to a step was refused because the row had moved on since it was read, or the run under
   it had finished. The line carries a `site` naming which write it was.
 - **`rejection_undelivered`** — the rejection event above could not be handed over: a listener threw, or a queued one
@@ -259,13 +263,16 @@ timeout tuned shorter than the work takes, or to locks being off.
 written to a step afterwards would stand for ever with nothing left to notice it. A steady stream of it on runs nobody
 cancelled points the same way as `claim_lost` — a queue timeout tuned shorter than the work takes.
 
-The remaining two are not races and do not come from tuning. `expiry_failed` means the run's own `handle()` threw
-while the sweep was replaying it to find the compensations — a workflow reading something that has since gone, most
-often, or a deploy that edited a workflow with runs still in flight. Until that is fixed the run cannot be expired.
-Nothing else in the sweep is held up by it: the run is held off for a window that doubles with each failure up to
-`monitor.expiration.backoff.max_seconds`, so it drops out of the candidate page and the runs behind it are reached.
-`flow_runs.expiry_attempts` counts them. There is no cap — a cause that clears is picked up on the next open
-window — and nothing resets the count, so a run that has been failing for a week says so.
+The remaining three are not races and do not come from tuning. `expiry_failed` means the run's own
+`handle()` threw while the sweep was replaying it to find the compensations — a workflow reading
+something that has since gone, most often, or a deploy that edited a workflow with runs still in
+flight. Until that is fixed the run cannot be expired. Nothing else in the sweep is held up by it:
+the run is held off for a window that doubles with each failure up to
+`monitor.expiration.backoff.max_seconds`, so it drops out of the candidate page and the runs behind
+it are reached. `flow_runs.expiry_attempts` counts them. There is no cap — a cause that clears is
+picked up on the next open window — and nothing resets the count, so a run that has been failing for
+a week says so. `rollback_resume_failed` is the same throw met while resuming a stalled rollback:
+the sweep holds the run off the same way, and the doctor spends its repair budget on it.
 
 `claim_not_committed` is the other one: something ran inside the engine's own transaction and left it
 unusable. On PostgreSQL a single failed statement aborts a transaction and turns the eventual commit into a rollback

@@ -9,6 +9,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\SignalRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ExpirationNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RollbackNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
@@ -24,11 +25,12 @@ use Throwable;
  * scheduled command (saga-flow:monitor) or an optional throttled queue-looping
  * listener calls sweep() periodically. One pass expires overdue runs, times out
  * stuck signal waits, and expires overdue action steps, each capped at the
- * configured batch size.
+ * configured batch size, and carries an expiry whose rollback stalled to the end.
  *
- * Every transition the sweep performs moves the entity out of the status its scan
- * filters on (a run leaves Running/Waiting, a wait-signal Waiting→TimedOut, an
- * action Pending/Running→Expired), so re-running sweep() is idempotent.
+ * Every write the sweep performs moves the entity out of what its scan filters on (a
+ * run leaves Running/Waiting, a wait-signal Waiting→TimedOut, an action
+ * Pending/Running→Expired, a stalled rollback gets a new owner and a fresh updated_at),
+ * so re-running sweep() is idempotent.
  */
 final readonly class FlowMonitor
 {
@@ -46,14 +48,14 @@ final readonly class FlowMonitor
     /**
      * Run one expiration pass. Returns the number of entities acted on per category.
      *
-     * @return array{runs: int, signals: int, actions: int}
+     * @return array{runs: int, signals: int, actions: int, rollbacks: int}
      *
      * @throws Throwable
      */
     public function sweep(): array
     {
         if (! config('saga-lara-flow.monitor.expiration.enabled')) {
-            return ['runs' => 0, 'signals' => 0, 'actions' => 0];
+            return ['runs' => 0, 'signals' => 0, 'actions' => 0, 'rollbacks' => 0];
         }
 
         $limit = (int) config('saga-lara-flow.monitor.expiration.batch_size', 100);
@@ -64,6 +66,7 @@ final readonly class FlowMonitor
             'runs' => $this->expireRuns($limit),
             'signals' => $this->timeoutSignals($limit),
             'actions' => $this->expireActions($limit),
+            'rollbacks' => $this->resumeRollbacks($limit),
         ];
     }
 
@@ -139,6 +142,63 @@ final readonly class FlowMonitor
 
             return false;
         }
+    }
+
+    /**
+     * @throws Throwable
+     */
+    private function resumeRollbacks(int $limit): int
+    {
+        $grace = (int) config('saga-lara-flow.monitor.expiration.rollback_grace_seconds', 60);
+
+        $count = 0;
+
+        foreach ($this->flows->dueForRollbackRecovery($limit, $grace) as $run) {
+            if ($this->resumeRollback($run)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Carry an expiry whose rollback stalled to the end — a process that died after
+     * moving the run into Cancelling, or a level whose job was lost. One that cannot be
+     * planned is held off and journalled like an expiry that could not be, for the same
+     * reasons.
+     *
+     * A takeover is held off too. The earlier owner's jobs claim nothing once it happens,
+     * so on a queue running further behind than the grace window, taking over again on
+     * every pass would leave each new owner's jobs stale by the time a worker reached
+     * them; the growing window lets the latest one's through.
+     *
+     * @throws Throwable
+     */
+    private function resumeRollback(FlowRun $run): bool
+    {
+        try {
+            $resumed = $this->executor->resumeRollback($run);
+        } catch (RollbackNotPlannedException $failure) {
+            $this->holdOff($run);
+
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_ROLLBACK_RESUME_FAILED, [
+                'entity' => 'flow',
+                'flow_run_id' => $run->id,
+                'workflow_class' => $run->workflow_class,
+                'rollback_target' => $run->rollback_target?->value,
+                'expiry_attempts' => $run->expiry_attempts,
+                'exception' => $this->exceptionToArray($failure->getPrevious() ?? $failure),
+            ]);
+
+            return false;
+        }
+
+        if ($resumed) {
+            $this->holdOff($run);
+        }
+
+        return $resumed;
     }
 
     /**

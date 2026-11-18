@@ -14,6 +14,7 @@ use Illuminate\Support\Carbon;
  * @property string $flow_run_id
  * @property ?string $action_run_id
  * @property int $sequence
+ * @property ?int $step_sequence
  * @property string $compensation_type
  * @property ?string $compensation_class
  * @property CompensationStatus $status
@@ -41,6 +42,7 @@ class CompensationRun extends Model
     {
         return [
             'sequence' => 'integer',
+            'step_sequence' => 'integer',
             'status' => CompensationStatus::class,
             'continue_on_failure' => 'boolean',
             'attempts' => 'integer',

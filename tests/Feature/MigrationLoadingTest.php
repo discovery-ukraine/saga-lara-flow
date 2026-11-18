@@ -128,6 +128,7 @@ it('re-runs each column migration cleanly over a schema that already has its wor
         '2026_08_25_000000_add_reclaim_stale_running_columns',
         '2026_08_31_000000_add_expiry_backoff_to_flow_runs',
         '2026_09_29_000000_add_retry_on_signal_to_flow_children',
+        '2026_11_18_000000_add_rollback_ownership_columns',
     ] as $name) {
         (include __DIR__."/../../database/migrations/{$name}.php")->up();
     }
@@ -136,7 +137,44 @@ it('re-runs each column migration cleanly over a schema that already has its wor
         ->and(Schema::hasColumn('saga_flow_children', 'retry_signal'))->toBeTrue()
         ->and(Schema::hasIndex('saga_action_runs', ['reclaim_stale_at']))->toBeTrue()
         ->and(Schema::hasColumn('saga_compensation_runs', 'attempts'))->toBeTrue()
-        ->and(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue();
+        ->and(Schema::hasColumn('saga_flow_runs', 'expiry_available_at'))->toBeTrue()
+        ->and(Schema::hasColumn('saga_flow_runs', 'rollback_token'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_compensation_runs', ['flow_run_id', 'step_sequence'], 'unique'))->toBeTrue();
+});
+
+it('adds the rollback ownership columns and the step unique, and rolls them back down again', function (): void {
+    $migration = include __DIR__.'/../../database/migrations/2026_11_18_000000_add_rollback_ownership_columns.php';
+
+    $columns = ['rollback_token', 'rollback_target', 'rollback_cause', 'rollback_compensates'];
+
+    expect(Schema::hasColumns('saga_flow_runs', $columns))->toBeTrue()
+        ->and(Schema::hasColumn('saga_compensation_runs', 'step_sequence'))->toBeTrue()
+        ->and(Schema::hasIndex('saga_compensation_runs', ['flow_run_id', 'step_sequence'], 'unique'))->toBeTrue();
+
+    $migration->down();
+
+    foreach ($columns as $column) {
+        expect(Schema::hasColumn('saga_flow_runs', $column))->toBeFalse($column);
+    }
+
+    expect(Schema::hasColumn('saga_compensation_runs', 'step_sequence'))->toBeFalse()
+        ->and(Schema::hasColumn('saga_flow_runs', 'status'))->toBeTrue();
+
+    $migration->up();
+
+    expect(Schema::hasColumns('saga_flow_runs', $columns))->toBeTrue()
+        ->and(Schema::hasIndex('saga_compensation_runs', ['flow_run_id', 'step_sequence'], 'unique'))->toBeTrue();
+});
+
+it('puts back only the step unique when that is all a partly applied run left out', function (): void {
+    Schema::table('saga_compensation_runs', fn (Blueprint $table) => $table->dropUnique('saga_compensation_runs_run_step_unique'));
+
+    expect(Schema::hasIndex('saga_compensation_runs', ['flow_run_id', 'step_sequence'], 'unique'))->toBeFalse();
+
+    (include __DIR__.'/../../database/migrations/2026_11_18_000000_add_rollback_ownership_columns.php')->up();
+
+    expect(Schema::hasIndex('saga_compensation_runs', ['flow_run_id', 'step_sequence'], 'unique'))->toBeTrue()
+        ->and(Schema::hasColumn('saga_compensation_runs', 'step_sequence'))->toBeTrue();
 });
 
 it('adds only what a partly applied column migration is still missing', function (): void {

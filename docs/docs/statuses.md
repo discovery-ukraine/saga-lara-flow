@@ -33,6 +33,11 @@ refused when it tries to claim the row, a signal-gated retry will not start anot
 already started is a different question and carries on as usual: a step past its own deadline is
 still expired, and the rollback's own compensations still run.
 
+That leaves one gap: a step a worker is already executing when the run enters `Cancelling`. A
+replay reads a running step as the place to stop, so no plan holds its compensation. If it completes
+while the rollback is still going, it is recorded and stays applied; if the run has landed by then,
+its outcome is refused and journalled as `outcome_rejected`, and the side effect it had stays too.
+
 The plan it unwinds is made once the run is here, which is what makes "afterwards" mean afterwards:
 a step whose owed queue attempt completed while an earlier plan was being drawn is in it. That
 earlier plan is drawn before the run is moved, so a run whose rollback cannot be planned at all
@@ -41,6 +46,11 @@ gaps in the later one, and the journal says so: an ordinal the second plan came 
 restored from the first, and a second replay that throws leaves the first standing on its own. The
 replay behind either plan writes only the workflow's own
 [tags](./tags-and-querying.md#tagging-runs), as every replay that reaches them does.
+
+The move records where the rollback lands, so a run does not stay here because whatever was rolling
+it back stopped: once nothing has moved it for a grace window, the monitor or the doctor carries it
+on to that status. See
+[A rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls).
 
 A step is not the only thing that begins, and the rest is reached from inside a pass rather than by
 a job of its own: a [child workflow](./child-workflows.md) and a [side effect](./side-effects.md)

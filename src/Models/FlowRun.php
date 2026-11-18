@@ -2,7 +2,9 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Models;
 
+use Carbon\CarbonInterface;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
+use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Models\Concerns\UsesSagaFlowConnection;
 use Illuminate\Database\Eloquent\Builder;
@@ -11,6 +13,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 
 /**
  * @property string $id
@@ -35,6 +38,10 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $repair_available_at
  * @property int $expiry_attempts
  * @property ?Carbon $expiry_available_at
+ * @property ?string $rollback_token
+ * @property ?FlowStatus $rollback_target
+ * @property ?array<string, mixed> $rollback_cause
+ * @property bool $rollback_compensates
  * @property ?Carbon $created_at
  * @property ?Carbon $updated_at
  */
@@ -64,6 +71,9 @@ class FlowRun extends Model
             'repair_available_at' => 'datetime',
             'expiry_attempts' => 'integer',
             'expiry_available_at' => 'datetime',
+            'rollback_target' => FlowStatus::class,
+            'rollback_cause' => 'array',
+            'rollback_compensates' => 'boolean',
         ];
     }
 
@@ -100,6 +110,33 @@ class FlowRun extends Model
     public static function mayStartWork(Builder $query): void
     {
         $query->whereIn('status', FlowStatus::mayStartWork());
+    }
+
+    /**
+     * Constrain a flow_runs query to rollbacks nobody is moving any more: Cancelling with a
+     * rollback that undoes steps, the run untouched since $since, no compensation touched
+     * since then, and none held Running by a worker that may still be alive. A Pending row whose job
+     * was lost counts as stalled; one still inside its reclaim window does not.
+     *
+     * @param  Builder<FlowRun>  $query
+     */
+    public static function rollbackStalled(Builder $query, CarbonInterface $since): void
+    {
+        $query->where('status', FlowStatus::Cancelling)
+            ->where('rollback_compensates', true)
+            ->where('updated_at', '<=', $since)
+            ->whereDoesntHave('compensations', function (Builder $compensation) use ($since): void {
+                $compensation->where(function (Builder $moving) use ($since): void {
+                    $moving->where('updated_at', '>', $since)
+                        ->orWhere(function (Builder $held): void {
+                            $held->where('status', CompensationStatus::Running)
+                                ->where(function (Builder $reclaim): void {
+                                    $reclaim->whereNull('reclaim_stale_at')
+                                        ->orWhere('reclaim_stale_at', '>', Carbon::now());
+                                });
+                        });
+                });
+            });
     }
 
     /**
@@ -182,6 +219,22 @@ class FlowRun extends Model
     public function markCancelling(): static
     {
         return $this->transitionTo(FlowStatus::Cancelling);
+    }
+
+    /**
+     * Set the rollback this run is about to be moved into Cancelling for. Written by the
+     * same conditional write as the move, so whoever moves the run owns its rollback.
+     *
+     * @param  array<string, mixed>|null  $cause
+     */
+    public function intendRollback(FlowStatus $target, ?array $cause, bool $compensates = true): static
+    {
+        $this->rollback_token = (string) Str::ulid();
+        $this->rollback_target = $target;
+        $this->rollback_cause = $cause;
+        $this->rollback_compensates = $compensates;
+
+        return $this;
     }
 
     public function markCompleted(?array $result = null): static

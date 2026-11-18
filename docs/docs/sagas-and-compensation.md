@@ -115,6 +115,11 @@ Settling what already started is the other question, and it carries on: a step p
 is still expired, and the rollback's own compensations still run. See
 [Statuses](./statuses.md) for the boundary in full.
 
+A compensation is registered once per step. A rollback taken up again — a child close job tried
+again, or a stalled rollback the monitor or the doctor
+[takes over](./expiration-and-monitoring.md#a-rollback-that-stalls) — reuses the row an earlier
+attempt left: an undo that already ran is not run a second time.
+
 ## Manual compensation
 
 You can trigger a rollback from outside the workflow through the handle:
@@ -137,6 +142,13 @@ is then incomplete, so `compensate()` surfaces the throw and leaves the run as i
 than unwinding part of it and reporting a finished rollback. Fix the cause and call it again. That
 is the plan drawn before the run is moved; a throw from the one made after it is journalled instead,
 because by then the run has been taken and there is a plan to unwind either way.
+
+The rollback runs in the call, and the run comes back `Cancelled` — with one exception. With
+[reclaim](./reclaim-and-recovery.md) enabled, an undo that outlasts its reclaim window and the grace
+window can have the rollback
+[taken over](./expiration-and-monitoring.md#a-rollback-that-stalls) while it runs. The call then
+finishes the undo it is in, leaves the rest to the queue, and returns the run still `Cancelling`:
+read it again, or wait for a terminal status, before acting on the rollback being done.
 
 :::warning Not inside a transaction of your own
 The compensations execute before your transaction closes, so a rollback afterwards discards the

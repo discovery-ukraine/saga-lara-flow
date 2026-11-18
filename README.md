@@ -656,14 +656,15 @@ signal delivered after its deadline but before the next sweep is still accepted.
 expanded in [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
 For runs whose progress was lost to a *dropped job* (rather than a deadline), the **doctor** can
-re-dispatch missing actions (`repair.redispatch_lost_actions`), re-wake stuck waits (`repair.wake_stuck_flows`) and
-start runs whose first job was lost (`repair.redispatch_lost_starts`) — enable `repair.enabled` and either schedule `saga-flow:repair` or loop
-it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
+re-dispatch missing actions (`repair.redispatch_lost_actions`), re-wake stuck waits
+(`repair.wake_stuck_flows`) and start runs whose first job was lost
+(`repair.redispatch_lost_starts`) and carry on rollbacks that stalled
+(`repair.resume_stalled_rollbacks`) — enable `repair.enabled` and either schedule `saga-flow:repair`
+or loop it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
 `saga-flow:kick {run}` / `SagaFlow::kick($id)`. A kick refills the repair budget that
 `repair.max_attempts` caps and sends the sequential step the run is parked on its own job back, so
 the cap holds the automatic pass off rather than ending the run's recovery. Each config key is
-documented in
-[Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
+documented in [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
 None of these drives a run that is rolling back or finished — a pass begins only for a run that may
 still start work, so a deadline is enforced once and each compensation on the rollback it planned
@@ -671,7 +672,12 @@ runs once. A pass already replaying when the rollback commits starts nothing fur
 next step is refused at the claim, and a child workflow or side effect at an ordinal it has not
 reached before ends the pass instead. The plan that is unwound is drawn once the run is already
 rolling back, so a step whose owed attempt completed while an earlier plan was being drawn is
-compensated too. See [Statuses](https://sagalaraflow.dev/statuses).
+compensated too, on a run with nothing else to undo included. A rollback whose owner stopped is
+taken over once nothing has moved it for a grace window — an expiry by the sweep, any other by the
+doctor — and carried to the status it was headed for, without running an undo a second time. A
+compensation whose worker died mid-undo is reached that way only with `sagas.reclaim.stale_running`
+enabled. See [Statuses](https://sagalaraflow.dev/statuses) and
+[A rollback that stalls](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls).
 
 ## Queues, locks & idempotency
 
@@ -822,7 +828,7 @@ reaches somewhere you chose rather than nowhere. See
 | `saga-flow:signal-retry {run} {--signal=} {--payload=}`          | Deliver the retry signal the run is parked on and wake it.       |
 | `saga-flow:cancel {run} {--compensate}`                          | Cancel a non-terminal run; `--compensate` rolls back first.      |
 | `saga-flow:kick {run}`                                           | Re-drive a stuck run and the step it is parked on.               |
-| `saga-flow:monitor`                                              | Expire overdue runs/actions and time out waits.                  |
+| `saga-flow:monitor`                                              | Expire overdue work, time out waits, resume stalled expiries.    |
 | `saga-flow:repair`                                               | Recover runs whose progress was lost to a dropped job.           |
 | `saga-flow:prune {--days=} {--before=} {--dry-run}`              | Delete old terminal runs and related rows.                       |
 | `make:workflow {name}`                                           | Generate a workflow class in `App\Workflows`.                    |

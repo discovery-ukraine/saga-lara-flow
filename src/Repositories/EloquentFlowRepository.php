@@ -119,6 +119,45 @@ class EloquentFlowRepository implements FlowRepository
             ->get();
     }
 
+    public function dueForRollbackRecovery(int $limit, int $graceSeconds): iterable
+    {
+        $now = Carbon::now();
+        $model = $this->flowRunClass();
+
+        // From the writer: the takeover asks nothing about compensations, so this read is
+        // the one that decides a rollback has stopped moving.
+        return $model::query()
+            ->useWritePdo()
+            ->where(fn ($query) => $model::rollbackStalled($query, $now->copy()->subSeconds($graceSeconds)))
+            ->where('rollback_target', FlowStatus::Expired)
+            ->where(function (Builder $query) use ($now): void {
+                $query->whereNull('expiry_available_at')
+                    ->orWhere('expiry_available_at', '<=', $now);
+            })
+            ->orderBy('updated_at')
+            ->limit($limit)
+            ->get();
+    }
+
+    public function dueForRollbackRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable
+    {
+        $now = Carbon::now();
+        $model = $this->flowRunClass();
+
+        return $model::query()
+            ->useWritePdo()
+            ->where(fn ($query) => $model::rollbackStalled($query, $now->copy()->subSeconds($graceSeconds)))
+            ->whereIn('rollback_target', [FlowStatus::Failed, FlowStatus::Cancelled])
+            ->where('repair_attempts', '<', $maxAttempts)
+            ->where(function (Builder $query) use ($now): void {
+                $query->whereNull('repair_available_at')
+                    ->orWhere('repair_available_at', '<=', $now);
+            })
+            ->orderBy('updated_at')
+            ->limit($limit)
+            ->get();
+    }
+
     /**
      * @return class-string<FlowRun>
      */

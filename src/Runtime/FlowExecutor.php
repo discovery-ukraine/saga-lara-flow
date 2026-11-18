@@ -20,9 +20,11 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RetryPolicyReentryException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\RollbackNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Illuminate\Database\Connection;
+use Illuminate\Support\Str;
 use ReflectionProperty;
 use Throwable;
 
@@ -519,17 +521,13 @@ class FlowExecutor
             return $this->failFlow($flowRun, $exception);
         }
 
-        $this->stateMachine->transition($flowRun, FlowStatus::Cancelling);
+        $cause = $this->exceptionToArray($exception);
+
+        $this->stateMachine->transition($flowRun->intendRollback(FlowStatus::Failed, $cause), FlowStatus::Cancelling);
 
         $this->compensationRecorder->started($flowRun);
 
-        $this->sagaRunner->rollback(
-            $flowRun,
-            $entries,
-            $this->exceptionToArray($exception),
-            $mode,
-            FlowStatus::Failed
-        );
+        $this->sagaRunner->rollback($flowRun, $entries, $cause, $mode, FlowStatus::Failed);
 
         return $flowRun;
     }
@@ -551,8 +549,10 @@ class FlowExecutor
 
     /**
      * Expire an overdue run. Mirrors FlowHandle::compensate() but lands in Expired:
-     * rebuild the compensation stack by a compensation-only replay, then roll it back
-     * (queued) and finalize as Expired — or, with nothing to undo, expire directly.
+     * rebuild the compensation stack by a compensation-only replay, move the run into
+     * Cancelling, plan again and roll that plan back (queued) before finalizing as
+     * Expired. A run with nothing to undo takes the same road, so a step that completes
+     * while its empty plan is drawn is in the plan that is acted on.
      * Shared by the monitor's sweep (FlowMonitor::expireRun) and the lazy drive check.
      *
      * Guarded separately from drive(), because the sweep reaches it directly: one run
@@ -601,28 +601,68 @@ class FlowExecutor
             throw ExpirationNotPlannedException::for($flowRun, $planning);
         }
 
-        // Nothing to undo is finalized where the run stands rather than through
-        // Cancelling: a death between the two would leave it there, and a run in
-        // Cancelling is one this sweep, the doctor and drive() all pass over.
-        if ($entries === []) {
-            $flowRun->exception = $primary;
-
-            $flowRun->markExpired();
-
-            $this->recorder->flowExpired($flowRun);
-
-            app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
-
-            return $flowRun;
-        }
-
-        $this->stateMachine->transition($flowRun, FlowStatus::Cancelling);
+        $this->stateMachine->transition($flowRun->intendRollback(FlowStatus::Expired, $primary), FlowStatus::Cancelling);
 
         $entries = $this->replanCompensations($flowRun, $entries);
 
         $this->sagaRunner->rollback($flowRun, $entries, $primary, RunMode::Queued, FlowStatus::Expired);
 
         return $flowRun;
+    }
+
+    /**
+     * Carry a stalled rollback to the end its intent names, as the owner it is taken from
+     * would have. The caller found it stalled (FlowRun::rollbackStalled()); the takeover
+     * is a conditional write on the run row alone that replaces the owner token the caller
+     * read, so of two recoverers one wins, and a run taken over or landed since it was
+     * read is left alone. Compensation rows are not read under that write: a claim carries the owner it
+     * was sent by and is refused once the token has changed, which is what keeps the
+     * earlier owner's late jobs from running.
+     * The plan is drawn again under Cancelling, where nothing can complete another step,
+     * and every compensation the earlier owner settled is reused rather than run again.
+     *
+     * Returns whether this call took the rollback over.
+     *
+     * @throws RollbackNotPlannedException the rollback was taken over but could not be planned
+     * @throws Throwable
+     */
+    public function resumeRollback(FlowRun $flowRun): bool
+    {
+        $this->rejectWhileDeciding();
+
+        $token = (string) Str::ulid();
+
+        $taken = $flowRun->newQuery()
+            ->whereKey($flowRun->getKey())
+            ->where('status', FlowStatus::Cancelling)
+            ->where('rollback_token', $flowRun->rollback_token)
+            ->update(['rollback_token' => $token]) === 1;
+
+        if (! $taken) {
+            return false;
+        }
+
+        $owned = $this->reread($flowRun);
+
+        try {
+            $entries = $this->collectCompensations($owned);
+        } catch (Throwable $planning) {
+            throw RollbackNotPlannedException::for($owned, $planning);
+        }
+
+        try {
+            $this->sagaRunner->rollback(
+                $owned,
+                $entries,
+                $owned->rollback_cause,
+                RunMode::Queued,
+                $owned->rollback_target ?? FlowStatus::Cancelled,
+            );
+        } catch (ConcurrentFlowTransitionException) {
+            // Finished by somebody else between the takeover and the landing.
+        }
+
+        return true;
     }
 
     /**
