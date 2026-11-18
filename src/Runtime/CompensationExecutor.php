@@ -34,9 +34,12 @@ class CompensationExecutor
      *
      * @throws Throwable
      */
-    public function execute(CompensationRun $compensation, CompensationDefinition $definition): StepExecution
-    {
-        if (! $this->recorder->startCompensation($compensation)) {
+    public function execute(
+        CompensationRun $compensation,
+        CompensationDefinition $definition,
+        ?string $rollbackToken = null,
+    ): StepExecution {
+        if (! $this->recorder->startCompensation($compensation, $rollbackToken)) {
             return StepExecution::ClaimLost;
         }
 

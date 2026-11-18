@@ -146,8 +146,12 @@ it('keeps expiring a run whose child failed under it', function () {
     $parent = parentWaitingOnTerminalChild(StopAtFailedChildWorkflow::class, FlowStatus::Failed);
     $this->travel(600)->seconds();
 
+    // The parent already undid 'a' when the child failed it, before this scene put it
+    // back to Waiting: the row is reused rather than run again, so nothing is left to
+    // send and the expiry lands at once.
     expect(app(FlowMonitor::class)->sweep()['runs'])->toBe(1)
-        ->and($parent->fresh()->status)->toBe(FlowStatus::Cancelling)
+        ->and($parent->fresh()->status)->toBe(FlowStatus::Expired)
+        ->and($parent->compensations()->count())->toBe(1)
         // A run the sweep can plan is never held off, so nothing queues behind it.
         ->and($parent->fresh()->expiry_attempts)->toBe(0)
         ->and(substr_count((string) @file_get_contents($log), 'expiry_failed'))->toBe(0);

@@ -36,6 +36,8 @@ final readonly class AnomalyLog
 
     public const string REASON_REPLAN_INCOMPLETE = 'replan_incomplete';
 
+    public const string REASON_ROLLBACK_RESUME_FAILED = 'rollback_resume_failed';
+
     public const string REASON_WRITE_REFUSED = 'write_refused';
 
     public const string REASON_REJECTION_UNDELIVERED = 'rejection_undelivered';

@@ -218,7 +218,9 @@ readonly class FlowHandle
      * Manually roll back this run's completed compensatable steps and cancel it.
      * The compensation stack is reconstructed by a compensation-only replay (no
      * business logic re-runs); the rollback executes synchronously (sync mode) and
-     * the run lands in Cancelled. Only valid for a non-terminal run.
+     * the run lands in Cancelled. A rollback taken over by the monitor or the doctor
+     * while one of its undos outlasted its reclaim window comes back still Cancelling,
+     * the rest carried on by the queue. Only valid for a non-terminal run.
      *
      * @throws CannotCancelTerminalFlowException
      * @throws ConcurrentFlowTransitionException
@@ -234,7 +236,10 @@ readonly class FlowHandle
 
         $entries = app(FlowExecutor::class)->collectCompensations($this->flowRun);
 
-        app(StateMachine::class)->transition($this->flowRun, FlowStatus::Cancelling);
+        app(StateMachine::class)->transition(
+            $this->flowRun->intendRollback(FlowStatus::Cancelled, null),
+            FlowStatus::Cancelling,
+        );
 
         $entries = app(FlowExecutor::class)->replanCompensations($this->flowRun, $entries);
 

@@ -44,11 +44,14 @@ final readonly class CompensationRecorder
     }
 
     /**
-     * Create the pending CompensationRun for one stack entry. Its rollback ordinal
-     * (sequence) is the number of compensations already registered for the run, so
-     * the rows read back in execution order. continue_on_failure encodes the
-     * resolved policy (Continue = true), which the queued continuation reads to
-     * decide whether a failed level halts the rollback.
+     * The CompensationRun for one stack entry: the row already registered for that step
+     * when there is one, otherwise a new Pending row. A rollback resumed by somebody
+     * else, or retried, therefore reuses the rows it left — a compensation that already
+     * ran is not registered, and run, a second time. A new row's rollback ordinal
+     * (sequence) is the number of compensations already registered for the run, so the
+     * rows read back in execution order. continue_on_failure encodes the resolved policy
+     * (Continue = true), which the queued continuation reads to decide whether a failed
+     * level halts the rollback.
      */
     public function register(
         FlowRun $flowRun,
@@ -57,26 +60,22 @@ final readonly class CompensationRecorder
     ): CompensationRun {
         $definition = $entry->definition;
 
-        $compensation = $this->newCompensation();
-
-        $compensation->fill([
-            'flow_run_id' => $flowRun->id,
-            'action_run_id' => $entry->actionRunId,
-            'sequence' => $this->nextSequence($flowRun),
-            'compensation_type' => $definition->type,
-            'compensation_class' => $definition->class,
-            'status' => CompensationStatus::Pending,
-            'continue_on_failure' => $policy === CompensationFailurePolicy::Continue,
-            'arguments' => $definition->isClosure() ? null : $definition->arguments,
-            'reclaim_stale_after_seconds' => $this->resolveReclaimStaleAfterSeconds(
-                $entry->reclaimStaleAfterSeconds,
-                $entry->reclaimStaleEnabled,
-            ),
-        ]);
-
-        $compensation->save();
-
-        return $compensation;
+        return $this->newCompensation()->newQuery()->useWritePdo()->firstOrCreate(
+            ['flow_run_id' => $flowRun->id, 'step_sequence' => $entry->sequence],
+            fn (): array => [
+                'action_run_id' => $entry->actionRunId,
+                'sequence' => $this->nextSequence($flowRun),
+                'compensation_type' => $definition->type,
+                'compensation_class' => $definition->class,
+                'status' => CompensationStatus::Pending,
+                'continue_on_failure' => $policy === CompensationFailurePolicy::Continue,
+                'arguments' => $definition->isClosure() ? null : $definition->arguments,
+                'reclaim_stale_after_seconds' => $this->resolveReclaimStaleAfterSeconds(
+                    $entry->reclaimStaleAfterSeconds,
+                    $entry->reclaimStaleEnabled,
+                ),
+            ],
+        );
     }
 
     /**
@@ -112,11 +111,15 @@ final readonly class CompensationRecorder
      * supported way to observe it), and the same attempts counter — including the
      * read-back that proves the claim survived its own commit.
      *
+     * $rollbackToken is the owner the compensation was sent by: once the rollback has been
+     * taken over the run carries another, and the claim is refused. Null claims for
+     * whoever owns it, as a job queued before runs carried an owner does.
+     *
      * @throws Throwable
      */
-    public function startCompensation(CompensationRun $compensation): bool
+    public function startCompensation(CompensationRun $compensation, ?string $rollbackToken = null): bool
     {
-        $claimed = $compensation->getConnection()->transaction(function () use ($compensation): bool {
+        $claimed = $compensation->getConnection()->transaction(function () use ($compensation, $rollbackToken): bool {
             $now = Carbon::now();
 
             $staleAfter = $compensation->reclaim_stale_after_seconds;
@@ -131,6 +134,10 @@ final readonly class CompensationRecorder
                                 ->where('reclaim_stale_at', '<=', $now);
                         });
                 })
+                ->when($rollbackToken !== null, fn ($query) => $query->whereHas(
+                    'flowRun',
+                    fn ($run) => $run->where('rollback_token', $rollbackToken),
+                ))
                 ->update([
                     'status' => CompensationStatus::Running,
                     'attempts' => DB::raw('attempts + 1'),

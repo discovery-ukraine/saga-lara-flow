@@ -17,7 +17,7 @@ routes** — everything is done through Artisan or the `SagaFlow` facade.
 | `saga-flow:signal-retry {run} {--signal=} {--payload=}` | Deliver the retry signal the run is parked on and wake it. |
 | `saga-flow:cancel {run} {--compensate}` | Cancel a non-terminal run; `--compensate` rolls back first. |
 | `saga-flow:kick {run}` | Manually re-drive a stuck run and the step it is parked on. |
-| `saga-flow:monitor` | Expire overdue runs/actions and time out waits. |
+| `saga-flow:monitor` | Expire overdue work, time out waits, resume stalled expiries. |
 | `saga-flow:repair` | Recover runs whose progress was lost to a dropped job. |
 | `saga-flow:prune {--days=} {--before=} {--dry-run}` | Delete old terminal runs and related rows. |
 | `make:workflow {name}` | Generate a workflow class in `App\Workflows`. |

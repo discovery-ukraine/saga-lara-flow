@@ -2,14 +2,25 @@
 
 ## From 1.3.x to 1.4.0
 
+> ### ⚠️ Run `php artisan migrate` immediately after upgrading
+>
+> `add_rollback_ownership_columns` ships with this release, and the engine writes its columns from
+> the moment it starts. It runs from the package — do **not** `vendor:publish` it.
+
 ### Action required
 
 - **If you call `ActionRecorder::awaitRetry()` yourself** *(low)* — it returns the
   `action.awaiting_retry` row it recorded, or `null` when the write was refused, instead of a
   `bool`, and no longer dispatches `ActionAwaitingRetry`: `publishAwaitingRetry()` does.
 - **If you published the config file and run the doctor** *(low)* — package config is merged only
-  at the top level, so add `repair.redispatch_lost_starts => true` to your `repair` array; without
-  the key the new rule stays off.
+  at the top level, so add `repair.redispatch_lost_starts => true` and
+  `repair.resume_stalled_rollbacks => true` to your `repair` array; without a key its rule stays
+  off.
+- **If you bind your own `FlowRepository`** *(low)* — implement `dueForStartRepair()`,
+  `dueForRollbackRecovery()` and `dueForRollbackRepair()`, which the monitor and the doctor now
+  call.
+- **If you read the array `FlowMonitor::sweep()` returns** *(low)* — it carries a fourth key,
+  `rollbacks`.
 
 ### Behaviour changed
 
@@ -46,6 +57,29 @@ Nothing below asks anything of you.
   leaves a run `Pending` or `Waiting` with nothing to wake it, nor stops a queued rollback after its
   first level, and `'sticky' => true` is not needed for that.
   [Read replicas](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
+- **Every expiring run passes through `Cancelling`**, one with nothing to undo included, on its way
+  to `Expired`. A step that completes while its empty plan is drawn is undone before the run lands.
+  A listener on status changes sees the extra move.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
+- **A rollback that stalls is carried to the end.** The move into `Cancelling` records where the
+  rollback lands. Once nothing has moved it for a grace window — its process died, or a
+  compensation's job was lost — the sweep takes over an expiry
+  (`monitor.expiration.rollback_grace_seconds`) and, with `repair.enabled`, the doctor any other
+  rollback, and lands the run where it was headed. A compensation a worker claimed and then died
+  with stays `Running` and holds its rollback where it is unless `sagas.reclaim.stale_running` gives
+  it a deadline. A run already in `Cancelling` when you upgrade carries no such record and is left
+  as it was.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls)
+- **`compensate()` can return a run still `Cancelling`.** With reclaim enabled, an undo that
+  outlasts its reclaim window and the grace window can have the rollback taken over while it runs;
+  the call finishes that undo, leaves the rest to the queue and returns. Read the run again before
+  acting on the rollback being done.
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#manual-compensation)
+- **A compensation is registered once per step.** A child close job tried again, or a rollback taken
+  over, reuses the row an earlier attempt left instead of running the undo a second time. A row
+  written before the upgrade carries no step and is not matched, so a rollback in flight across the
+  upgrade can still run an undo again, as it could before: let rollbacks finish before upgrading.
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#while-a-rollback-runs)
 - **`saga-flow:kick` sends a run that has not started a `RunWorkflowJob`**, not a
   `ResumeWorkflowJob`, so while locks are enabled it waits for an original job that is still being
   worked, and it drives the run only if it is still `Pending` when it gets there.

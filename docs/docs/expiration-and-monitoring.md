@@ -105,22 +105,70 @@ many of them there are they cannot queue ahead of a run that has been overdue lo
 the next open window. Nothing resets the count, so a run that has been failing since Tuesday says so. Fixing the
 workflow is still the actual remedy — see [Reclaim & recovery](./reclaim-and-recovery.md).
 
-All of that concerns the plan drawn before the run is moved. A run with something to undo is moved, and then the plan
-is drawn again: that second one is what the rollback unwinds, and it holds the step whose owed attempt completed while
-the first was being drawn. A second plan that came back without an ordinal the first had takes that ordinal from it and
-journals `replan_incomplete`; a replay that throws journals `replan_failed` and leaves the first plan standing. Neither
-is surfaced — the run has been taken, so the rollback goes ahead rather than stopping in `Cancelling` with nothing to
-move it on.
+All of that concerns the plan drawn before the run is moved. Every run the sweep expires is then
+moved into `Cancelling`, one with nothing to undo included, and the plan is drawn again: that second
+one is what the rollback unwinds, and it holds the step whose owed attempt completed while the first
+was being drawn. A second plan that came back without an ordinal the first had takes that ordinal
+from it and journals `replan_incomplete`; a replay that throws journals `replan_failed` and leaves
+the first plan standing. Neither is surfaced — the run has been taken, so the rollback goes ahead
+rather than stopping in `Cancelling` with nothing to move it on.
 
-A run the first plan found nothing to undo on is not moved at all; it expires where the sweep found it. A step that
-completes in that gap is therefore still applied under a run reported expired, which is worth knowing if your workflow
-carries exactly one compensatable step.
+A run with nothing to undo therefore passes through `Cancelling` on its way to `Expired`, and a step
+that completes while its empty plan is being drawn is undone before the run lands.
+
+## A rollback that stalls
+
+The move into `Cancelling` writes down where the rollback lands and why: `flow_runs.rollback_target`
+(`expired`, `failed` or `cancelled`) and `rollback_cause`, beside an owner token in
+`rollback_token`. Whoever moved the run owns its rollback. If that owner stops — its process dies
+after the move, or the job of a compensation is lost — nothing else would ever move the run on: no
+pass is driven for a run in `Cancelling`, and the doctor sends no step under it a job.
+
+A rollback nothing has moved for a grace window is taken over and carried to the end its intent
+names. Nothing has moved it when the run itself has not been written since, no compensation was
+registered, claimed or settled since, and no compensation is held `Running` by a worker still inside
+its [reclaim](./reclaim-and-recovery.md) window. The sweep takes over a stalled expiry, and the
+[doctor](#repair-the-doctor) everything else:
+
+```php
+'monitor' => [
+    'expiration' => [
+        'rollback_grace_seconds' => 60,
+    ],
+],
+```
+
+The takeover is a conditional write on the run that replaces the owner token the sweep read, so of
+two sweeps one takes it, and a run taken over or landed since it was read is left alone. The plan is
+drawn again under `Cancelling`, where no step can complete, and a compensation is registered once
+per step: the one the earlier owner already ran is reused rather than run again, and one it left
+`Pending` is sent a job. Every compensation job carries the owner that sent it, and its claim is
+refused once the rollback has another, so a late job of the earlier owner — one queued behind a
+backlog longer than the grace window — runs nothing, and an earlier owner that turns out to be alive
+stops at its next claim or level and leaves the rest to the one that took over. A level whose
+compensation a worker of the earlier owner claimed in the moment before the takeover is left as it
+is until that row settles, and the rollback is taken over again once nothing has moved it for the
+grace window.
+
+The claim and the takeover are separate writes on separate rows. On PostgreSQL a claim that starts
+in the same instant as a takeover can still read the earlier owner and run beside the one that took
+over; the claim lets only one of them run that undo, but the other one's level can then close early.
+
+A compensation `Running` with no reclaim deadline holds the rollback where it is for as long as the
+row stays that way — the worker may still be running it. With `sagas.reclaim.stale_running` enabled,
+the row becomes claimable once its deadline passes, and the rollback is taken over then.
+
+A stalled rollback whose plan cannot be drawn again stays in `Cancelling` under its new owner and is
+journalled as `rollback_resume_failed`. The sweep holds it off with the same window as an expiry it
+cannot plan (`expiry_attempts`, `backoff`). A run that went into `Cancelling` before its intent was
+written down carries none, and is left where it is.
 
 ## Repair (the doctor)
 
-Separate from expiration: the **doctor** recovers a run whose progress was lost to a *dropped job* — an action that
-never ran, a resume that never fired, a run that never started — rather than one that hit a deadline. It only ever re-dispatches existing jobs or
-re-wakes flows (replay decides the rest); it never creates duplicate work.
+Separate from expiration: the **doctor** recovers a run whose progress was lost to a *dropped job* —
+an action that never ran, a resume that never fired, a run that never started, a rollback that
+stopped — rather than one that hit a deadline. For a run going forwards it only ever re-dispatches
+existing jobs or re-wakes flows (replay decides the rest); it never creates duplicate work.
 
 ```php
 'repair' => [
@@ -133,6 +181,7 @@ re-wakes flows (replay decides the rest); it never creates duplicate work.
     'redispatch_stale_running_actions' => true,
     'wake_stuck_flows' => true,
     'redispatch_lost_starts' => true,
+    'resume_stalled_rollbacks' => true,
     'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],
 ],
 ```
@@ -170,13 +219,18 @@ Every parameter:
   redelivery: the run stays `Running`, where the doctor does not look, until `saga-flow:kick`. A child whose parent has closed, or is closing, is left to the parent's close policy
   unless that policy is `Abandon`. With the package on a [dedicated connection](./queues-locks-idempotency.md#host-transactions)
   the rule cannot tell a lost job from one your own open transaction still holds back.
+- **`resume_stalled_rollbacks`** — enable R5: take over a rollback to `Failed` or `Cancelled` that
+  nothing has moved for `grace_seconds`, and carry it to the end, as described in
+  [A rollback that stalls](#a-rollback-that-stalls). A stalled expiry is the sweep's. Each takeover
+  spends the run's repair budget, so a rollback whose jobs keep getting lost is given up on after
+  `max_attempts`; one whose plan cannot be drawn again is journalled as `rollback_resume_failed`.
 - **`queue_looping`** — drive the repair pass off the queue worker's idle loop instead of cron (same idea as
   `monitor.queue_looping`). When `enabled`, the pass runs at most once per `throttle_seconds`.
 
-The doctor only ever re-dispatches existing jobs or re-wakes flows — replay decides the rest, so it never creates
-duplicate work or mutates a business result. It also leaves a run that is rolling back (`Cancelling`) entirely alone:
-another job for a step under it would complete outside the stack that rollback already planned. See
-[statuses](./statuses.md).
+For a run going forwards the doctor only ever re-dispatches existing jobs or re-wakes flows — replay
+decides the rest, so it never creates duplicate work or mutates a business result. It sends no step
+of a run that is rolling back (`Cancelling`) a job: one would complete outside the stack that
+rollback already planned. See [statuses](./statuses.md).
 
 :::tip Turn it on in production
 Any step whose job is committed and then dispatched can lose that job to a dying process — including a step restarted

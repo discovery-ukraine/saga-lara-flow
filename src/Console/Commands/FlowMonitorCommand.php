@@ -14,7 +14,7 @@ class FlowMonitorCommand extends Command
 {
     protected $signature = 'saga-flow:monitor';
 
-    protected $description = 'Expire overdue saga flows and actions and time out stuck signal waits.';
+    protected $description = 'Expire overdue saga flows and actions, time out stuck signal waits, and resume stalled expiries.';
 
     /**
      * @throws Throwable
@@ -30,10 +30,11 @@ class FlowMonitorCommand extends Command
         $report = $monitor->sweep();
 
         $this->info(sprintf(
-            'Monitor swept: %d run(s) expired, %d signal(s) timed out, %d action(s) expired.',
+            'Monitor swept: %d run(s) expired, %d signal(s) timed out, %d action(s) expired, %d stalled rollback(s) resumed.',
             $report['runs'],
             $report['signals'],
             $report['actions'],
+            $report['rollbacks'],
         ));
 
         return self::SUCCESS;

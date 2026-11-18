@@ -61,7 +61,7 @@ class SagaRunner
             return;
         }
 
-        $this->dispatchLevel($flowRun, $levels, $primary, $finalState);
+        $this->dispatchLevel($flowRun, $levels, $primary, $finalState, $flowRun->rollback_token);
     }
 
     /**
@@ -71,6 +71,8 @@ class SagaRunner
      * @param  list<list<CompensationEntry>>  $remainingLevels
      * @param  array<string, mixed>|null  $primary
      * @param  list<string>  $ranCompensationIds
+     * @param  ?string  $rollbackToken  the owner the rollback was dispatched under; null for a
+     *                                  continuation queued before the run carried one
      *
      * @throws Throwable
      */
@@ -79,11 +81,13 @@ class SagaRunner
         array $remainingLevels,
         ?array $primary,
         FlowStatus $finalState,
-        array $ranCompensationIds
+        array $ranCompensationIds,
+        ?string $rollbackToken = null,
     ): void {
         $flowRun = $this->repository->findOnWriter($flowRunId);
 
-        if ($flowRun === null) {
+        // A rollback taken over since this level was sent is driven by its new owner.
+        if ($flowRun === null || ($rollbackToken !== null && $flowRun->rollback_token !== $rollbackToken)) {
             return;
         }
 
@@ -94,7 +98,7 @@ class SagaRunner
                 return;
             }
 
-            $this->dispatchLevel($flowRun, $remainingLevels, $primary, $finalState);
+            $this->dispatchLevel($flowRun, $remainingLevels, $primary, $finalState, $rollbackToken);
         } catch (ConcurrentFlowTransitionException) {
             // Another actor finished the run while the compensations were in flight; what
             // they ran is recorded either way. A batch callback is the one landing with no
@@ -105,27 +109,54 @@ class SagaRunner
     /**
      * @param  list<list<CompensationEntry>>  $levels
      * @param  array<string, mixed>|null  $primary
+     *
+     * @throws Throwable
      */
     private function rollbackSync(FlowRun $flowRun, array $levels, ?array $primary, FlowStatus $finalState): void
     {
         foreach ($levels as $level) {
-            if ($this->runLevelSync($flowRun, $level)) {
-                $this->finalize($flowRun, $finalState, $primary);
-
+            if (! $this->stillOwns($flowRun)) {
                 return;
+            }
+
+            $stopped = $this->runLevelSync($flowRun, $level);
+
+            if ($stopped === null) {
+                return;
+            }
+
+            if ($stopped) {
+                break;
             }
         }
 
-        $this->finalize($flowRun, $finalState, $primary);
+        if ($this->stillOwns($flowRun)) {
+            $this->finalize($flowRun, $finalState, $primary);
+        }
+    }
+
+    /**
+     * Whether the row still names this instance as the owner of its rollback. A rollback
+     * that stalled long enough to be taken over is left to whoever took it.
+     */
+    private function stillOwns(FlowRun $flowRun): bool
+    {
+        if ($flowRun->rollback_token === null) {
+            return true;
+        }
+
+        return $flowRun->newQuery()->useWritePdo()->whereKey($flowRun->getKey())
+            ->value('rollback_token') === $flowRun->rollback_token;
     }
 
     /**
      * @param  list<CompensationEntry>  $level
-     * @return bool whether a Stop-policy compensation failed (rollback must halt)
+     * @return ?bool whether a Stop-policy compensation failed (rollback must halt), or null
+     *               once the rollback was taken over by another owner
      *
      * @throws Throwable
      */
-    private function runLevelSync(FlowRun $flowRun, array $level): bool
+    private function runLevelSync(FlowRun $flowRun, array $level): ?bool
     {
         $compensationIds = [];
 
@@ -134,54 +165,117 @@ class SagaRunner
 
             $compensationIds[] = $compensation->id;
 
-            // The row was just created above, in this same call: nothing else can have
-            // taken it, so losing the claim is a broken invariant rather than a race.
-            // Nothing supersedes a compensation mid-run either — they carry no expiry
-            // sweep and the doctor leaves them alone — but the two are kept apart here
-            // so this stays an invariant guard and not a catch-all.
-            if ($this->executor->execute($compensation, $entry->definition) === StepExecution::ClaimLost) {
-                throw ActionClaimFailedException::forCompensation(
-                    $entry->definition->class ?? $entry->definition->type,
-                    $compensation->sequence,
-                );
+            if ($this->settled($compensation)
+                || $this->executor->execute($compensation, $entry->definition, $flowRun->rollback_token) !== StepExecution::ClaimLost) {
+                continue;
             }
+
+            // A row an earlier owner settled is not run again. Losing the claim on any
+            // other leaves the rest to the owner that took the rollback over, or stops it
+            // loudly with the run still in Cancelling: a worker that may still be running
+            // the undo holds the row, or the claim did not survive its own commit.
+            // Recovery carries the rollback on once the row can be claimed, instead of it
+            // landing over an undo that never ran.
+            if (! $this->stillOwns($flowRun)) {
+                return null;
+            }
+
+            throw ActionClaimFailedException::forCompensation(
+                $entry->definition->class ?? $entry->definition->type,
+                $compensation->sequence,
+            );
         }
 
         return $this->levelStopped($compensationIds);
     }
 
     /**
+     * Send the next level that still has something to run. A level an earlier owner
+     * already settled is judged as it stands and passed over without a batch. A level
+     * with a row still held by a worker that may be alive is neither sent nor judged:
+     * the rollback stays where it is until that row settles, and is taken over again.
+     *
      * @param  list<list<CompensationEntry>>  $levels
      * @param  array<string, mixed>|null  $primary
      *
      * @throws Throwable
      */
-    private function dispatchLevel(FlowRun $flowRun, array $levels, ?array $primary, FlowStatus $finalState): void
-    {
-        if ($levels === []) {
-            $this->finalize($flowRun, $finalState, $primary);
+    private function dispatchLevel(
+        FlowRun $flowRun,
+        array $levels,
+        ?array $primary,
+        FlowStatus $finalState,
+        ?string $rollbackToken,
+    ): void {
+        while ($levels !== []) {
+            $head = array_shift($levels);
 
-            return;
+            [$compensationIds, $jobs, $held] = $this->registerLevel($flowRun, $head, $rollbackToken);
+
+            if ($held) {
+                return;
+            }
+
+            if ($jobs !== []) {
+                $this->sendLevel($flowRun, $jobs, new AdvanceCompensation(
+                    $flowRun->id,
+                    $levels,
+                    $primary,
+                    $finalState,
+                    $compensationIds,
+                    $rollbackToken,
+                ));
+
+                return;
+            }
+
+            if ($this->levelStopped($compensationIds)) {
+                break;
+            }
         }
 
-        $head = array_shift($levels);
+        $this->finalize($flowRun, $finalState, $primary);
+    }
 
+    /**
+     * Register one level and build a job for each row still to run.
+     *
+     * @param  list<CompensationEntry>  $level
+     * @return array{0: list<string>, 1: list<RunCompensationJob>, 2: bool} the level's row ids,
+     *                                                                      its jobs, and whether a
+     *                                                                      live worker holds a row
+     */
+    private function registerLevel(FlowRun $flowRun, array $level, ?string $rollbackToken): array
+    {
         $compensationIds = [];
-
         $jobs = [];
+        $held = false;
 
-        foreach ($head as $entry) {
+        foreach ($level as $entry) {
             $compensation = $this->recorder->register($flowRun, $entry, $entry->effectivePolicy());
 
             $compensationIds[] = $compensation->id;
+            $held = $held || $this->held($compensation);
 
-            $jobs[] = new RunCompensationJob($flowRun->id, $compensation->id, $entry->definition);
+            if (! $this->settled($compensation)) {
+                $jobs[] = new RunCompensationJob($flowRun->id, $compensation->id, $entry->definition, $rollbackToken);
+            }
         }
 
+        return [$compensationIds, $jobs, $held];
+    }
+
+    /**
+     * @param  list<RunCompensationJob>  $jobs
+     *
+     * @throws Throwable
+     */
+    private function sendLevel(FlowRun $flowRun, array $jobs, AdvanceCompensation $advance): void
+    {
         $batch = Bus::batch($jobs)
             ->name("saga-compensate:{$flowRun->id}")
             ->allowFailures()
-            ->finally(new AdvanceCompensation($flowRun->id, $levels, $primary, $finalState, $compensationIds));
+            ->finally($advance);
 
         if ($flowRun->connection !== null) {
             $batch->onConnection($flowRun->connection);
@@ -192,6 +286,20 @@ class SagaRunner
         }
 
         $batch->dispatch();
+    }
+
+    private function settled(CompensationRun $compensation): bool
+    {
+        return in_array($compensation->status, [CompensationStatus::Completed, CompensationStatus::Failed], true);
+    }
+
+    /**
+     * Running and not yet claimable again: the worker that took it may still be running it.
+     */
+    private function held(CompensationRun $compensation): bool
+    {
+        return $compensation->status === CompensationStatus::Running
+            && ($compensation->reclaim_stale_at === null || $compensation->reclaim_stale_at->isFuture());
     }
 
     /**

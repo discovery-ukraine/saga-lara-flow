@@ -73,7 +73,7 @@ it('re-runs the monitor idempotently', function () {
     expect(app(FlowMonitor::class)->sweep()['runs'])->toBe(1);
 
     expect(app(FlowMonitor::class)->sweep())
-        ->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0]);
+        ->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0, 'rollbacks' => 0]);
 
     expect(SagaFlow::findRun($id)->status)->toBe(FlowStatus::Expired);
 });

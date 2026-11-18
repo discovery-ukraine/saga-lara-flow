@@ -18,17 +18,28 @@ use Illuminate\Foundation\Queue\Queueable;
  * run in a separate worker/process. The job never throws: the compensation
  * outcome is recorded on the CompensationRun, and SagaRunner reads that status
  * after the batch to apply the Stop/Continue policy.
+ *
+ * $rollbackToken is the owner of the rollback that sent it, so a job of an owner the
+ * rollback was taken from claims nothing. It is a plain declared property rather than a
+ * promoted one: a payload queued before it existed is unserialized without the
+ * constructor, and only a class-level default keeps it initialized — as null, which
+ * claims for whoever owns the rollback.
  */
 class RunCompensationJob implements ShouldQueue
 {
     use Batchable;
     use Queueable;
 
+    public ?string $rollbackToken = null;
+
     public function __construct(
         public string $flowRunId,
         public string $compensationRunId,
         public CompensationDefinition $definition,
-    ) {}
+        ?string $rollbackToken = null,
+    ) {
+        $this->rollbackToken = $rollbackToken;
+    }
 
     public function handle(CompensationExecutor $executor, FlowRepository $repository, TenancyManager $tenancy): void
     {
@@ -56,7 +67,7 @@ class RunCompensationJob implements ShouldQueue
         $tenancy->for(
             $flowRun,
             $flowRun->workflow_class,
-            fn () => $executor->execute($compensation, $this->definition),
+            fn () => $executor->execute($compensation, $this->definition, $this->rollbackToken),
         );
     }
 

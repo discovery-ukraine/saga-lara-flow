@@ -258,7 +258,7 @@ it('surfaces a sweep failure that already took the run into cancelling', functio
 
     // It cannot wedge the sweep the way a planning failure would: Cancelling is not
     // a candidate status, so the run is gone from the batch on its own.
-    expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0]);
+    expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0, 'rollbacks' => 0]);
 });
 
 it('does not abort the sweep over a run somebody else was moving meanwhile', function (FlowStatus $moveTo) {
@@ -277,7 +277,7 @@ it('does not abort the sweep over a run somebody else was moving meanwhile', fun
     // status as evidence of its own doing; what it goes on is the type of the throw.
     SelfCancellingThenThrowingWorkflow::$moveTo = $moveTo;
 
-    expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0])
+    expect(app(FlowMonitor::class)->sweep())->toBe(['runs' => 0, 'signals' => 0, 'actions' => 0, 'rollbacks' => 0])
         ->and(SagaFlow::findRun($run->id)->status)->toBe($moveTo);
 
     $log = is_file($path) ? (string) file_get_contents($path) : '';
