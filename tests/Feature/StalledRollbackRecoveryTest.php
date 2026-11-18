@@ -323,6 +323,24 @@ it('leaves an inline rollback taken over mid-undo to the recoverer that took it'
         ->and(CompensationLog::all())->toBe(['undo:b', 'undo:a']);
 });
 
+it('carries a rollback to the end on a queue that stays further behind than the grace window', function (): void {
+    useDatabaseQueue();
+
+    $run = stalledExpiry();
+
+    // Every job waits 61 s, so each pass of the sweep comes round before the oldest job
+    // reaches a worker. Taking the rollback over on every one of them would leave each
+    // owner's jobs stale by the time they ran.
+    for ($pass = 0; $pass < 12 && FlowRun::query()->findOrFail($run->id)->status === FlowStatus::Cancelling; $pass++) {
+        $this->travel(61)->seconds();
+        app(FlowMonitor::class)->sweep();
+        workOneJob();
+    }
+
+    expect(FlowRun::query()->findOrFail($run->id)->status)->toBe(FlowStatus::Expired)
+        ->and(CompensationLog::all())->toBe(['undo:b', 'undo:a']);
+});
+
 it('leaves a compensation a worker may still be running until its reclaim window passes', function (): void {
     useDatabaseQueue();
 

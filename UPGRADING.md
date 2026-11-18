@@ -65,9 +65,11 @@ Nothing below asks anything of you.
   rollback lands. Once nothing has moved it for a grace window — its process died, or a
   compensation's job was lost — the sweep takes over an expiry
   (`monitor.expiration.rollback_grace_seconds`) and, with `repair.enabled`, the doctor any other
-  rollback, and lands the run where it was headed. A compensation a worker claimed and then died
-  with stays `Running` and holds its rollback where it is unless `sagas.reclaim.stale_running` gives
-  it a deadline. A run already in `Cancelling` when you upgrade carries no such record and is left
+  rollback, and lands the run where it was headed. Each takeover by the sweep holds the next one
+  off by `monitor.expiration.backoff`: keep the grace window above your queue's longest wait, or a
+  healthy rollback on a lagging queue is taken over and slowed down. A compensation a worker
+  claimed and then died with stays `Running` and holds its rollback where it is unless
+  `sagas.reclaim.stale_running` gives it a deadline. A run already in `Cancelling` when you upgrade carries no such record and is left
   as it was.
   [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls)
 - **`compensate()` can return a run still `Cancelling`.** With reclaim enabled, an undo that

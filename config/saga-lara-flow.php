@@ -119,7 +119,9 @@ return [
 
             // An expiry whose rollback nothing has moved for this long — the sweep died
             // after taking the run, or a compensation job was lost — is carried to the end
-            // by the sweep. The same wait the doctor gives a lost job (repair.grace_seconds).
+            // by the sweep. The same wait the doctor gives a lost job (repair.grace_seconds);
+            // keep it above the longest your queue makes a job wait. Each takeover holds
+            // the next one off by the backoff above.
             'rollback_grace_seconds' => 60,
 
             // Default deadlines (in seconds) applied at write time when none is set

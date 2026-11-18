@@ -168,12 +168,17 @@ final readonly class FlowMonitor
      * planned is held off and journalled like an expiry that could not be, for the same
      * reasons.
      *
+     * A takeover is held off too. The earlier owner's jobs claim nothing once it happens,
+     * so on a queue running further behind than the grace window, taking over again on
+     * every pass would leave each new owner's jobs stale by the time a worker reached
+     * them; the growing window lets the latest one's through.
+     *
      * @throws Throwable
      */
     private function resumeRollback(FlowRun $run): bool
     {
         try {
-            return $this->executor->resumeRollback($run);
+            $resumed = $this->executor->resumeRollback($run);
         } catch (RollbackNotPlannedException $failure) {
             $this->holdOff($run);
 
@@ -188,6 +193,12 @@ final readonly class FlowMonitor
 
             return false;
         }
+
+        if ($resumed) {
+            $this->holdOff($run);
+        }
+
+        return $resumed;
     }
 
     /**

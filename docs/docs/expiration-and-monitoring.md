@@ -159,8 +159,14 @@ row stays that way — the worker may still be running it. With `sagas.reclaim.s
 the row becomes claimable once its deadline passes, and the rollback is taken over then.
 
 A stalled rollback whose plan cannot be drawn again stays in `Cancelling` under its new owner and is
-journalled as `rollback_resume_failed`. The sweep holds it off with the same window as an expiry it
-cannot plan (`expiry_attempts`, `backoff`). A run that went into `Cancelling` before its intent was
+journalled as `rollback_resume_failed`.
+
+Every takeover by the sweep, planned or not, holds the run off with the same window as an expiry it
+cannot plan, doubling each time (`backoff`, counted in `expiry_attempts`). The grace window judges by
+time alone, so a queue that keeps a job waiting longer than `rollback_grace_seconds` makes a healthy
+rollback look stalled: it is taken over, and the jobs already queued for it claim nothing. The
+growing window is what lets the latest owner's jobs through in the end. Set
+`rollback_grace_seconds` above the longest your queue makes a job wait. A run that went into `Cancelling` before its intent was
 written down carries none, and is left where it is.
 
 ## Repair (the doctor)
