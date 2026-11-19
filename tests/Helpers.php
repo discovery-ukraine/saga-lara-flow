@@ -1,6 +1,7 @@
 <?php
 
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
+use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
 use DiscoveryUkraine\SagaLaraFlow\Tests\Harness\ForkedRival;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Schema\Blueprint;
@@ -432,5 +433,39 @@ if (! function_exists('rivalSession')) {
 
             usleep(1000);
         }
+    }
+
+    /**
+     * Take the queued jobs of one class off the queue, as a worker dying with them would.
+     *
+     * @return list<array<string, mixed>>
+     */
+    function loseJobs(string $class): array
+    {
+        $rows = DB::connection('testing')->table('jobs')->where('payload', 'like', '%'.$class.'%')->get();
+
+        DB::connection('testing')->table('jobs')->whereIn('id', $rows->pluck('id'))->delete();
+
+        return $rows->map(fn (object $row): array => array_diff_key((array) $row, ['id' => true]))->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     */
+    function bringJobsBack(array $rows): void
+    {
+        foreach ($rows as $row) {
+            DB::connection('testing')->table('jobs')->insert($row);
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    function compensationTrail(string $runId): array
+    {
+        return CompensationRun::query()->where('flow_run_id', $runId)->orderBy('sequence')->get()
+            ->map(fn (CompensationRun $row): string => $row->arguments[0].':'.$row->status->value)
+            ->all();
     }
 }

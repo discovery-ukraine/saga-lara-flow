@@ -143,18 +143,41 @@ than unwinding part of it and reporting a finished rollback. Fix the cause and c
 is the plan drawn before the run is moved; a throw from the one made after it is journalled instead,
 because by then the run has been taken and there is a plan to unwind either way.
 
-The rollback runs in the call, and the run comes back `Cancelled` — with one exception. With
+A rollback it starts runs in the call, and the run comes back `Cancelled` — with one exception. With
 [reclaim](./reclaim-and-recovery.md) enabled, an undo that outlasts its reclaim window and the grace
 window can have the rollback
 [taken over](./expiration-and-monitoring.md#a-rollback-that-stalls) while it runs. The call then
 finishes the undo it is in, leaves the rest to the queue, and returns the run still `Cancelling`:
 read it again, or wait for a terminal status, before acting on the rollback being done.
 
+A run that is already rolling back — it failed, expired, or is being closed by its parent — is left
+to that rollback, and so is one whose rollback begins while `compensate()` is planning. The call
+runs nothing and returns the run still `Cancelling`; it lands where that rollback was headed. A
+rollback that has stalled is carried on by the monitor, the doctor or a
+[kick](./expiration-and-monitoring.md#repair-the-doctor).
+
 :::warning Not inside a transaction of your own
 The compensations execute before your transaction closes, so a rollback afterwards discards the
 record while the undo work is already done — and leaves the run compensatable a second time. See
 [what a host transaction leaves behind](./queues-locks-idempotency.md#host-transactions).
 :::
+
+### Cancelling a rollback
+
+`cancel()` on a run that is rolling back stops the rollback where it stands, through a handle loaded
+before the rollback began as well. It first takes the rollback from its owner, so no further
+compensation is claimed: a job of that rollback still on the queue runs nothing. Only then does it
+read what was left and land the run `Cancelled` with it. A rollback that undoes nothing — a child
+closed without compensation — was headed for `Cancelled` anyway, and lands there with nothing to
+record. For any other, `exception` holds the rollback's cause, and `exception['compensation']` the
+first compensation that failed or never finished. When every compensation registered so far had
+completed, it holds a `CompensationUnfinishedException` saying the rollback was cut short: a level
+not registered yet never ran. A compensation a worker had already claimed may still finish after the
+run is `Cancelled`; it is reported as it stood. The cut is journalled as
+[`rollback_abandoned`](./reclaim-and-recovery.md#finding-these-races-in-your-logs). The steps it
+leaves are not undone, so treat it as a way out, not a way through. A `cancel()` that meets the
+rollback landing on its own loses to it: the run lands where the rollback was headed, with its
+owner's record, and `cancel()` throws `ConcurrentFlowTransitionException`.
 
 ## Postponing a rollback
 

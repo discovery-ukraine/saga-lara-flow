@@ -16,6 +16,7 @@ use DiscoveryUkraine\SagaLaraFlow\Jobs\RunCompensationJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -324,17 +325,10 @@ class SagaRunner
 
         $exception = $primary ?? [];
 
-        $failed = $this->firstFailedCompensation($flowRun);
+        $compensation = $this->compensationOutcome($flowRun);
 
-        if ($failed !== null) {
-            $exception['compensation'] = $this->exceptionToArray(CompensationFailedException::for($failed))
-                + ['cause' => $failed->exception];
-        } elseif (($unfinished = $this->firstUnfinishedCompensation($flowRun)) !== null) {
-            // Recorded in the same place a failure would be, so a run that did not
-            // fully unwind never looks like one that did.
-            $exception['compensation'] = $this->exceptionToArray(
-                CompensationUnfinishedException::for($unfinished)
-            );
+        if ($compensation !== null) {
+            $exception['compensation'] = $compensation;
         }
 
         // A monitor-enforced expiration that rolled back lands in Expired, not Failed:
@@ -356,6 +350,66 @@ class SagaRunner
         $this->lifecycle->flowFailedFromArray($flowRun, $primary);
 
         app(ChildWorkflowManager::class)->onFlowFinalized($flowRun, true);
+    }
+
+    /**
+     * Cancel a run whose rollback has not finished. The owner token is replaced first, so the
+     * owner claims nothing more, and only then is what the rollback left undone read and
+     * recorded where a finished rollback records its failure.
+     */
+    public function abandon(FlowRun $flowRun): void
+    {
+        $token = (string) Str::ulid();
+
+        $flowRun->newQuery()->whereKey($flowRun->getKey())
+            ->where('status', FlowStatus::Cancelling)
+            ->update(['rollback_token' => $token]);
+
+        $flowRun->rollback_token = $token;
+
+        if ($flowRun->rollback_compensates) {
+            $flowRun->exception = ($flowRun->rollback_cause ?? []) + [
+                'compensation' => $this->compensationOutcome($flowRun)
+                    ?? $this->exceptionToArray(CompensationUnfinishedException::cutShort($flowRun)),
+            ];
+        }
+
+        $flowRun->markCancelled();
+
+        if ($flowRun->rollback_compensates) {
+            app(AnomalyLog::class)->log(AnomalyLog::REASON_ROLLBACK_ABANDONED, [
+                'entity' => 'flow',
+                'flow_run_id' => $flowRun->id,
+                'workflow_class' => $flowRun->workflow_class,
+                'rollback_target' => $flowRun->rollback_target?->value,
+            ]);
+        }
+    }
+
+    /**
+     * The first compensation that failed, or else the first that never settled: a run that
+     * did not fully unwind never looks like one that did, and a real failure carries its own
+     * cause. One read, so a row settling meanwhile is seen in one state or the other.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function compensationOutcome(FlowRun $flowRun): ?array
+    {
+        $row = $this->compensationModel()->newQuery()
+            ->useWritePdo()
+            ->where('flow_run_id', $flowRun->id)
+            ->whereIn('status', [CompensationStatus::Failed, CompensationStatus::Pending, CompensationStatus::Running])
+            ->orderByRaw('CASE WHEN status = ? THEN 0 ELSE 1 END', [CompensationStatus::Failed->value])
+            ->orderBy('sequence')
+            ->first();
+
+        if ($row === null) {
+            return null;
+        }
+
+        return $row->status === CompensationStatus::Failed
+            ? $this->exceptionToArray(CompensationFailedException::for($row)) + ['cause' => $row->exception]
+            : $this->exceptionToArray(CompensationUnfinishedException::for($row));
     }
 
     /**
@@ -419,31 +473,6 @@ class SagaRunner
             ->whereNot('status', CompensationStatus::Completed)
             ->where('continue_on_failure', false)
             ->exists();
-    }
-
-    private function firstFailedCompensation(FlowRun $flowRun): ?CompensationRun
-    {
-        return $this->compensationModel()->newQuery()
-            ->useWritePdo()
-            ->where('flow_run_id', $flowRun->id)
-            ->where('status', CompensationStatus::Failed)
-            ->orderBy('sequence')
-            ->first();
-    }
-
-    /**
-     * The earliest compensation that never reached a terminal state. Reported only
-     * when no compensation actually failed — a real failure carries its own cause and
-     * is the more useful thing to surface.
-     */
-    private function firstUnfinishedCompensation(FlowRun $flowRun): ?CompensationRun
-    {
-        return $this->compensationModel()->newQuery()
-            ->useWritePdo()
-            ->where('flow_run_id', $flowRun->id)
-            ->whereIn('status', [CompensationStatus::Pending, CompensationStatus::Running])
-            ->orderBy('sequence')
-            ->first();
     }
 
     private function compensationModel(): CompensationRun

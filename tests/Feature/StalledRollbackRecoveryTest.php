@@ -7,7 +7,6 @@ use DiscoveryUkraine\SagaLaraFlow\Enums\CompensationStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
-use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
@@ -177,40 +176,6 @@ function stalledExpiry(): FlowRun
     return FlowRun::query()->findOrFail($run->id);
 }
 
-/**
- * Take the queued jobs of one class off the queue, as a worker dying with them would.
- *
- * @return list<array<string, mixed>>
- */
-function loseJobs(string $class): array
-{
-    $rows = DB::connection('testing')->table('jobs')->where('payload', 'like', '%'.$class.'%')->get();
-
-    DB::connection('testing')->table('jobs')->whereIn('id', $rows->pluck('id'))->delete();
-
-    return $rows->map(fn (object $row): array => array_diff_key((array) $row, ['id' => true]))->all();
-}
-
-/**
- * @param  list<array<string, mixed>>  $rows
- */
-function bringJobsBack(array $rows): void
-{
-    foreach ($rows as $row) {
-        DB::connection('testing')->table('jobs')->insert($row);
-    }
-}
-
-/**
- * @return list<string>
- */
-function compensationTrail(string $runId): array
-{
-    return CompensationRun::query()->where('flow_run_id', $runId)->orderBy('sequence')->get()
-        ->map(fn (CompensationRun $row): string => $row->arguments[0].':'.$row->status->value)
-        ->all();
-}
-
 it('carries an expiry to the end once the process that took the run died', function (): void {
     useDatabaseQueue();
     app()->bind(StateMachine::class, DiesAfterTakingTheRun::class);
@@ -285,14 +250,17 @@ it('reuses the undo a close job ran before it died, when the job is tried again'
 
     SagaFlow::loadFlow($parent->id)->compensate();
 
-    // The job's own retry: the first attempt undid the child's step and died before the
-    // child landed.
+    $close = loseJobs('CancelChildWorkflowJob');
+    bringJobsBack($close);
+
+    // The first attempt undid the child's step and died before the child landed.
     drainQueue();
 
     expect(FlowRun::query()->findOrFail($child->id)->status)->toBe(FlowStatus::Cancelling)
         ->and(CompensationLog::all())->toBe(['undo:parent', 'undo:child']);
 
-    CancelChildWorkflowJob::dispatch($child->id, FlowStatus::Cancelled, true);
+    // The same payload, delivered again.
+    bringJobsBack($close);
     drainQueue();
 
     expect(FlowRun::query()->findOrFail($child->id)->status)->toBe(FlowStatus::Cancelled)

@@ -216,12 +216,17 @@ it('retries a child close that failed after it had taken control', function () {
     $run = SagaFlow::create(ParentOfVanishingChildWorkflow::class)->runSync();
     $child = SagaFlow::findRun($run->children()->first()->child_flow_run_id);
 
-    // The window the two plans leave: the first succeeded, the child was fenced, and
-    // the second met a world that had moved. The child is Cancelling and owned.
-    app(StateMachine::class)->transition($child, FlowStatus::Cancelling);
+    // The window the two plans leave: the first succeeded, the child was fenced under
+    // this job's token, and the second met a world that had moved.
+    $close = new CancelChildWorkflowJob($child->id, FlowStatus::Cancelled, true);
+
+    app(StateMachine::class)->transition(
+        $child->intendRollback(FlowStatus::Cancelled, null, true, $close->rollbackToken),
+        FlowStatus::Cancelling,
+    );
     VanishedArgumentWorkflow::$label = null;
 
-    expect(fn () => dispatch_sync(new CancelChildWorkflowJob($child->id, FlowStatus::Cancelled, true)))
+    expect(fn () => dispatch_sync($close))
         ->toThrow(RuntimeException::class)
         ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelling);
 
@@ -230,7 +235,7 @@ it('retries a child close that failed after it had taken control', function () {
     // for good, though: the retry recovers it once the cause is fixed.
     VanishedArgumentWorkflow::reset();
 
-    dispatch_sync(new CancelChildWorkflowJob($child->id, FlowStatus::Cancelled, true));
+    dispatch_sync(unserialize(serialize($close)));
 
     expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
         ->and(CompensationLog::all())->toBe(['undo:b', 'undo:a']);

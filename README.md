@@ -547,7 +547,8 @@ Close policies: `Abandon` (default — leave the child running), `Cancel` (cance
 it). A failing child throws `ChildWorkflowFailedException` and an expired one
 `ChildWorkflowExpiredException`, unless you call `->continueParentOnFailure()`; a cancelled one
 throws `ChildWorkflowCancelledException` either way. The default close policy is configurable
-(`children.default_close_policy`) or per class via `#[ChildPolicy]`.
+(`children.default_close_policy`) or per class via `#[ChildPolicy]`. A child already rolling back
+when its parent closes is left to that rollback and lands where it was headed.
 
 A child is created from its class the way a root run is: its `#[Tag]`s, the name and version from
 `#[Flow]`, and a deadline from `#[FlowTimeout]`, else `monitor.expiration.defaults.run` — never the
@@ -663,21 +664,23 @@ re-dispatch missing actions (`repair.redispatch_lost_actions`), re-wake stuck wa
 or loop it off the worker (`repair.queue_looping.enabled`), or kick a single run manually with
 `saga-flow:kick {run}` / `SagaFlow::kick($id)`. A kick refills the repair budget that
 `repair.max_attempts` caps and sends the sequential step the run is parked on its own job back, so
-the cap holds the automatic pass off rather than ending the run's recovery. Each config key is
+the cap holds the automatic pass off rather than ending the run's recovery; a rollback that stalled
+it takes over and carries on, as the doctor would. Each config key is
 documented in [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
-None of these drives a run that is rolling back or finished — a pass begins only for a run that may
-still start work, so a deadline is enforced once and each compensation on the rollback it planned
-runs once. A pass already replaying when the rollback commits starts nothing further either: its
-next step is refused at the claim, and a child workflow or side effect at an ordinal it has not
-reached before ends the pass instead. The plan that is unwound is drawn once the run is already
-rolling back, so a step whose owed attempt completed while an earlier plan was being drawn is
-compensated too, on a run with nothing else to undo included. A rollback whose owner stopped is
-taken over once nothing has moved it for a grace window — an expiry by the sweep, any other by the
-doctor — and carried to the status it was headed for, without running an undo a second time. A
-compensation whose worker died mid-undo is reached that way only with `sagas.reclaim.stale_running`
-enabled. See [Statuses](https://sagalaraflow.dev/statuses) and
-[A rollback that stalls](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls).
+None of these drives the workflow of a run that is rolling back or finished; taking over a stalled
+rollback only plans its undo again. A pass begins only for a run that may still start work, so a
+deadline is enforced once and each compensation on its rollback runs once. A pass already replaying
+when the rollback commits starts nothing further either: its next step is refused at the claim, and
+a child workflow or side effect at an ordinal it has not reached before ends the pass instead. The
+plan that is unwound is drawn once the run is already rolling back, so a step whose owed attempt
+completed while an earlier plan was being drawn is compensated too, on a run with nothing else to
+undo included. A rollback whose owner stopped is taken over once nothing has moved it for a grace
+window — an expiry by the sweep, any other by the doctor — and carried to the status it was headed
+for, without running an undo a second time. A compensation whose worker died mid-undo is reached
+that way only with `sagas.reclaim.stale_running` enabled. See
+[Statuses](https://sagalaraflow.dev/statuses) and [A rollback that
+stalls](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls).
 
 ## Queues, locks & idempotency
 

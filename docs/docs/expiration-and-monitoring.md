@@ -257,8 +257,16 @@ SagaFlow::kick($runId);          // or:
 // php artisan saga-flow:kick {run}
 ```
 
-A kick re-drives a run that may still start work. A run that has finished, or is rolling back, is left exactly as it
-was; the command reports its status instead of claiming a re-drive.
+A kick re-drives a run that may still start work. A rollback that has stalled — nothing has moved it
+for `grace_seconds`, and no worker that may be alive holds one of its compensations — is taken over
+and carried on under its own target and cause, as R5 does, without its throttle, and its repair
+budget is refilled: the way on for a rollback the doctor gave up on, or one that stalled while the
+doctor is off. A rollback still moving is left to its owner, as is one that undoes nothing (a child
+closed without compensation), and a run that has finished is left exactly as it was; the command
+reports the status instead of claiming a re-drive. A compensation a worker of the earlier owner
+claims in the moment before the takeover holds the rollback where it is, as it does for R5. The
+command warns when it still sees that compensation held; a rollback that does not move after a kick
+needs another once nothing holds it.
 
 A run that has not started yet gets its first job again, a `RunWorkflowJob` that drives it only from
 `Pending`, for the reason given under `redispatch_lost_starts`; any other run gets a resume.

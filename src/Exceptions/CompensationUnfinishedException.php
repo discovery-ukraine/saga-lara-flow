@@ -3,6 +3,7 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Exceptions;
 
 use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
+use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 
 /**
  * Surfaces a compensation that had not reached a terminal state when its rollback
@@ -30,6 +31,19 @@ class CompensationUnfinishedException extends FlowException
             $label,
             $compensationRun->sequence,
             $compensationRun->status->value,
+        ));
+    }
+
+    /**
+     * A rollback cancelled before it finished with no compensation left open: a level not
+     * registered yet never ran.
+     */
+    public static function cutShort(FlowRun $flowRun): self
+    {
+        return new self(sprintf(
+            'Rollback of flow %s [%s] was cancelled before it finished; every compensation registered by then had completed, and any level not yet registered never ran.',
+            $flowRun->workflow_class,
+            $flowRun->id,
         ));
     }
 }

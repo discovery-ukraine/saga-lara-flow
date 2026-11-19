@@ -72,11 +72,31 @@ Nothing below asks anything of you.
   `sagas.reclaim.stale_running` gives it a deadline. A run already in `Cancelling` when you upgrade carries no such record and is left
   as it was.
   [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls)
-- **`compensate()` can return a run still `Cancelling`.** With reclaim enabled, an undo that
-  outlasts its reclaim window and the grace window can have the rollback taken over while it runs;
-  the call finishes that undo, leaves the rest to the queue and returns. Read the run again before
-  acting on the rollback being done.
+- **`compensate()` can return a run still `Cancelling`.** On a run that is already rolling back, or
+  whose rollback begins while the call plans, it runs nothing and leaves the run to that rollback,
+  which lands it where it was headed — `Expired` or `Failed` with its own cause — instead of rolling
+  it back again into `Cancelled`. With reclaim enabled, an undo that outlasts its reclaim window and
+  the grace window can also have the rollback taken over while it runs; the call finishes that
+  undo, leaves the rest to the queue and returns. Read the run again before acting on the rollback
+  being done.
   [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#manual-compensation)
+- **`cancel()` on a run that is rolling back stops the rollback and says so.** It takes the rollback
+  from its owner before it lands the run `Cancelled`, so a compensation job still queued for it runs
+  nothing. For a rollback that undoes steps, the run's `exception` holds the rollback's cause and,
+  under `compensation`, what it left undone (`CompensationUnfinishedException`), and the cut is
+  journalled as `rollback_abandoned`. A handle loaded before the rollback began takes the same path;
+  a `cancel()` that meets the rollback landing on its own loses to it and throws.
+  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#cancelling-a-rollback)
+- **A child already rolling back when its parent closes is left to that rollback.** It lands where
+  its own rollback was headed — a child that failed lands `Failed` with its own exception — instead
+  of being rolled back a second time by the close and landing as the parent's close policy says.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
+- **`saga-flow:kick` takes over a rollback that has stalled** and carries it on under its own
+  target and cause, refilling its repair budget, instead of leaving it as it was — whether the
+  doctor gave up on it or is off. A rollback still moving, or one that undoes nothing, is still left
+  alone. One whose compensation a worker claims at that moment waits for it: kick it again if it
+  does not move.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
 - **A compensation is registered once per step.** A child close job tried again, or a rollback taken
   over, reuses the row an earlier attempt left instead of running the undo a second time. A row
   written before the upgrade carries no step and is not matched, so a rollback in flight across the

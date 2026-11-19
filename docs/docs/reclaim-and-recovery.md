@@ -225,12 +225,14 @@ discarded (see [Events](./events.md#refused-outcome)):
 ],
 ```
 
-Twelve reason codes exist; the eight raised on the paths this page covers are below. The other four
-are `transition_lost`, which belongs to [run transitions](./queues-locks-idempotency.md),
-`retry_policy_threw`, which belongs to [retry policies](./retry-on-signal.md), and `replan_failed`
-and `replan_incomplete`, which belong to [planning a
-rollback](./sagas-and-compensation.md#while-a-rollback-runs). Most of the seven carry the run id,
-row id, sequence and class. Three are about a run rather than a row: `expiry_failed` and
+Thirteen reason codes exist; the eight raised on the paths this page covers are below. The other
+five are `transition_lost`, which belongs to [run transitions](./queues-locks-idempotency.md),
+`retry_policy_threw`, which belongs to [retry policies](./retry-on-signal.md), `replan_failed` and
+`replan_incomplete`, which belong to [planning a
+rollback](./sagas-and-compensation.md#while-a-rollback-runs), and `rollback_abandoned`, which
+belongs to [cancelling a rollback](./sagas-and-compensation.md#cancelling-a-rollback) and carries
+the run id, its workflow class and the rollback's target. Most of the seven carry the run id, row
+id, sequence and class. Three are about a run rather than a row: `expiry_failed` and
 `rollback_resume_failed` carry the run id, its workflow class and the throw, and
 `claim_not_committed` for a kick carries the run id, its workflow class, its status and the repair
 count the run holds:

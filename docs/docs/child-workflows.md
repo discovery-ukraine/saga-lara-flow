@@ -91,6 +91,13 @@ A child closed with `Cancel` rolls back its own completed steps first, whatever 
 a failure, an expiry, or a rollback — unless the parent was cancelled with `cancel()`, which skips
 compensation and so closes its children without it too. `Fail` always rolls the child back.
 
+A child that is already rolling back when its close arrives — it failed on its own, ran out of
+time, or was compensated by hand — is left to that rollback, and lands where that rollback was
+headed: a child that failed lands `Failed` with its own exception, whatever the policy. The close
+plans, registers and runs none of its compensations. A close job delivered again recognises the
+rollback it started itself and carries it on. A child rollback that stalls is carried on like any
+other — see [A rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls).
+
 The default comes from `children.default_close_policy`, or per class via `#[ChildPolicy]`.
 
 ## Handling child failure

@@ -194,6 +194,11 @@ readonly class FlowHandle
      * compensate()). The optional $reason is recorded on the flow.cancelled event
      * and carried on the FlowCancelled event. Throws on a terminal run.
      *
+     * A run still rolling back — found in Cancelling, or moved there before this call
+     * landed — is cancelled where its rollback stands: its owner runs no further
+     * compensation, and for a rollback that undoes steps its cause and what it left undone
+     * are recorded on the run.
+     *
      * @throws CannotCancelTerminalFlowException
      * @throws ConcurrentFlowTransitionException
      */
@@ -205,7 +210,23 @@ readonly class FlowHandle
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
 
-        $this->flowRun->markCancelled();
+        if ($this->flowRun->status === FlowStatus::Cancelling) {
+            app(SagaRunner::class)->abandon($this->flowRun);
+        } else {
+            try {
+                $this->flowRun->markCancelled();
+            } catch (ConcurrentFlowTransitionException $lost) {
+                $current = $this->onWriter();
+
+                if ($current?->status !== FlowStatus::Cancelling) {
+                    throw $lost;
+                }
+
+                $this->flowRun->setRawAttributes($current->getAttributes(), sync: true);
+
+                app(SagaRunner::class)->abandon($this->flowRun);
+            }
+        }
 
         app(FlowLifecycleRecorder::class)->flowCancelled($this->flowRun, $reason);
 
@@ -222,6 +243,10 @@ readonly class FlowHandle
      * while one of its undos outlasted its reclaim window comes back still Cancelling,
      * the rest carried on by the queue. Only valid for a non-terminal run.
      *
+     * A run already rolling back — found in Cancelling, or moved there while this call
+     * planned — is left to that rollback and comes back Cancelling; it lands where its
+     * own owner intended.
+     *
      * @throws CannotCancelTerminalFlowException
      * @throws ConcurrentFlowTransitionException
      * @throws Throwable
@@ -234,12 +259,26 @@ readonly class FlowHandle
             throw CannotCancelTerminalFlowException::for($this->flowRun);
         }
 
+        if ($this->flowRun->status === FlowStatus::Cancelling) {
+            return $this->leftToOwner($this->onWriter());
+        }
+
         $entries = app(FlowExecutor::class)->collectCompensations($this->flowRun);
 
-        app(StateMachine::class)->transition(
-            $this->flowRun->intendRollback(FlowStatus::Cancelled, null),
-            FlowStatus::Cancelling,
-        );
+        try {
+            app(StateMachine::class)->transition(
+                $this->flowRun->intendRollback(FlowStatus::Cancelled, null),
+                FlowStatus::Cancelling,
+            );
+        } catch (ConcurrentFlowTransitionException $lost) {
+            $current = $this->onWriter();
+
+            if ($current?->status !== FlowStatus::Cancelling) {
+                throw $lost;
+            }
+
+            return $this->leftToOwner($current);
+        }
 
         $entries = app(FlowExecutor::class)->replanCompensations($this->flowRun, $entries);
 
@@ -252,5 +291,26 @@ readonly class FlowHandle
         );
 
         return $this->flowRun;
+    }
+
+    /**
+     * @throws CannotCancelTerminalFlowException
+     */
+    private function leftToOwner(?FlowRun $current): FlowRun
+    {
+        if ($current !== null) {
+            $this->flowRun->setRawAttributes($current->getAttributes(), sync: true);
+        }
+
+        if ($this->flowRun->isTerminal()) {
+            throw CannotCancelTerminalFlowException::for($this->flowRun);
+        }
+
+        return $this->flowRun;
+    }
+
+    private function onWriter(): ?FlowRun
+    {
+        return $this->flowRun->newQuery()->useWritePdo()->find($this->flowRun->getKey());
     }
 }
