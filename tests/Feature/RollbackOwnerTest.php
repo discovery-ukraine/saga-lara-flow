@@ -10,6 +10,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CompensationUnfinishedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowExpiredException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\InvalidTransitionException;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ParentClosedException;
 use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
@@ -28,6 +29,7 @@ use DiscoveryUkraine\SagaLaraFlow\Workflow;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Whoever moved a run into Cancelling owns its rollback, and the run lands where that owner
@@ -68,6 +70,15 @@ final class ParentOfFailingChildWorkflow extends Workflow
 
         $this->child(FailsAfterItsStepWorkflow::class)->closePolicy(ChildClosePolicy::Cancel)->run();
         $this->awaitSignal('never');
+    }
+}
+
+final class ParentFailingItsChildWorkflow extends Workflow
+{
+    public function handle(): void
+    {
+        $this->action(MakeValueAction::class, 'p')->compensateWith(UndoAction::class, 'p')->run();
+        $this->child(TwoUndoableStepsWorkflow::class)->closePolicy(ChildClosePolicy::Fail)->run();
     }
 }
 
@@ -735,4 +746,39 @@ it('leaves a run that went into Cancelling before its intent was recorded alone 
     expect(FlowRun::query()->findOrFail($run->id)->rollback_token)->toBeNull()
         ->and(DB::connection('testing')->table('jobs')->count())->toBe(0)
         ->and(CompensationLog::all())->toBe([]);
+});
+
+it('carries the cause its first attempt recorded onto a retry of a Fail close', function (): void {
+    useDatabaseQueue();
+
+    $parent = SagaFlow::create(ParentFailingItsChildWorkflow::class)->run();
+    drainQueue();
+
+    $child = FlowRun::query()->where('parent_id', $parent->id)->firstOrFail();
+
+    expect($child->status)->toBe(FlowStatus::Waiting);
+
+    SagaFlow::loadFlow($parent->id)->compensate();
+
+    $close = loseJobs('CancelChildWorkflowJob');
+    bringJobsBack($close);
+
+    app()->bind(StateMachine::class, DiesEnteringCancelling::class);
+    DiesEnteringCancelling::$armed = true;
+    workOneJob();
+    app()->bind(StateMachine::class, FlowStateMachine::class);
+
+    expect(FlowRun::query()->findOrFail($child->id)->rollback_cause['class'] ?? null)->toBe(ParentClosedException::class);
+
+    // By the time the payload is delivered again, the parent can no longer be read.
+    FlowRun::query()->whereKey($child->id)->update(['parent_id' => (string) Str::ulid()]);
+
+    bringJobsBack($close);
+    drainQueue();
+
+    $landed = FlowRun::query()->findOrFail($child->id);
+
+    expect($landed->status)->toBe(FlowStatus::Failed)
+        ->and($landed->exception['class'] ?? null)->toBe(ParentClosedException::class)
+        ->and(CompensationLog::all())->toBe(['undo:p', 'undo:b', 'undo:a']);
 });

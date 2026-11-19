@@ -123,7 +123,7 @@ class CancelChildWorkflowJob implements ShouldQueue
                 $executor->collectCompensations($child);
             }
 
-            $cause = $this->cause($repository, $child);
+            $cause = $retry ? $child->rollback_cause : $this->cause($repository, $child);
 
             // Take control of the child from any non-terminal state (Pending/Running/
             // Waiting) — the state machine allows each into Cancelling.
