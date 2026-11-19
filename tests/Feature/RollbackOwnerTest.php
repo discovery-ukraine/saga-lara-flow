@@ -716,3 +716,23 @@ it('reads what a cancelled rollback left in one go', function (): void {
         ->and($cancelled->exception['compensation']['class'] ?? null)->toBe(CompensationUnfinishedException::class)
         ->and($cancelled->exception['compensation']['message'] ?? '')->toContain('status: running');
 });
+
+it('leaves a run that went into Cancelling before its intent was recorded alone on a kick', function (): void {
+    useDatabaseQueue();
+
+    $run = SagaFlow::create(TwoUndoableStepsWorkflow::class)->run();
+    drainQueue();
+
+    // Moved before the ownership columns existed: no owner, no target.
+    app(StateMachine::class)->transition(FlowRun::query()->findOrFail($run->id), FlowStatus::Cancelling);
+
+    $this->travel(10)->minutes();
+
+    $this->artisan('saga-flow:kick', ['run' => $run->id])
+        ->expectsOutputToContain("Flow run [{$run->id}] is cancelling; nothing to re-drive.")
+        ->assertSuccessful();
+
+    expect(FlowRun::query()->findOrFail($run->id)->rollback_token)->toBeNull()
+        ->and(DB::connection('testing')->table('jobs')->count())->toBe(0)
+        ->and(CompensationLog::all())->toBe([]);
+});

@@ -291,7 +291,8 @@ final readonly class FlowDoctor
 
     /**
      * Take a stalled rollback over as R5 would, without its throttle, and refill the run's
-     * repair budget. Returns whether this call took it over.
+     * repair budget. One moved into Cancelling before its intent was recorded is left as it
+     * is, as R5 and the sweep leave it. Returns whether this call took it over.
      *
      * @throws Throwable
      */
@@ -301,6 +302,7 @@ final readonly class FlowDoctor
 
         $stalled = $run->newQuery()->useWritePdo()->whereKey($run->getKey())
             ->where(fn ($query) => $run::rollbackStalled($query, $since))
+            ->whereNotNull('rollback_target')
             ->exists();
 
         if (! $stalled || ! $this->executor->resumeRollback($run)) {
