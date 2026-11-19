@@ -28,6 +28,8 @@ jobs:
 
       - name: Install composer dependencies
         uses: ramsey/composer-install@v4
+        with:
+          composer-options: "--no-plugins --no-scripts"
 
       - name: Fix PHP code style issues
         run: ./vendor/bin/pint
