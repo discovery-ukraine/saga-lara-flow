@@ -95,7 +95,7 @@ it('decides on the status the writer holds, not the one the caller carries', fun
         ->and(CompensationRun::query()->count())->toBe(1);
 });
 
-it('leaves a rolling-back run where a kick found it', function (): void {
+it('leaves a rolling-back run where a kick found it until the rollback stalls', function (): void {
     config()->set('saga-lara-flow.models.flow_run', WriterRoutedFlowRun::class);
 
     useDatabaseQueue();
@@ -111,23 +111,37 @@ it('leaves a rolling-back run where a kick found it', function (): void {
 
     expect($rollingBack->status)->toBe(FlowStatus::Cancelling);
 
+    $owner = $rollingBack->rollback_token;
     $events = DB::connection('testing')->table('saga_flow_events')->count();
     $jobs = DB::connection('testing')->table('jobs')->count();
 
     // A kick decides on the writer, so a caller holding a snapshot from before the sweep
-    // is not what tells it the run is still worth re-driving.
+    // is not what tells it the run is still worth re-driving. The rollback has only just
+    // started, so it is left to its owner: the run is read, and so is whether it stalled.
     $rollingBack->status = FlowStatus::Waiting;
 
     WriterRoutedFlowRun::reset();
 
     expect(app(FlowDoctor::class)->kick($rollingBack)->status)->toBe(FlowStatus::Cancelling)
-        ->and(WriterRoutedFlowRun::$writerReads)->toBe(1)
+        ->and(WriterRoutedFlowRun::$writerReads)->toBe(2)
         ->and(DB::connection('testing')->table('saga_flow_events')->count())->toBe($events)
         ->and(DB::connection('testing')->table('jobs')->count())->toBe($jobs);
 
     $this->artisan('saga-flow:kick', ['run' => $run->id])
         ->expectsOutputToContain("Flow run [{$run->id}] is cancelling; nothing to re-drive.")
         ->assertSuccessful();
+
+    // Its job is lost and nothing moves it for the grace window: now a kick takes it over.
+    loseJobs('RunCompensationJob');
+    $this->travel(61)->seconds();
+
+    expect(SagaFlow::kick($run->id)->rollback_token)->not->toBe($owner)
+        ->and(FlowRun::query()->findOrFail($run->id)->rollback_token)->not->toBe($owner);
+
+    drainQueue();
+
+    expect(FlowRun::query()->findOrFail($run->id)->status)->toBe(FlowStatus::Expired)
+        ->and(CompensationLog::all())->toBe(['undo:a']);
 });
 
 it('turns a stale job away before the pass is set up', function (string $job): void {

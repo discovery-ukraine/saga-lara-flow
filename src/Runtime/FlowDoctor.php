@@ -40,7 +40,8 @@ use Throwable;
  *
  * repair_attempts + repair_available_at throttle a pass per entity and give up after max_attempts.
  * saga-flow:kick is the manual answer to R1–R4: it refills that budget for the run and its
- * unfinished steps and sends the sequential step its own job back. Batch-bound work (parallel
+ * unfinished steps and sends the sequential step its own job back. A rollback that stalled
+ * it takes over as R5 would, unthrottled, and refills the budget. Batch-bound work (parallel
  * actions, compensations) is out of scope even for R3 and for a kick: adding a job back into a
  * Bus::batch needs an id this package does not store.
  */
@@ -289,6 +290,31 @@ final readonly class FlowDoctor
     }
 
     /**
+     * Take a stalled rollback over as R5 would, without its throttle, and refill the run's
+     * repair budget. One moved into Cancelling before its intent was recorded is left as it
+     * is, as R5 and the sweep leave it. Returns whether this call took it over.
+     *
+     * @throws Throwable
+     */
+    public function takeOverStalledRollback(FlowRun $run): bool
+    {
+        $since = Carbon::now()->subSeconds((int) config('saga-lara-flow.repair.grace_seconds', 60));
+
+        $stalled = $run->newQuery()->useWritePdo()->whereKey($run->getKey())
+            ->where(fn ($query) => $run::rollbackStalled($query, $since))
+            ->whereNotNull('rollback_target')
+            ->exists();
+
+        if (! $stalled || ! $this->executor->resumeRollback($run)) {
+            return false;
+        }
+
+        $run->newQuery()->whereKey($run->getKey())->update(['repair_attempts' => 0, 'repair_available_at' => null]);
+
+        return true;
+    }
+
+    /**
      * Counted in the database rather than from the scanned model, and the next window is
      * set from the count read back: the replay behind a takeover can outlast the grace
      * window, and a second takeover counted meanwhile must neither be written over nor
@@ -310,7 +336,9 @@ final readonly class FlowDoctor
      * the automatic pass, this is unthrottled and ignores positive-evidence — a human
      * decided the run is stuck. Works for Pending/Waiting/Running (a same-state
      * Running transition is an idempotent no-op and the run lock serializes against
-     * any live job); a run that may not start work is left untouched.
+     * any live job). A rollback that stalled is taken over under its own intent, as R5
+     * takes it; one still moving, or one that undoes nothing, is left to its owner. Any
+     * other run that may not start work is left untouched.
      *
      * The resume alone cannot move a run parked on a recorded step: the replay it
      * triggers meets that row and parks on it exactly as the pass that recorded it did.
@@ -324,6 +352,10 @@ final readonly class FlowDoctor
     public function kick(FlowRun $run): FlowRun
     {
         $current = $this->rereadFlow($run);
+
+        if ($current->status === FlowStatus::Cancelling) {
+            return $this->takeOverStalledRollback($current) ? $this->rereadFlow($current) : $current;
+        }
 
         if (! $current->status->canStartWork()) {
             return $current;

@@ -66,8 +66,8 @@ weighed after that. A job that arrives for a run outside them — a redelivery, 
 the run was still `Waiting`, a manual
 [`saga-flow:kick`](./expiration-and-monitoring.md#repair-the-doctor) — ends without entering the
 pass, and the executor hands its caller the run as the writer holds it rather than throwing. So a
-run is expired once: the rollback the sweep planned is the only one, and each compensation on it
-runs once.
+run is expired once, and each compensation on its rollback runs once: a rollback taken over later is
+planned again, but reuses every compensation already registered.
 
 It takes no [signal](./signals.md) either, for the same reason read from the other end: the resume a
 delivery queues cannot drive a rolling-back run, and terminal settlement closes wait-markers, not

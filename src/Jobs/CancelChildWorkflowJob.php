@@ -18,6 +18,8 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\SagaRunner;
 use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Str;
+use Symfony\Component\Uid\Ulid;
 use Throwable;
 
 /**
@@ -26,17 +28,25 @@ use Throwable;
  * optionally rolling back the child's completed steps first ($withCompensation).
  * The final transition fires onFlowFinalized() via the runner/recorder chain, so a
  * Fail/Cancel cascades recursively to the child's own children. Idempotent.
+ *
+ * $rollbackToken is fixed when the job is queued, so a retry of the same payload knows the
+ * child's rollback as its own. A job queued before it existed unserializes with null and
+ * takes the id the queue gave its payload instead, which a redelivery carries too.
  */
 class CancelChildWorkflowJob implements ShouldQueue
 {
     use NormalizesExceptions;
     use Queueable;
 
+    public ?string $rollbackToken = null;
+
     public function __construct(
         public string $childFlowRunId,
         public FlowStatus $finalState,
         public bool $withCompensation,
-    ) {}
+    ) {
+        $this->rollbackToken = (string) Str::ulid();
+    }
 
     /**
      * @throws Throwable
@@ -49,9 +59,13 @@ class CancelChildWorkflowJob implements ShouldQueue
         FlowLifecycleRecorder $lifecycle,
         TenancyManager $tenancy,
     ): void {
+        $payload = $this->job?->uuid();
+
+        $this->rollbackToken ??= $payload === null ? (string) Str::ulid() : (string) Ulid::fromString($payload);
+
         $child = $repository->findOnWriter($this->childFlowRunId);
 
-        if ($child === null || $child->isTerminal()) {
+        if ($child === null || $child->isTerminal() || $this->ownedByAnother($child)) {
             return;
         }
 
@@ -63,7 +77,8 @@ class CancelChildWorkflowJob implements ShouldQueue
             // race. Ending quietly is only right once the child is genuinely closed, or
             // once another rollback owns its landing — a child still live is one this
             // job was sent to close, and dropping it here would strand it with a
-            // terminal parent and no close policy left to apply.
+            // terminal parent and no close policy left to apply. One that moved into
+            // Cancelling meanwhile is rolling back under its own owner, and lands there.
             $current = $repository->findOnWriter($this->childFlowRunId);
 
             if ($current !== null && ! $current->isTerminal() && $current->status !== FlowStatus::Cancelling) {
@@ -92,29 +107,32 @@ class CancelChildWorkflowJob implements ShouldQueue
             $lifecycle,
             $child,
         ): void {
+            // A retry of this job finds the child already in Cancelling under its own token:
+            // the fence is up, so it plans once, under it, and carries the close on.
+            $retry = $child->status === FlowStatus::Cancelling;
+
             // Plan once before taking control, and throw the result away. Planning
             // starts no work of its own, so a child whose rollback cannot be planned
             // is left where this job found it instead of in Cancelling with a rollback
-            // nobody can draw. One already Cancelling
-            // was fenced by an earlier attempt that then failed to plan: both plans
-            // fail or neither does, so a retry recovers it once the replay can read
-            // what it could not.
+            // nobody can draw.
             //
             // The other two sites that plan twice keep the plan they made first and
             // fall back to it, because nothing redelivers them. This one is a job, so
             // throwing the first plan away is what leaves the retry a clean scene.
-            if ($this->withCompensation) {
+            if ($this->withCompensation && ! $retry) {
                 $executor->collectCompensations($child);
             }
 
-            $cause = $this->cause($repository, $child);
+            $cause = $retry ? $child->rollback_cause : $this->cause($repository, $child);
 
             // Take control of the child from any non-terminal state (Pending/Running/
             // Waiting) — the state machine allows each into Cancelling.
-            $stateMachine->transition(
-                $child->intendRollback($this->finalState, $cause, $this->withCompensation),
-                FlowStatus::Cancelling,
-            );
+            if (! $retry) {
+                $stateMachine->transition(
+                    $child->intendRollback($this->finalState, $cause, $this->withCompensation, $this->rollbackToken),
+                    FlowStatus::Cancelling,
+                );
+            }
 
             if ($this->withCompensation) {
                 // The plan that is acted on is made here, with the child fenced:
@@ -147,6 +165,15 @@ class CancelChildWorkflowJob implements ShouldQueue
 
             $this->finalizeWithoutCompensation($child, $lifecycle, $cause);
         });
+    }
+
+    /**
+     * A child already rolling back under another owner — its own failure, its expiry, an
+     * operator, a recovery — is left to that rollback, which lands it where it intended.
+     */
+    private function ownedByAnother(FlowRun $child): bool
+    {
+        return $child->status === FlowStatus::Cancelling && $child->rollback_token !== $this->rollbackToken;
     }
 
     /**

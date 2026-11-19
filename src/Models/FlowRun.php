@@ -226,10 +226,15 @@ class FlowRun extends Model
      * same conditional write as the move, so whoever moves the run owns its rollback.
      *
      * @param  array<string, mixed>|null  $cause
+     * @param  ?string  $token  the owner's token, when the owner has to recognise it again later
      */
-    public function intendRollback(FlowStatus $target, ?array $cause, bool $compensates = true): static
-    {
-        $this->rollback_token = (string) Str::ulid();
+    public function intendRollback(
+        FlowStatus $target,
+        ?array $cause,
+        bool $compensates = true,
+        ?string $token = null
+    ): static {
+        $this->rollback_token = $token ?? (string) Str::ulid();
         $this->rollback_target = $target;
         $this->rollback_cause = $cause;
         $this->rollback_compensates = $compensates;
