@@ -38,7 +38,7 @@ Nothing below asks anything of you.
   `Pending` after `repair.grace_seconds` — a root run, a child, or a child retried on a signal —
   gets its `RunWorkflowJob` again under the same budget and backoff as a re-woken run, recorded as
   `flow.rewoken` with reason `lost_start` and counted among the re-woken flows. A child whose parent
-  has closed, or is closing, is left to the parent's close policy unless it is `Abandon`. With the
+  has closed, or is closing, is closed at its first step instead, unless it is `Abandon`. With the
   package on a dedicated `database.connection`, a `run()` inside your own transaction that rolls
   back, or stays open past the grace window, leaves a `Pending` run the doctor now starts: call
   `run()` after you commit, or turn the rule off with `repair.redispatch_lost_starts`.
@@ -102,11 +102,20 @@ Nothing below asks anything of you.
   rollback ends. A child whose rollback cannot be planned now waits in `Cancelling` for that
   recovery instead of staying where its close found it. `Abandon` children are unchanged.
   [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
+- **A child's close outlives the job that carries it.** A close job that reaches a child nothing
+  fenced fences it before entering the child's tenant and planning its rollback, so a close that
+  fails — a tenant that cannot be entered, a plan the child's replay cannot draw, a worker that
+  dies — or is lost leaves the child in `Cancelling` with its close recorded, instead of live and
+  free to complete. The doctor's stalled-rollback rule or a kick carries that close out, one without
+  compensation included, which lands without a plan; the queue giving up on the job is journalled as
+  `close_failed`; one that fails before the child is fenced leaves it as it was, and the job sent
+  again with `queue:retry` closes it. A child whose start commits after its parent has closed, begun
+  rolling back or been pruned is closed at its first step instead of running unclosed.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
 - **`saga-flow:kick` takes over a rollback that has stalled** and carries it on under its own
   target and cause, refilling its repair budget, instead of leaving it as it was — whether the
-  doctor gave up on it or is off. A rollback still moving, or one that undoes nothing, is still left
-  alone. One whose compensation a worker claims at that moment waits for it: kick it again if it
-  does not move.
+  doctor gave up on it or is off. A rollback still moving is still left alone. One whose
+  compensation a worker claims at that moment waits for it: kick it again if it does not move.
   [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
 - **A compensation is registered once per step.** A child close job tried again, or a rollback taken
   over, reuses the row an earlier attempt left instead of running the undo a second time. A row

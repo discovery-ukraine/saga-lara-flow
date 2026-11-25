@@ -21,6 +21,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\HistoryContractMismatchException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FencedWriteLost;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\FlowSuspended;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\Internal\InternalFlowControl;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ParentClosedException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\RunWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
@@ -96,6 +97,41 @@ readonly class ChildWorkflowManager
         $child = $this->startChild($parent, $schedule, $sequence);
 
         $this->launch($runtime, $child, $sequence);
+    }
+
+    /**
+     * Close a child about to take its first step under a parent that has landed or is rolling
+     * back, as its parent's close would have: its start can commit after that close read the
+     * parent's links. It has run nothing, so there is nothing of its own to roll back. A parent
+     * pruned since was closed too: only finished runs are pruned.
+     */
+    public function closedBeforeStart(FlowRun $child): bool
+    {
+        $policy = ChildClosePolicy::tryFrom((string) $child->parent_close_policy);
+
+        if ($child->parent_id === null || $policy === null || $policy === ChildClosePolicy::Abandon) {
+            return false;
+        }
+
+        $parent = $this->repository->findOnWriter($child->parent_id);
+
+        if ($parent?->status->canStartWork()) {
+            return false;
+        }
+
+        $closed = $parent === null
+            ? ParentClosedException::forPruned($child->parent_id)
+            : ParentClosedException::for($parent);
+
+        if ($this->recorder->fence($child, $policy, false, $closed)) {
+            $this->dispatch(CancelChildWorkflowJob::dispatch(
+                $child->id,
+                $policy === ChildClosePolicy::Fail ? FlowStatus::Failed : FlowStatus::Cancelled,
+                $policy === ChildClosePolicy::Fail,
+            ), $parent ?? $child);
+        }
+
+        return true;
     }
 
     /**

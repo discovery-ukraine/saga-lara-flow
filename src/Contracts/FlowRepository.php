@@ -54,9 +54,8 @@ interface FlowRepository
 
     /**
      * Pending runs older than the grace window whose repair window is open and attempts are
-     * not exhausted, leaving out a child whose parent may no longer start work unless it is
-     * abandoned to itself, oldest first, capped at $limit. Used by the doctor to send again
-     * the first job of a run that never started.
+     * not exhausted, oldest first, capped at $limit. Used by the doctor to send again the
+     * first job of a run that never started; a child whose parent has closed closes there.
      *
      * @return iterable<int, FlowRun>
      */

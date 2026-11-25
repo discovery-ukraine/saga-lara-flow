@@ -11,6 +11,7 @@ use DiscoveryUkraine\SagaLaraFlow\Exceptions\ConcurrentFlowTransitionException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ParentClosedException;
 use DiscoveryUkraine\SagaLaraFlow\Middleware\LockMiddlewareFactory;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\ChildWorkflowManager;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowLifecycleRecorder;
@@ -35,6 +36,8 @@ use Throwable;
  *
  * A child its parent fenced is already in Cancelling with the close it is owed; the first
  * close job claims that fence for its own token and carries out the close the row records.
+ * One that reaches a child nothing fenced fences it first, then plans. A close that fails once
+ * the child is fenced leaves it in Cancelling with that close recorded, for recovery.
  */
 class CancelChildWorkflowJob implements ShouldQueue
 {
@@ -106,52 +109,35 @@ class CancelChildWorkflowJob implements ShouldQueue
         TenancyManager $tenancy,
         FlowRun $child,
     ): void {
+        // A retry of this job, or a close its parent fenced, finds the child already in
+        // Cancelling under this job's token and rolls back as the row records.
+        $retry = $child->status === FlowStatus::Cancelling;
+
+        $withCompensation = $retry ? $child->rollback_compensates !== false : $this->withCompensation;
+
+        $cause = $retry ? $child->rollback_cause : $this->cause($repository, $child);
+
+        // Fenced before the child's tenant is entered, so a close that fails from here on
+        // leaves the child in Cancelling with its close recorded.
+        if (! $retry) {
+            $child = $this->fence($stateMachine, $repository, $child, $cause, $withCompensation);
+
+            if ($child === null) {
+                return;
+            }
+        }
+
         $tenancy->for($child, $child->workflow_class, function () use (
             $executor,
             $sagaRunner,
-            $repository,
-            $stateMachine,
             $lifecycle,
             $child,
+            $withCompensation,
+            $cause,
         ): void {
-            // A retry of this job, or a close its parent fenced, finds the child already in
-            // Cancelling under this job's token: it plans once, under the fence, and rolls
-            // back as the row records.
-            $retry = $child->status === FlowStatus::Cancelling;
-
-            $withCompensation = $retry ? $child->rollback_compensates !== false : $this->withCompensation;
-
-            // Plan once before taking control, and throw the result away. Planning
-            // starts no work of its own, so a child whose rollback cannot be planned
-            // is left where this job found it instead of in Cancelling with a rollback
-            // nobody can draw.
-            //
-            // The other two sites that plan twice keep the plan they made first and
-            // fall back to it, because nothing redelivers them. This one is a job, so
-            // throwing the first plan away is what leaves the retry a clean scene.
-            if ($withCompensation && ! $retry) {
-                $executor->collectCompensations($child);
-            }
-
-            $cause = $retry ? $child->rollback_cause : $this->cause($repository, $child);
-
-            // Take control of the child from any non-terminal state (Pending/Running/
-            // Waiting) — the state machine allows each into Cancelling.
-            if (! $retry) {
-                $stateMachine->transition(
-                    $child->intendRollback($this->finalState, $cause, $withCompensation, $this->rollbackToken),
-                    FlowStatus::Cancelling,
-                );
-            }
-
             if ($withCompensation) {
-                // The plan that is acted on is made here, with the child fenced:
-                // Cancelling is a state no drive() can leave and no step can be claimed
-                // under, so nothing can complete another compensatable step. A plan made
-                // before the fence can go stale — the transition guard reads status
-                // alone, so a child resumed and re-parked in between still matches — and
-                // unwinding it would leave that step standing under a run reported as
-                // rolled back.
+                // Planned with the child fenced: no drive() leaves Cancelling and no step is
+                // claimed under it, so no other compensatable step can complete meanwhile.
                 $entries = $executor->collectCompensations($child);
 
                 // Roll back inline (Sync), inside THIS job, rather than dispatching another
@@ -178,6 +164,44 @@ class CancelChildWorkflowJob implements ShouldQueue
     }
 
     /**
+     * Move a child nothing fenced into Cancelling with this close. A move lost to the child
+     * stepping between live states is made again from where it now stands; one lost to a
+     * closing or rolling-back child leaves it to that, and returns null.
+     *
+     * @param  array<string, mixed>|null  $cause
+     *
+     * @throws ConcurrentFlowTransitionException a move that lost although nothing moved the child
+     */
+    private function fence(
+        StateMachine $stateMachine,
+        FlowRepository $repository,
+        FlowRun $child,
+        ?array $cause,
+        bool $withCompensation,
+    ): ?FlowRun {
+        while (true) {
+            try {
+                return $stateMachine->transition(
+                    $child->intendRollback($this->finalState, $cause, $withCompensation, $this->rollbackToken),
+                    FlowStatus::Cancelling,
+                );
+            } catch (ConcurrentFlowTransitionException $lost) {
+                $current = $repository->findOnWriter($this->childFlowRunId);
+
+                if ($current === null || ! $current->status->canStartWork()) {
+                    return null;
+                }
+
+                if ($current->status === $child->status) {
+                    throw $lost;
+                }
+
+                $child = $current;
+            }
+        }
+    }
+
+    /**
      * Take a parent's fence over for this job's token, guarded by the fence token itself, so
      * of two close jobs one owns the close and a recovery that took it since is left alone.
      */
@@ -196,6 +220,16 @@ class CancelChildWorkflowJob implements ShouldQueue
     private function ownedByAnother(FlowRun $child): bool
     {
         return $child->status === FlowStatus::Cancelling && $child->rollback_token !== $this->rollbackToken;
+    }
+
+    public function failed(Throwable $exception): void
+    {
+        app(AnomalyLog::class)->log(AnomalyLog::REASON_CLOSE_FAILED, [
+            'entity' => 'flow',
+            'flow_run_id' => $this->childFlowRunId,
+            'final_state' => $this->finalState->value,
+            'exception' => $this->exceptionToArray($exception),
+        ]);
     }
 
     /**
@@ -235,10 +269,8 @@ class CancelChildWorkflowJob implements ShouldQueue
 
         $parent = $repository->findOnWriter($child->parent_id);
 
-        if ($parent === null) {
-            return null;
-        }
-
-        return $this->exceptionToArray(ParentClosedException::for($parent));
+        return $this->exceptionToArray($parent === null
+            ? ParentClosedException::forPruned($child->parent_id)
+            : ParentClosedException::for($parent));
     }
 }

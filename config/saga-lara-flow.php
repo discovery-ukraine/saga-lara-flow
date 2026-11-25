@@ -176,8 +176,9 @@ return [
         // R4: send the first job again for a Pending run whose RunWorkflowJob was lost.
         'redispatch_lost_starts' => true,
         // R5: carry a rollback to Failed or Cancelled to its end once nothing has moved it
-        // for grace_seconds — a process that died mid-rollback, or a compensation job that
-        // was lost. A rollback to Expired is the monitor's (monitor.expiration).
+        // for grace_seconds — a process that died mid-rollback, or a compensation job or a
+        // child's close job that was lost. A rollback to Expired is the monitor's
+        // (monitor.expiration).
         'resume_stalled_rollbacks' => true,
 
         'queue_looping' => ['enabled' => false, 'throttle_seconds' => 60],

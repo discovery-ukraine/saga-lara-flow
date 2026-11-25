@@ -19,4 +19,12 @@ class ParentClosedException extends FlowException
             $parent->id,
         ));
     }
+
+    public static function forPruned(string $parentId): self
+    {
+        return new self(sprintf(
+            'Child workflow failed because its parent [%s] closed under the Fail policy and has since been pruned.',
+            $parentId,
+        ));
+    }
 }
