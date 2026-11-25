@@ -3,6 +3,8 @@
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
 use Closure;
+use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
+use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowChildRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowEventType;
@@ -14,6 +16,7 @@ use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowExpired;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowFailed;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowRetried;
 use DiscoveryUkraine\SagaLaraFlow\Events\ChildWorkflowStarted;
+use DiscoveryUkraine\SagaLaraFlow\Exceptions\ParentClosedException;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowChild;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Database\Eloquent\Builder;
@@ -27,9 +30,12 @@ use Illuminate\Database\Eloquent\Model;
  */
 final readonly class ChildRecorder
 {
+    use NormalizesExceptions;
+
     public function __construct(
         private EventLog $events,
         private AnomalyLog $anomalies,
+        private FlowChildRepository $children,
     ) {}
 
     /**
@@ -207,6 +213,50 @@ final readonly class ChildRecorder
             ->whereHas('child', fn (Builder $query) => $query->where('status', FlowStatus::Expired))
             ->update(['status' => ChildStatus::Expired])
             + $parked()->update(['status' => ChildStatus::Failed]);
+    }
+
+    /**
+     * Move every live child the parent's close policy closes into Cancelling, with the close
+     * it is owed recorded on it, and its own children after it. The token left on each is
+     * the child's own id, for its close job to claim.
+     */
+    public function fenceLive(FlowRun $parent, bool $compensates): void
+    {
+        foreach ($this->children->active($parent->id) as $link) {
+            if ($link->close_policy === ChildClosePolicy::Abandon) {
+                continue;
+            }
+
+            /** @var ?FlowRun $child */
+            $child = $link->child()->useWritePdo()->first();
+
+            if ($child === null) {
+                continue;
+            }
+
+            $fail = $link->close_policy === ChildClosePolicy::Fail;
+
+            $child->intendRollback(
+                $fail ? FlowStatus::Failed : FlowStatus::Cancelled,
+                $fail ? $this->exceptionToArray(ParentClosedException::for($parent)) : null,
+                $fail || $compensates,
+                $child->parentFenceToken(),
+            );
+
+            $child->status = FlowStatus::Cancelling;
+            $child->updated_at = now();
+
+            $fenced = $child->newQuery()
+                ->whereKey($child->getKey())
+                ->whereIn('status', FlowStatus::mayStartWork())
+                ->update($child->getDirty());
+
+            if ($fenced === 1) {
+                $child->syncOriginal();
+
+                $this->fenceLive($child, $child->rollback_compensates);
+            }
+        }
     }
 
     /**

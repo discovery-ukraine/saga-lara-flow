@@ -56,9 +56,11 @@ class FlowStateMachine implements StateMachine
         $run->updated_at = $now;
 
         try {
-            $to->isTerminal()
-                ? $this->finish($run, $from, $to)
-                : $this->write($run, $from, $to);
+            match (true) {
+                $to->isTerminal() => $this->finish($run, $from, $to),
+                $to === FlowStatus::Cancelling => $this->rollBack($run, $from, $to),
+                default => $this->write($run, $from, $to),
+            };
         } catch (Throwable $failure) {
             $restore();
 
@@ -174,10 +176,61 @@ class FlowStateMachine implements StateMachine
         $run->getConnection()->transaction(function () use ($run, $from, $to): void {
             $this->write($run, $from, $to);
 
+            if ($to !== FlowStatus::Completed) {
+                app(ChildRecorder::class)->fenceLive($run, $this->closesWithCompensation($run, $from, $to));
+            }
+
             app(ActionRecorder::class)->settleOpenSteps($run);
             app(SignalRecorder::class)->settleOpenWaits($run);
             app(ChildRecorder::class)->settleParked($run);
         });
+    }
+
+    /**
+     * A run landing from a rollback closes its children as that rollback does; one landing
+     * straight from a live state rolls them back unless it is being cancelled.
+     */
+    private function closesWithCompensation(FlowRun $run, FlowStatus $from, FlowStatus $to): bool
+    {
+        return $from === FlowStatus::Cancelling ? $run->rollback_compensates !== false : $to !== FlowStatus::Cancelled;
+    }
+
+    /**
+     * Move a run into Cancelling and fence its live children in one transaction, so none of
+     * them can finish between the plan of this rollback and its close.
+     */
+    private function rollBack(FlowRun $run, FlowStatus $from, FlowStatus $to): void
+    {
+        $run->getConnection()->transaction(function () use ($run, $from, $to): void {
+            $this->write($run, $from, $to);
+
+            app(ChildRecorder::class)->fenceLive($run, $run->rollback_compensates !== false);
+        });
+
+        $this->requireSurvivedCommit($run, $from, $to);
+    }
+
+    /**
+     * Read the move back once its transaction has closed: on PostgreSQL a failure swallowed
+     * inside it turns the COMMIT that reports success into a rollback.
+     */
+    private function requireSurvivedCommit(FlowRun $run, FlowStatus $from, FlowStatus $to): void
+    {
+        $held = $run->newQuery()->useWritePdo()->whereKey($run->getKey())->first();
+
+        if ($held?->status === $to && $held->rollback_token === $run->rollback_token) {
+            return;
+        }
+
+        app(AnomalyLog::class)->log(AnomalyLog::REASON_CLAIM_NOT_COMMITTED, [
+            'entity' => 'flow',
+            'site' => 'rollback',
+            'flow_run_id' => $run->id,
+            'workflow_class' => $run->workflow_class,
+            'actual' => $held?->status->value,
+        ]);
+
+        throw ConcurrentFlowTransitionException::for($run, $from, $to, $held?->status);
     }
 
     public function canTransition(FlowStatus $from, FlowStatus $to): bool

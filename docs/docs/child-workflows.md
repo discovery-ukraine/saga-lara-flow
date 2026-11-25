@@ -91,12 +91,34 @@ A child closed with `Cancel` rolls back its own completed steps first, whatever 
 a failure, an expiry, or a rollback — unless the parent was cancelled with `cancel()`, which skips
 compensation and so closes its children without it too. `Fail` always rolls the child back.
 
-A child that is already rolling back when its close arrives — it failed on its own, ran out of
-time, or was compensated by hand — is left to that rollback, and lands where that rollback was
-headed: a child that failed lands `Failed` with its own exception, whatever the policy. The close
-plans, registers and runs none of its compensations. A close job delivered again recognises the
-rollback it started itself and carries it on. A child rollback that stalls is carried on like any
-other — see [A rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls).
+A child closed with `Cancel` or `Fail` is fenced as soon as its parent begins rolling back, before
+the parent plans: it moves into `Cancelling` in the same transaction as its parent, with the close
+it is owed recorded on it — the status it lands in, the cause, and whether it rolls back. A parent
+that lands without rolling back, through `cancel()` or a failure that skips compensation, fences its
+children in the transaction that lands it, and so does a parent landing from a rollback that
+fenced none — one begun before an upgrade, say. The child's own `Cancel` and `Fail` children are
+fenced with it. Nothing drives a fenced child, so it cannot complete between its parent's plan and
+its close; it is refused signals and new steps the way any run that is
+[rolling back](./statuses.md) is, with the same limits: a signal delivered in the moment before the
+fence is stored unread, and a step a worker is already executing can still complete outside the
+plan. Its close rolls it back as recorded, even if the parent's own rollback is later cut short
+with `cancel()`.
+
+A fenced child is a run rolling back like any other. `compensate()` on it leaves it to its close,
+and `cancel()` cuts its rollback short — see
+[Cancelling a rollback](./sagas-and-compensation.md#cancelling-a-rollback). One that rolls back
+and that the doctor or `saga-flow:kick` finds stalled — its close lost, or its parent's own
+rollback outlasting `repair.grace_seconds` — is taken over like any
+[rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls), so it can be rolled
+back before its parent's rollback ends. A child fenced without compensation, under a parent's
+`cancel()`, is not: if its close is lost, it stays in `Cancelling`.
+
+A child that is already rolling back when its parent comes to fence it — it failed on its own, ran
+out of time, or was compensated by hand — is left to that rollback, and lands where that rollback
+was headed: a child that failed lands `Failed` with its own exception, whatever the policy. The
+close plans, registers and runs none of its compensations. Of two close jobs for one child, the
+first takes the close over and the other leaves it to that one; a close job delivered again
+recognises the rollback it carries and carries it on.
 
 The default comes from `children.default_close_policy`, or per class via `#[ChildPolicy]`.
 
@@ -152,9 +174,11 @@ steps applied. A child has no step row, so the compensation's `compensation_runs
 The compensation and the [close policy](#close-policies) never act on the same child. The close
 policy reaches only a child still in flight when the parent closes, so a completed child is undone
 by its compensation or not at all, whatever its policy. `Cancel` is for a child the parent leaves
-behind in flight, and `compensateWith()` for one it has already awaited. A child that completes
-after the parent planned its rollback, but before its close runs, is reached by neither: the plan
-saw it in flight, and the close finds it complete.
+behind in flight, and `compensateWith()` for one it has already awaited. A `Cancel` or `Fail` child
+in flight when the parent begins rolling back is fenced before the plan is drawn, so it is rolled
+back by its close and its compensation does not run. An `Abandon` child is not fenced: one that
+completes after the parent planned its rollback is reached by neither, since the plan saw it in
+flight and nothing closes it.
 
 ## A parent that is rolling back
 

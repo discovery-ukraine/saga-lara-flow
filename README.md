@@ -547,8 +547,10 @@ Close policies: `Abandon` (default — leave the child running), `Cancel` (cance
 it). A failing child throws `ChildWorkflowFailedException` and an expired one
 `ChildWorkflowExpiredException`, unless you call `->continueParentOnFailure()`; a cancelled one
 throws `ChildWorkflowCancelledException` either way. The default close policy is configurable
-(`children.default_close_policy`) or per class via `#[ChildPolicy]`. A child already rolling back
-when its parent closes is left to that rollback and lands where it was headed.
+(`children.default_close_policy`) or per class via `#[ChildPolicy]`. A `Cancel` or `Fail` child
+still in flight moves into `Cancelling` with its parent, before the parent plans its rollback, so it
+cannot complete before its close reaches it. A child already rolling back on its own is left to
+that rollback and lands where it was headed.
 
 A child is created from its class the way a root run is: its `#[Tag]`s, the name and version from
 `#[Flow]`, and a deadline from `#[FlowTimeout]`, else `monitor.expiration.defaults.run` — never the
@@ -560,8 +562,8 @@ child from the parent, over its class's `#[Tag]`s, in the transaction that creat
 `->compensateWith()` gives a child an undo on the parent's saga stack, registered once the child
 completes, as a step's is; `->onCompensationFailure()` sets its policy. A child that failed or
 expired registers none: its own rollback has already run, under its own failure policies. The close
-policy reaches only a child still in flight, so the two never act on the same child. A child that
-completes after the parent planned its rollback, but before its close runs, is reached by neither.
+policy reaches only a child still in flight, so the two never act on the same child. An `Abandon`
+child that completes after the parent planned its rollback is reached by neither.
 
 `child()` is also the only seam that runs another workflow from inside `handle()`.
 `SagaFlow::create(...)` there takes no ordinal, so the run it starts is recognized by nothing, and

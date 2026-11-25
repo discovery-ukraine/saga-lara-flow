@@ -242,6 +242,14 @@ class FlowRun extends Model
         return $this;
     }
 
+    /**
+     * The owner token a parent's fence leaves on this run for its close job to claim.
+     */
+    public function parentFenceToken(): string
+    {
+        return (string) $this->getKey();
+    }
+
     public function markCompleted(?array $result = null): static
     {
         if ($result !== null) {

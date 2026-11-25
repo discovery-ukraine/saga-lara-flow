@@ -8,6 +8,7 @@ use DiscoveryUkraine\SagaLaraFlow\Facades\SagaFlow;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\CancelChildWorkflowJob;
 use DiscoveryUkraine\SagaLaraFlow\Models\ActionRun;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\AnomalyLog;
+use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowExecutor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowMonitor;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowRuntime;
@@ -171,7 +172,7 @@ it('steps over a run whose rollback it cannot plan and journals it', function ()
         ->and($log)->toContain($stuck->id);
 });
 
-it('does not strand a child whose rollback it could not plan', function () {
+it('leaves a child whose rollback it could not plan fenced, for recovery to close', function () {
     config()->set('saga-lara-flow.queue.after_commit', false);
 
     $run = SagaFlow::create(ParentOfVanishingChildWorkflow::class)->runSync();
@@ -184,9 +185,24 @@ it('does not strand a child whose rollback it could not plan', function () {
     expect(fn () => SagaFlow::loadFlow($run->id)->compensate())
         ->toThrow(RuntimeException::class, 'the order this run was built from is gone');
 
-    // Cancelling is the one state nothing recovers: the monitor and the doctor both
-    // pass over it. The child is left where the close found it, for a retry to close.
-    expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Waiting);
+    // The child was fenced with its parent, so it waits in Cancelling with the close it is
+    // owed recorded on it, where a stalled rollback is taken over once it can be planned.
+    $fenced = SagaFlow::findRun($child->id);
+
+    expect($fenced->status)->toBe(FlowStatus::Cancelling)
+        ->and($fenced->rollback_target)->toBe(FlowStatus::Cancelled)
+        ->and($fenced->rollback_compensates)->toBeTrue();
+
+    VanishedArgumentWorkflow::reset();
+    useDatabaseQueue();
+    $this->travel(2)->minutes();
+
+    expect(app(FlowDoctor::class)->takeOverStalledRollback($fenced))->toBeTrue();
+
+    drainQueue();
+
+    expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
+        ->and(CompensationLog::all())->toBe(['undo:parent', 'undo:b', 'undo:a']);
 });
 
 it('fences a child before planning the rollback it will act on', function () {

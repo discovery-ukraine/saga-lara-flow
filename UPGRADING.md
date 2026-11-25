@@ -91,6 +91,17 @@ Nothing below asks anything of you.
   its own rollback was headed — a child that failed lands `Failed` with its own exception — instead
   of being rolled back a second time by the close and landing as the parent's close policy says.
   [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
+- **A parent's live `Cancel` and `Fail` children move into `Cancelling` with it.** In the
+  transaction that moves the parent into `Cancelling`, or that lands it, each such child in flight,
+  and its own such children, is fenced with the close it is owed recorded on it. A child signalled
+  in that gap now raises `CannotSignalCancellingFlowException` and is rolled back by its close,
+  instead of completing and staying applied under a parent that reports a finished rollback; under
+  `cancel()` a `Cancel` child lands `Cancelled` instead of `Completed`. Its close rolls it back as
+  recorded even if the parent's rollback is later cut short with `cancel()`, and the doctor or a
+  kick may take a fenced child that rolls back over as a stalled rollback before its parent's
+  rollback ends. A child whose rollback cannot be planned now waits in `Cancelling` for that
+  recovery instead of staying where its close found it. `Abandon` children are unchanged.
+  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
 - **`saga-flow:kick` takes over a rollback that has stalled** and carries it on under its own
   target and cause, refilling its repair budget, instead of leaving it as it was — whether the
   doctor gave up on it or is off. A rollback still moving, or one that undoes nothing, is still left

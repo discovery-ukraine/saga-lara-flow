@@ -243,8 +243,8 @@ count the run holds:
   [Events](./events.md#refused-outcome)).
 - **`batch_finished_early`** — a parallel step completed after a duplicate delivery had closed its batch.
 - **`claim_not_committed`** — a write the engine reads back was gone once its transaction closed: a
-  step's or a compensation's claim, a step's or a child's park, a child's start, or the repair
-  budget a kick refills. For a claim the line carries both attempt counts, the claimed one and the
+  step's or a compensation's claim, a step's or a child's park, a child's start, a run's move into
+  `Cancelling` with the children it fences, or the repair budget a kick refills. For a claim the line carries both attempt counts, the claimed one and the
   one the row actually holds.
 - **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
   the next. The line carries the throw and how many times this run has failed that way. The run stays overdue and is
