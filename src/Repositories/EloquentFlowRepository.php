@@ -4,7 +4,6 @@ namespace DiscoveryUkraine\SagaLaraFlow\Repositories;
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
-use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\SignalStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\FlowNotFoundException;
@@ -106,13 +105,6 @@ class EloquentFlowRepository implements FlowRepository
             ->where(function ($query) use ($now): void {
                 $query->whereNull('repair_available_at')
                     ->orWhere('repair_available_at', '<=', $now);
-            })
-            ->where(function (Builder $query): void {
-                $query->whereNull('parent_id')
-                    ->orWhere('parent_close_policy', ChildClosePolicy::Abandon->value)
-                    ->orWhereHas('parent', function (Builder $parent): void {
-                        $parent->whereIn('status', FlowStatus::mayStartWork());
-                    });
             })
             ->orderBy('updated_at')
             ->limit($limit)

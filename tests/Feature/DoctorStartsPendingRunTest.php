@@ -293,7 +293,7 @@ it('leaves the run to a late original that started it first', function (string $
         ->and(FlakyPaymentAction::$calls)->toBe(1);
 })->with([['doctor'], ['kick']]);
 
-it('leaves a child to the close policy of a parent that closed it', function () {
+it('closes a child its closed parent fenced, instead of starting it', function () {
     loseFirstJob(fn (FlowRun $run): bool => $run->parent_id !== null);
     loseCloseJobs();
 
@@ -306,12 +306,13 @@ it('leaves a child to the close policy of a parent that closed it', function () 
 
     $report = repairOnceTheJobIsLate();
 
-    // Started now, the child would do work its parent's policy says should not happen,
-    // with nothing left to undo it. It was fenced with its parent instead.
+    // Fenced with its parent, it is not started: the close its policy owes is carried out
+    // by the stalled-rollback rule once its close job is lost.
     expect(SagaFlow::findRun($parent->id)->status)->toBe(FlowStatus::Cancelled)
-        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelling)
+        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
+        ->and(SagaFlow::findRun($child->id)->actions()->count())->toBe(0)
         ->and($report->rewokenFlows)->toBe(0)
-        ->and($report->skipped)->toBe(0)
+        ->and($report->resumedRollbacks)->toBe(1)
         ->and(rewakeReasons($child->id))->toBe([]);
 });
 
@@ -331,7 +332,7 @@ it('starts a child its closed parent abandoned', function () {
         ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Completed);
 });
 
-it('leaves a child alone whose parent is closed between the pick and the lock', function () {
+it('closes, rather than starts, a child whose parent is closed between the pick and the lock', function () {
     // R2 would wake the parent first and lock it before this rule gets to the child.
     config()->set('saga-lara-flow.repair.wake_stuck_flows', false);
     loseFirstJob(fn (FlowRun $run): bool => $run->parent_id !== null);
@@ -353,12 +354,14 @@ it('leaves a child alone whose parent is closed between the pick and the lock', 
     );
 
     $report = app(FlowDoctor::class)->repair();
+    drainQueue();
 
+    // The job sent finds the parent closed at the child's first step and closes the child.
     expect($reached())->toBeTrue()
-        ->and($report->rewokenFlows)->toBe(0)
-        ->and($report->skipped)->toBe(1)
-        ->and(rewakeReasons($child->id))->toBe([])
-        ->and(DB::connection('testing')->table('jobs')->count())->toBe(0);
+        ->and($report->rewokenFlows)->toBe(1)
+        ->and(rewakeReasons($child->id))->toBe(['lost_start'])
+        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
+        ->and(SagaFlow::findRun($child->id)->actions()->count())->toBe(0);
 });
 
 it('starts a run from a RunWorkflowJob queued before the job could be marked start-only', function () {

@@ -7,7 +7,6 @@ use DiscoveryUkraine\SagaLaraFlow\Concerns\NormalizesExceptions;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\ActionRunRepository;
 use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ActionStatus;
-use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\RollbackNotPlannedException;
 use DiscoveryUkraine\SagaLaraFlow\Jobs\ResumeWorkflowJob;
@@ -238,8 +237,7 @@ final readonly class FlowDoctor
             if ($locked === null
                 || $locked->status !== $stuckIn
                 || $locked->repair_attempts >= $maxAttempts
-                || ! $this->repairWindowOpen($locked->repair_available_at)
-                || ($stuckIn === FlowStatus::Pending && ! $this->parentLetsItStart($locked))) {
+                || ! $this->repairWindowOpen($locked->repair_available_at)) {
                 return false;
             }
 
@@ -337,8 +335,8 @@ final readonly class FlowDoctor
      * decided the run is stuck. Works for Pending/Waiting/Running (a same-state
      * Running transition is an idempotent no-op and the run lock serializes against
      * any live job). A rollback that stalled is taken over under its own intent, as R5
-     * takes it; one still moving, or one that undoes nothing, is left to its owner. Any
-     * other run that may not start work is left untouched.
+     * takes it; one still moving is left to its owner. Any other run that may not start
+     * work is left untouched.
      *
      * The resume alone cannot move a run parked on a recorded step: the replay it
      * triggers meets that row and parks on it exactly as the pass that recorded it did.
@@ -481,21 +479,6 @@ final readonly class FlowDoctor
             })
             ->orderBy('sequence')
             ->first();
-    }
-
-    /**
-     * A child its parent has closed, or is closing, is left to the parent's close policy.
-     */
-    private function parentLetsItStart(FlowRun $run): bool
-    {
-        if ($run->parent_id === null || $run->parent_close_policy === ChildClosePolicy::Abandon->value) {
-            return true;
-        }
-
-        /** @var ?FlowStatus $parent */
-        $parent = $run->newQuery()->useWritePdo()->whereKey($run->parent_id)->value('status');
-
-        return $parent?->canStartWork() ?? false;
     }
 
     private function rereadFlow(FlowRun $run): FlowRun

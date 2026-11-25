@@ -40,6 +40,8 @@ final readonly class AnomalyLog
 
     public const string REASON_ROLLBACK_ABANDONED = 'rollback_abandoned';
 
+    public const string REASON_CLOSE_FAILED = 'close_failed';
+
     public const string REASON_WRITE_REFUSED = 'write_refused';
 
     public const string REASON_REJECTION_UNDELIVERED = 'rejection_undelivered';

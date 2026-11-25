@@ -549,8 +549,11 @@ it). A failing child throws `ChildWorkflowFailedException` and an expired one
 throws `ChildWorkflowCancelledException` either way. The default close policy is configurable
 (`children.default_close_policy`) or per class via `#[ChildPolicy]`. A `Cancel` or `Fail` child
 still in flight moves into `Cancelling` with its parent, before the parent plans its rollback, so it
-cannot complete before its close reaches it. A child already rolling back on its own is left to
-that rollback and lands where it was headed.
+cannot complete before its close reaches it. A child already rolling back on its own is left to that
+rollback and lands where it was headed. A close that fails or is lost once the child is fenced
+leaves it in `Cancelling` with that close recorded, for the doctor's stalled-rollback rule or a kick
+to carry out, and a child whose start commits after its parent has closed is closed at its first
+step.
 
 A child is created from its class the way a root run is: its `#[Tag]`s, the name and version from
 `#[Flow]`, and a deadline from `#[FlowTimeout]`, else `monitor.expiration.defaults.run` — never the

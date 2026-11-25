@@ -144,6 +144,10 @@ class FlowExecutor
     {
         $this->rejectWhileDeciding();
 
+        if ($this->closedBeforeStart($flowRun)) {
+            return $this->reread($flowRun);
+        }
+
         try {
             return $this->inOwnRuntime(fn (FlowRuntime $runtime): FlowRun => $this->tenancy->for(
                 $flowRun,
@@ -160,6 +164,21 @@ class FlowExecutor
             // awaiting it as a child reads its status and resolves accordingly.
             return $this->reread($flowRun);
         }
+    }
+
+    /**
+     * Asked before the run's tenant is entered, so a tenant that cannot be restored does not
+     * keep a child its parent has closed from being fenced.
+     */
+    private function closedBeforeStart(FlowRun $flowRun): bool
+    {
+        if ($flowRun->parent_id === null || $flowRun->status !== FlowStatus::Pending) {
+            return false;
+        }
+
+        $current = $this->reread($flowRun);
+
+        return $current->status === FlowStatus::Pending && app(ChildWorkflowManager::class)->closedBeforeStart($current);
     }
 
     /**
@@ -254,9 +273,9 @@ class FlowExecutor
      * routing. Planned from three places — compensate(), the expiration sweep and
      * a parent closing a child — so a throw no seam of its own raised is a fault, not a
      * frontier: it leaves rather than shortening the stack behind the caller's back.
-     * Where it lands is then the caller's to answer, and each of them plans twice —
-     * once before taking control of the run and once after: the sweep and compensate()
-     * through replanCompensations(), a child close by calling this again itself.
+     * Where it lands is then the caller's to answer. The sweep and compensate() plan twice —
+     * once before taking control of the run and once after, through replanCompensations();
+     * a child close plans once, with the child already fenced.
      *
      * @return list<CompensationEntry>
      *
@@ -619,7 +638,8 @@ class FlowExecutor
      * was sent by and is refused once the token has changed, which is what keeps the
      * earlier owner's late jobs from running.
      * The plan is drawn again under Cancelling, where nothing can complete another step,
-     * and every compensation the earlier owner settled is reused rather than run again.
+     * and every compensation the earlier owner settled is reused rather than run again. A
+     * rollback that undoes nothing lands without a plan.
      *
      * Returns whether this call took the rollback over.
      *
@@ -645,7 +665,7 @@ class FlowExecutor
         $owned = $this->reread($flowRun);
 
         try {
-            $entries = $this->collectCompensations($owned);
+            $entries = $owned->rollback_compensates === false ? [] : $this->collectCompensations($owned);
         } catch (Throwable $planning) {
             throw RollbackNotPlannedException::for($owned, $planning);
         }

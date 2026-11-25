@@ -230,33 +230,42 @@ final readonly class ChildRecorder
             /** @var ?FlowRun $child */
             $child = $link->child()->useWritePdo()->first();
 
-            if ($child === null) {
-                continue;
-            }
-
-            $fail = $link->close_policy === ChildClosePolicy::Fail;
-
-            $child->intendRollback(
-                $fail ? FlowStatus::Failed : FlowStatus::Cancelled,
-                $fail ? $this->exceptionToArray(ParentClosedException::for($parent)) : null,
-                $fail || $compensates,
-                $child->parentFenceToken(),
-            );
-
-            $child->status = FlowStatus::Cancelling;
-            $child->updated_at = now();
-
-            $fenced = $child->newQuery()
-                ->whereKey($child->getKey())
-                ->whereIn('status', FlowStatus::mayStartWork())
-                ->update($child->getDirty());
-
-            if ($fenced === 1) {
-                $child->syncOriginal();
-
+            if ($child !== null && $this->fence($child, $link->close_policy, $compensates, ParentClosedException::for($parent))) {
                 $this->fenceLive($child, $child->rollback_compensates);
             }
         }
+    }
+
+    /**
+     * Move one child its parent closes into Cancelling with the close its policy owes, unless it
+     * has already left the states that may start work. Returns whether this write fenced it.
+     */
+    public function fence(FlowRun $child, ChildClosePolicy $policy, bool $compensates, ParentClosedException $closed): bool
+    {
+        $fail = $policy === ChildClosePolicy::Fail;
+
+        $child->intendRollback(
+            $fail ? FlowStatus::Failed : FlowStatus::Cancelled,
+            $fail ? $this->exceptionToArray($closed) : null,
+            $fail || $compensates,
+            $child->parentFenceToken(),
+        );
+
+        $child->status = FlowStatus::Cancelling;
+        $child->updated_at = now();
+
+        $fenced = $child->newQuery()
+            ->whereKey($child->getKey())
+            ->whereIn('status', FlowStatus::mayStartWork())
+            ->update($child->getDirty());
+
+        if ($fenced !== 1) {
+            return false;
+        }
+
+        $child->syncOriginal();
+
+        return true;
     }
 
     /**

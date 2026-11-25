@@ -113,17 +113,16 @@ class FlowRun extends Model
     }
 
     /**
-     * Constrain a flow_runs query to rollbacks nobody is moving any more: Cancelling with a
-     * rollback that undoes steps, the run untouched since $since, no compensation touched
-     * since then, and none held Running by a worker that may still be alive. A Pending row whose job
-     * was lost counts as stalled; one still inside its reclaim window does not.
+     * Constrain a flow_runs query to rollbacks nobody is moving any more: Cancelling, the run
+     * untouched since $since, no compensation touched since then, and none held Running by a
+     * worker that may still be alive. A Pending row whose job was lost counts as stalled; one
+     * still inside its reclaim window does not.
      *
      * @param  Builder<FlowRun>  $query
      */
     public static function rollbackStalled(Builder $query, CarbonInterface $since): void
     {
         $query->where('status', FlowStatus::Cancelling)
-            ->where('rollback_compensates', true)
             ->where('updated_at', '<=', $since)
             ->whereDoesntHave('compensations', function (Builder $compensation) use ($since): void {
                 $compensation->where(function (Builder $moving) use ($since): void {

@@ -2,6 +2,7 @@
 
 use DiscoveryUkraine\SagaLaraFlow\Contracts\StateMachine;
 use DiscoveryUkraine\SagaLaraFlow\Enums\ChildClosePolicy;
+use DiscoveryUkraine\SagaLaraFlow\Enums\ChildStatus;
 use DiscoveryUkraine\SagaLaraFlow\Enums\FlowStatus;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\ActionFailedException;
 use DiscoveryUkraine\SagaLaraFlow\Exceptions\CannotSignalCancellingFlowException;
@@ -441,19 +442,32 @@ it('fences a child when its parent lands from a rollback that fenced none', func
     }
 });
 
-it('leaves a child fenced without compensation in Cancelling when its close is lost', function (): void {
-    config()->set('saga-lara-flow.repair.enabled', true);
+it('closes a child fenced without compensation whose close is lost, without rolling it back', function (): void {
+    foreach (['repair', 'kick'] as $by) {
+        CompensationLog::reset();
+        config()->set('saga-lara-flow.repair.enabled', $by === 'repair');
 
-    [$parent, $child] = parentWaitingOnChild('cancel');
+        [$parent, $child] = parentWaitingOnChild('cancel');
 
-    SagaFlow::loadFlow($parent->id)->cancel();
-    loseJobs('CancelChildWorkflowJob');
+        SagaFlow::loadFlow($parent->id)->cancel();
+        loseJobs('CancelChildWorkflowJob');
 
-    $this->travel(2)->minutes();
+        expect(app(FlowDoctor::class)->repair()->resumedRollbacks)->toBe(0)
+            ->and(app(FlowDoctor::class)->takeOverStalledRollback(SagaFlow::findRun($child->id)))->toBeFalse();
 
-    expect(app(FlowDoctor::class)->repair()->resumedRollbacks)->toBe(0)
-        ->and(app(FlowDoctor::class)->takeOverStalledRollback(SagaFlow::findRun($child->id)))->toBeFalse()
-        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelling);
+        $this->travel(2)->minutes();
+
+        $by === 'repair'
+            ? expect(app(FlowDoctor::class)->repair()->resumedRollbacks)->toBe(1)
+            : expect(app(FlowDoctor::class)->takeOverStalledRollback(SagaFlow::findRun($child->id)))->toBeTrue();
+
+        drainQueue();
+
+        expect(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelled)
+            ->and($parent->children()->first()->status)->toBe(ChildStatus::Cancelled)
+            ->and(CompensationLog::all())->toBe([])
+            ->and(compensationTrail($child->id))->toBe([]);
+    }
 });
 
 it('refuses a move into Cancelling that its transaction did not keep', function (): void {

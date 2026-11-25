@@ -106,12 +106,32 @@ with `cancel()`.
 
 A fenced child is a run rolling back like any other. `compensate()` on it leaves it to its close,
 and `cancel()` cuts its rollback short — see
-[Cancelling a rollback](./sagas-and-compensation.md#cancelling-a-rollback). One that rolls back
-and that the doctor or `saga-flow:kick` finds stalled — its close lost, or its parent's own
-rollback outlasting `repair.grace_seconds` — is taken over like any
-[rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls), so it can be rolled
-back before its parent's rollback ends. A child fenced without compensation, under a parent's
-`cancel()`, is not: if its close is lost, it stays in `Cancelling`.
+[Cancelling a rollback](./sagas-and-compensation.md#cancelling-a-rollback). One that the doctor or
+`saga-flow:kick` finds stalled — its close lost or failed, or its parent's own rollback outlasting
+`repair.grace_seconds` — is taken over like any
+[rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls) and carried to the
+close recorded on it, so it can be rolled back before its parent's rollback ends. A child fenced
+without compensation, under a parent's `cancel()`, is landed in that status without a plan.
+
+A close job that reaches a child nothing fenced fences it the same way, before it enters the child's
+[tenant](./octane-and-multi-tenancy.md) and before it plans the rollback. So a close that fails — a
+tenant that cannot be entered, a plan the child's replay cannot draw, a worker that dies — leaves
+the child in `Cancelling` with its close recorded, where it starts no work, rather than live. The
+job declares no retries of its own: when the queue gives up on it, it is journalled as
+[`close_failed`](./reclaim-and-recovery.md#finding-these-races-in-your-logs), and the child waits
+for the doctor's `resume_stalled_rollbacks`, a `saga-flow:kick`, or the same job sent again
+(`queue:retry`). With `repair.enabled` off, as it is by default, nothing takes it up on its own. A
+close that fails before the child is fenced — one of its own queries refused before that write, or a
+child that steps between live states and back while the close moves it — leaves the child as it
+was, with `close_failed` journalled: send the same job again with `queue:retry`.
+
+A child whose start commits after its parent has closed or begun rolling back — the parent's fence
+and close read its links a moment before the child's own was written — is closed at its first step
+instead of starting: fenced with the close its policy owes and sent a close job, before its tenant
+is entered. It has run nothing, so nothing of its own is rolled back. The same holds for a child the
+doctor's `redispatch_lost_starts` or a kick starts again under a closed parent, and for one whose
+parent has since been [pruned](./artisan-commands.md): only finished runs are pruned, and a `Fail`
+child's `ParentClosedException` then names the parent by id alone.
 
 A child that is already rolling back when its parent comes to fence it — it failed on its own, ran
 out of time, or was compensated by hand — is left to that rollback, and lands where that rollback
