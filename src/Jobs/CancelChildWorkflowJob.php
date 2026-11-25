@@ -32,6 +32,9 @@ use Throwable;
  * $rollbackToken is fixed when the job is queued, so a retry of the same payload knows the
  * child's rollback as its own. A job queued before it existed unserializes with null and
  * takes the id the queue gave its payload instead, which a redelivery carries too.
+ *
+ * A child its parent fenced is already in Cancelling with the close it is owed; the first
+ * close job claims that fence for its own token and carries out the close the row records.
  */
 class CancelChildWorkflowJob implements ShouldQueue
 {
@@ -64,6 +67,10 @@ class CancelChildWorkflowJob implements ShouldQueue
         $this->rollbackToken ??= $payload === null ? (string) Str::ulid() : (string) Ulid::fromString($payload);
 
         $child = $repository->findOnWriter($this->childFlowRunId);
+
+        if ($child !== null && $this->claimedFence($child)) {
+            $child = $repository->findOnWriter($this->childFlowRunId);
+        }
 
         if ($child === null || $child->isTerminal() || $this->ownedByAnother($child)) {
             return;
@@ -107,9 +114,12 @@ class CancelChildWorkflowJob implements ShouldQueue
             $lifecycle,
             $child,
         ): void {
-            // A retry of this job finds the child already in Cancelling under its own token:
-            // the fence is up, so it plans once, under it, and carries the close on.
+            // A retry of this job, or a close its parent fenced, finds the child already in
+            // Cancelling under this job's token: it plans once, under the fence, and rolls
+            // back as the row records.
             $retry = $child->status === FlowStatus::Cancelling;
+
+            $withCompensation = $retry ? $child->rollback_compensates !== false : $this->withCompensation;
 
             // Plan once before taking control, and throw the result away. Planning
             // starts no work of its own, so a child whose rollback cannot be planned
@@ -119,7 +129,7 @@ class CancelChildWorkflowJob implements ShouldQueue
             // The other two sites that plan twice keep the plan they made first and
             // fall back to it, because nothing redelivers them. This one is a job, so
             // throwing the first plan away is what leaves the retry a clean scene.
-            if ($this->withCompensation && ! $retry) {
+            if ($withCompensation && ! $retry) {
                 $executor->collectCompensations($child);
             }
 
@@ -129,12 +139,12 @@ class CancelChildWorkflowJob implements ShouldQueue
             // Waiting) — the state machine allows each into Cancelling.
             if (! $retry) {
                 $stateMachine->transition(
-                    $child->intendRollback($this->finalState, $cause, $this->withCompensation, $this->rollbackToken),
+                    $child->intendRollback($this->finalState, $cause, $withCompensation, $this->rollbackToken),
                     FlowStatus::Cancelling,
                 );
             }
 
-            if ($this->withCompensation) {
+            if ($withCompensation) {
                 // The plan that is acted on is made here, with the child fenced:
                 // Cancelling is a state no drive() can leave and no step can be claimed
                 // under, so nothing can complete another compensatable step. A plan made
@@ -165,6 +175,18 @@ class CancelChildWorkflowJob implements ShouldQueue
 
             $this->finalizeWithoutCompensation($child, $lifecycle, $cause);
         });
+    }
+
+    /**
+     * Take a parent's fence over for this job's token, guarded by the fence token itself, so
+     * of two close jobs one owns the close and a recovery that took it since is left alone.
+     */
+    private function claimedFence(FlowRun $child): bool
+    {
+        return $child->newQuery()
+            ->whereKey($child->getKey())
+            ->where('rollback_token', $child->parentFenceToken())
+            ->update(['rollback_token' => $this->rollbackToken]) === 1;
     }
 
     /**

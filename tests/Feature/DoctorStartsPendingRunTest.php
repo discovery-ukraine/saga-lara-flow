@@ -307,9 +307,9 @@ it('leaves a child to the close policy of a parent that closed it', function () 
     $report = repairOnceTheJobIsLate();
 
     // Started now, the child would do work its parent's policy says should not happen,
-    // with nothing left to undo it.
+    // with nothing left to undo it. It was fenced with its parent instead.
     expect(SagaFlow::findRun($parent->id)->status)->toBe(FlowStatus::Cancelled)
-        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Pending)
+        ->and(SagaFlow::findRun($child->id)->status)->toBe(FlowStatus::Cancelling)
         ->and($report->rewokenFlows)->toBe(0)
         ->and($report->skipped)->toBe(0)
         ->and(rewakeReasons($child->id))->toBe([]);

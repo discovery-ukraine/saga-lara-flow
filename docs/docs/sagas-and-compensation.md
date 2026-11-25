@@ -143,6 +143,10 @@ than unwinding part of it and reporting a finished rollback. Fix the cause and c
 is the plan drawn before the run is moved; a throw from the one made after it is journalled instead,
 because by then the run has been taken and there is a plan to unwind either way.
 
+The move also fences the run's children still in flight under `Cancel` or `Fail`: they enter
+`Cancelling` with it, so none of them completes between the plan and its close. See
+[close policies](./child-workflows.md#close-policies).
+
 A rollback it starts runs in the call, and the run comes back `Cancelled` — with one exception. With
 [reclaim](./reclaim-and-recovery.md) enabled, an undo that outlasts its reclaim window and the grace
 window can have the rollback
@@ -177,7 +181,9 @@ run is `Cancelled`; it is reported as it stood. The cut is journalled as
 [`rollback_abandoned`](./reclaim-and-recovery.md#finding-these-races-in-your-logs). The steps it
 leaves are not undone, so treat it as a way out, not a way through. A `cancel()` that meets the
 rollback landing on its own loses to it: the run lands where the rollback was headed, with its
-owner's record, and `cancel()` throws `ConcurrentFlowTransitionException`.
+owner's record, and `cancel()` throws `ConcurrentFlowTransitionException`. The run's children that
+were fenced when its rollback began are still rolled back by their closes, as recorded on them;
+cancel a child too to cut its own rollback short.
 
 ## Postponing a rollback
 
