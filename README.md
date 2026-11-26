@@ -105,9 +105,9 @@ php artisan migrate
 The engine's migrations ship with the package, so `migrate` picks them up directly — no publish step.
 Future versions add their migrations the same way: `composer update` then `php artisan migrate`.
 
-> **Always migrate after an upgrade.** The engine writes its newest columns for *every* action it
-> schedules, so upgrading without `php artisan migrate` breaks ordinary workflow execution with an
-> unknown-column error — not just the newest feature. See [UPGRADING.md](UPGRADING.md).
+> **Always migrate after an upgrade.** Without `php artisan migrate`, the engine fails with an
+> unknown-column error wherever it reaches a column the release added, and that is not only the
+> newest feature. See [UPGRADING.md](UPGRADING.md).
 
 Optionally publish the config file:
 
@@ -724,8 +724,6 @@ $run = SagaFlow::create(CheckoutWorkflow::class)
 $run->status;   // FlowStatus::Completed
 $run->result;   // the value handle() returned
 ```
-
-The queued and synchronous paths are guaranteed to reach the **same** final database state.
 
 > **Never call it inside a `DB::transaction()` of your own.** The steps run while your transaction
 > is open, so a rollback afterwards discards every row of the run while the work those rows describe

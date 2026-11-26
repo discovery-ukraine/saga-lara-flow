@@ -18,9 +18,6 @@ $run->status;   // FlowStatus::Completed
 $run->result;   // the value handle() returned
 ```
 
-The queued and synchronous paths are guaranteed to reach the **same** final database state — the only
-difference is *who* drives the steps (your worker vs. the current process).
-
 A `runSync()` reached while another run is being driven — an action whose body starts a saga of its
 own — is driven on replay state of its own, so the run that owns the step keeps its ordinals and its
 compensation stack while the inner one runs. From inside `handle()`, reach another workflow through

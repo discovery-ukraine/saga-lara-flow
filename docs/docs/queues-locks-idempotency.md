@@ -79,9 +79,9 @@ or never starts at all. With it off the job goes out immediately, and whether it
 rollback is the queue driver's business rather than the engine's — leaving a job that may name a run
 which was never committed.
 
-That holds while the run is written on the connection your transaction is open on. With the package
-on a dedicated `database.connection`, `run()` writes the run there at once and only the job waits for
-your commit. A rollback leaves the run `Pending` with no job, and with
+That holds while the run is written on the connection your transaction is open on. With the
+package on a dedicated `database.connection`, `run()` writes the run there at once and only the job
+waits for your commit. A rollback leaves the run `Pending` with no job, and with
 [repair](./expiration-and-monitoring.md#repair-the-doctor) on, the doctor starts it once it is older
 than `grace_seconds` — as it does for a transaction of yours that stays open that long. On a
 dedicated connection, call `run()` after your transaction commits, or turn
@@ -140,8 +140,8 @@ A run's jobs are serialized by Laravel's `WithoutOverlapping` middleware:
 Each lock is keyed on the job's class and its row, so two jobs of one class never run at once for
 the same run, step or compensation: two resumes of one run — a step's and a signal's, say — replay
 it one after the other. A run's first `RunWorkflowJob` and a `ResumeWorkflowJob` for it are
-different classes and do not wait for each other, which is why the doctor and `saga-flow:kick` send a
-run that has not started its first job again rather than a resume. Each parameter:
+different classes and do not wait for each other, which is why the doctor and `saga-flow:kick` send
+a run that has not started its first job again rather than a resume. Each parameter:
 
 - **`enabled`** — turn the `WithoutOverlapping` middleware on or off.
 - **`store`** — cache store backing the locks (`null` = the app default). Point it at a dedicated
