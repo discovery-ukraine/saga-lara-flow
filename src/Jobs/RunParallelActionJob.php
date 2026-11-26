@@ -17,13 +17,7 @@ use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
 /**
- * Executes one step of a parallel() block, as part of a Bus::batch or, on a sync
- * connection, on its own. Unlike RunActionJob it does NOT resume the workflow itself —
- * the batch's finally callback (ResumeParallelBlock) or the sending pass drives the join.
- *
- * On final failure: an optional step is recorded OptionalFailed (it never fails the
- * flow); a hard failure under the FailFast policy cancels the batch so pending
- * siblings never start (in-flight ones still finish — they cannot be force-killed).
+ * Does not resume the workflow: the batch's finally callback or the sending pass drives the join.
  */
 class RunParallelActionJob implements ShouldQueue
 {
@@ -50,7 +44,6 @@ class RunParallelActionJob implements ShouldQueue
      */
     public function handle(ActionDispatcher $dispatcher): void
     {
-        // A sibling's FailFast cancellation: skip starting this step.
         if ($this->batch()?->cancelled()) {
             return;
         }
@@ -61,27 +54,14 @@ class RunParallelActionJob implements ShouldQueue
             return;
         }
 
-        // The claim inside execute() (ActionRecorder::startAction()) is the single
-        // source of truth: a step already settled out of band (Completed earlier, or
-        // Expired by the monitor) simply fails the claim and nothing runs. Parallel
-        // steps carry no retry-on-signal cycle today (0 always), but passing it
-        // explicitly keeps the guard correct if that ever changes.
         if ($dispatcher->execute($action, expectedRetryGeneration: 0)->settled()) {
             $this->wakeIfTheBatchClosedWithoutUs($action);
         }
     }
 
     /**
-     * A batch cannot normally be finished while one of its own jobs is still inside
-     * handle() — the pending count only drops once this returns. Finding it finished
-     * means a duplicate delivery lost its claim, returned quietly, and drove the count
-     * to zero early. ResumeParallelBlock already fired then, and Laravel will not fire
-     * it again: its condition is (pendingJobs - failedJobs) === 0, and the next
-     * decrement takes the count to -1.
-     *
-     * The join therefore replayed while this step was still Running and parked the run
-     * with no wake left. An extra resume costs a replay that resolves to the same
-     * history; a missing one costs a run that hangs until repair.wake_stuck_flows.
+     * A batch finished while this job is still in handle() means a duplicate delivery drove the count
+     * to zero early: the finally callback already fired, before this step settled, and will not again.
      */
     private function wakeIfTheBatchClosedWithoutUs(ActionRun $action): void
     {
@@ -111,15 +91,12 @@ class RunParallelActionJob implements ShouldQueue
             return;
         }
 
-        // Optional step exhausted its retries: record OptionalFailed, do not fail
-        // the block (and never cancel the batch).
         if ($action->continue_on_failure && $action->status === ActionStatus::Failed) {
             app(ActionRecorder::class)->optionalFail($action);
 
             return;
         }
 
-        // Hard failure under FailFast: cancel so pending siblings never start.
         if ($this->policy === ParallelFailurePolicy::FailFast) {
             $this->batch()?->cancel();
         }

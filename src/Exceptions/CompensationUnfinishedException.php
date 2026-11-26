@@ -6,19 +6,8 @@ use DiscoveryUkraine\SagaLaraFlow\Models\CompensationRun;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 
 /**
- * Surfaces a compensation that had not reached a terminal state when its rollback
- * level finished, as the secondary cause attached to the run (recorded under
- * flow_run.exception['compensation']).
- *
- * Distinct from CompensationFailedException: that one ran and threw, and its own
- * exception is recorded alongside. This one has no cause to report — it never got far
- * enough to have one. Without it the rollback would look complete while one step was
- * silently never undone.
- *
- * The message states what was observed, not what will be. Usually the compensation is
- * genuinely stranded — its worker died, or its job never arrived — but a duplicate
- * delivery can also close a batch a moment before the live worker records its success,
- * and then the compensation reported here does finish, just too late to be seen.
+ * A compensation not settled when its level finished, recorded under exception['compensation'].
+ * It may still finish later: a duplicate delivery can close a batch before the live worker records.
  */
 class CompensationUnfinishedException extends FlowException
 {
@@ -35,8 +24,7 @@ class CompensationUnfinishedException extends FlowException
     }
 
     /**
-     * A rollback cancelled before it finished with no compensation left open: a level not
-     * registered yet never ran.
+     * A level not registered yet when the rollback was cancelled never ran.
      */
     public static function cutShort(FlowRun $flowRun): self
     {

@@ -6,9 +6,7 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Throwable;
 
 /**
- * A stalled rollback that was taken over but could not be planned again. The run stays
- * in Cancelling under its new owner token, and the monitor or the doctor that took it
- * steps over it and tries again on a later pass.
+ * A stalled rollback taken over but not planned again; the run stays in Cancelling under its new owner.
  */
 class RollbackNotPlannedException extends FlowException
 {

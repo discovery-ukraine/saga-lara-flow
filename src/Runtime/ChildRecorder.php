@@ -23,10 +23,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Persists the child-workflow link lifecycle (started → completed/failed/cancelled)
- * and appends the matching child.* events to the PARENT's event log, so a child's
- * progress is visible from the parent's history at the child's sequence. Child link
- * rows are looked up by their (parent_flow_run_id, sequence) identity.
+ * child.* events go to the parent's log, at the child's sequence.
  */
 final readonly class ChildRecorder
 {
@@ -39,9 +36,7 @@ final readonly class ChildRecorder
     ) {}
 
     /**
-     * Record the link for a newly started child and append the child.started event. The
-     * host hears about it from childStarted() below rather than here, so its listeners
-     * run outside the transaction these two writes share.
+     * The host hears about it from childStarted(), outside the transaction these writes share.
      */
     public function startChild(
         FlowRun $parent,
@@ -74,9 +69,6 @@ final readonly class ChildRecorder
         return $link;
     }
 
-    /**
-     * Announce a child whose link is on record.
-     */
     public function childStarted(FlowRun $parent, FlowRun $child): void
     {
         event(new ChildWorkflowStarted($parent, $child));
@@ -215,11 +207,6 @@ final readonly class ChildRecorder
             + $parked()->update(['status' => ChildStatus::Failed]);
     }
 
-    /**
-     * Move every live child the parent's close policy closes into Cancelling, with the close
-     * it is owed recorded on it, and its own children after it. The token left on each is
-     * the child's own id, for its close job to claim.
-     */
     public function fenceLive(FlowRun $parent, bool $compensates): void
     {
         foreach ($this->children->active($parent->id) as $link) {
@@ -236,10 +223,6 @@ final readonly class ChildRecorder
         }
     }
 
-    /**
-     * Move one child its parent closes into Cancelling with the close its policy owes, unless it
-     * has already left the states that may start work. Returns whether this write fenced it.
-     */
     public function fence(FlowRun $child, ChildClosePolicy $policy, bool $compensates, ParentClosedException $closed): bool
     {
         $fail = $policy === ChildClosePolicy::Fail;

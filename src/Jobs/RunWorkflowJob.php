@@ -11,10 +11,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
-/**
- * Entry point for a queued workflow run: drives the flow until it suspends,
- * completes or fails. Single-threaded per run via WithoutOverlapping.
- */
 class RunWorkflowJob implements ShouldQueue
 {
     use Queueable;

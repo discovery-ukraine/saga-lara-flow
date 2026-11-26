@@ -18,10 +18,6 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
-/**
- * Persists the compensation lifecycle (pending → running → completed/failed) and
- * dispatches the matching events.
- */
 final readonly class CompensationRecorder
 {
     use NormalizesExceptions;
@@ -32,10 +28,6 @@ final readonly class CompensationRecorder
         private AnomalyLog $anomalies,
     ) {}
 
-    /**
-     * Announce that the run has entered rollback. The per-compensation rows follow
-     * via register(); this is the once-per-run "compensation.started" marker.
-     */
     public function started(FlowRun $flowRun): void
     {
         $this->events->record($flowRun, FlowEventType::CompensationStarted, null, $flowRun);
@@ -44,14 +36,8 @@ final readonly class CompensationRecorder
     }
 
     /**
-     * The CompensationRun for one stack entry: the row already registered for that step
-     * when there is one, otherwise a new Pending row. A rollback resumed by somebody
-     * else, or retried, therefore reuses the rows it left — a compensation that already
-     * ran is not registered, and run, a second time. A new row's rollback ordinal
-     * (sequence) is the number of compensations already registered for the run, so the
-     * rows read back in execution order. continue_on_failure encodes the resolved policy
-     * (Continue = true), which the queued continuation reads to decide whether a failed
-     * level halts the rollback.
+     * Reuses the row already registered for the step, so a resumed or retried rollback runs no
+     * compensation twice.
      */
     public function register(
         FlowRun $flowRun,
@@ -78,11 +64,6 @@ final readonly class CompensationRecorder
         );
     }
 
-    /**
-     * Same resolution shape as ActionRecorder::resolveReclaimStaleAfterSeconds(), read
-     * against the sagas.reclaim.stale_running config instead — the two mechanisms are
-     * switched independently.
-     */
     private function resolveReclaimStaleAfterSeconds(?int $seconds, ?bool $enabled): ?int
     {
         if ($enabled === false) {
@@ -103,17 +84,8 @@ final readonly class CompensationRecorder
     }
 
     /**
-     * Atomically claim the row and move it to Running, returning false when the row is
-     * no longer claimable — settled already, or still Running before its reclaim
-     * deadline. Mirrors ActionRecorder::startAction() in every respect: the same
-     * compare-and-swap shape, the same enclosing transaction, the same absence of
-     * Eloquent model events (CompensationStepStarted and the flow_events entry are the
-     * supported way to observe it), and the same attempts counter — including the
-     * read-back that proves the claim survived its own commit.
-     *
-     * $rollbackToken is the owner the compensation was sent by: once the rollback has been
-     * taken over the run carries another, and the claim is refused. Null claims for
-     * whoever owns it, as a job queued before runs carried an owner does.
+     * Refused once the rollback has another owner than $rollbackToken; null, from a job queued
+     * before runs carried one, claims for whoever owns it.
      *
      * @throws Throwable
      */
@@ -176,11 +148,6 @@ final readonly class CompensationRecorder
         return $claimed && $this->claimSurvivedCommit($compensation);
     }
 
-    /**
-     * The undo half of ActionRecorder::claimSurvivedCommit(), which carries the
-     * reasoning: a commit reporting success is not proof the claim is on record, so the
-     * row answers for itself — and what it answers is what this connection can see.
-     */
     private function claimSurvivedCommit(CompensationRun $compensation): bool
     {
         $claimedAttempts = $compensation->attempts;
@@ -213,10 +180,6 @@ final readonly class CompensationRecorder
         return false;
     }
 
-    /**
-     * Record the compensation's result, fenced against the claim that produced it —
-     * see ActionRecorder::completeAction() for why. Returns whether it was recorded.
-     */
     public function completeCompensation(CompensationRun $compensation, mixed $result): bool
     {
         $claimedAttempts = $compensation->attempts;
@@ -284,9 +247,8 @@ final readonly class CompensationRecorder
     /**
      * @see ActionRecorder::writeOutcome()
      *
-     * Compensations have no expiry sweep, so the status condition guards nothing today;
-     * it holds the invariant locally rather than depending on no such writer ever
-     * being added.
+     * No writer expires a compensation today; the status condition keeps the fence from depending
+     * on that staying true.
      */
     private function writeOutcome(
         CompensationRun $compensation,

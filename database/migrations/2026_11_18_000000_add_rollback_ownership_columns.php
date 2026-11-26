@@ -9,8 +9,7 @@ return new class extends Migration
     private const string STEP_UNIQUE = 'compensation_runs_run_step_unique';
 
     /**
-     * Each change asks first. MySQL commits DDL on its own, so a run that died part
-     * of the way through has to be repeatable rather than trip over what it added.
+     * Each change asks first: MySQL commits DDL on its own, so a migration that died midway reruns.
      */
     public function up(): void
     {
@@ -79,11 +78,8 @@ return new class extends Migration
     }
 
     /**
-     * The unique this migration owns, under the name the driver actually stored —
-     * PostgreSQL truncates an identifier past 63 bytes, which a long table prefix
-     * reaches. Only that exact truncation stands in for the full name, and only over
-     * the same columns: a differently shaped index holding the name makes the create
-     * fail loudly instead of quietly standing down.
+     * PostgreSQL truncates an identifier past 63 bytes; only that truncation, over the same columns,
+     * stands in for the full name.
      */
     private function existingUnique(): ?string
     {
@@ -109,9 +105,7 @@ return new class extends Migration
     }
 
     /**
-     * The migrator opens its transaction on the connection a migration names. Left
-     * unnamed, that is the default connection while the columns go to the package's
-     * own, and a failure there rolls nothing back.
+     * Named, or the migrator's transaction opens on the default connection rather than the package's.
      */
     public function getConnection(): ?string
     {

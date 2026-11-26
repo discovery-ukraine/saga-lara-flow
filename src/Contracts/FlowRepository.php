@@ -13,8 +13,6 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 interface FlowRepository
 {
     /**
-     * Persist a new flow run together with its tags.
-     *
      * @param  array<string, mixed>  $attributes
      * @param  array<int, array{key: string, value: ?string}>  $tags
      */
@@ -33,47 +31,35 @@ interface FlowRepository
     public function findOrFail(string $id): FlowRun;
 
     /**
-     * Non-terminal runs (Running/Waiting) whose expires_at deadline has passed and
-     * whose hold-off window is open, capped at $limit. Ordered by the longest wait the
-     * monitor can act on: the hold-off window where a run has one, the deadline
-     * otherwise. Used by the monitor to expire stuck runs.
+     * Running or Waiting runs past their deadline with the hold-off window open, by the later of the two.
      *
      * @return iterable<int, FlowRun>
      */
     public function dueForExpiration(int $limit): iterable;
 
     /**
-     * Waiting runs older than the grace window with no in-flight blocker (no
-     * Pending/Running action and no Waiting signal) whose repair window is open and
-     * attempts are not exhausted, oldest first, capped at $limit. Used by the doctor
-     * to re-wake a flow whose resume was lost — replay then decides.
+     * Waiting runs past the grace window with no Pending/Running step and no Waiting signal.
      *
      * @return iterable<int, FlowRun>
      */
     public function dueForRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
 
     /**
-     * Pending runs older than the grace window whose repair window is open and attempts are
-     * not exhausted, oldest first, capped at $limit. Used by the doctor to send again the
-     * first job of a run that never started; a child whose parent has closed closes there.
+     * Pending runs past the grace window, a child of a closed parent included.
      *
      * @return iterable<int, FlowRun>
      */
     public function dueForStartRepair(int $limit, int $graceSeconds, int $maxAttempts): iterable;
 
     /**
-     * Runs whose rollback to Expired has stalled for the grace window (FlowRun::rollbackStalled())
-     * and whose hold-off window is open, oldest first, capped at $limit. Used by the monitor
-     * to carry an expiry it started to the end.
+     * Stalled rollbacks to Expired with the hold-off window open.
      *
      * @return iterable<int, FlowRun>
      */
     public function dueForRollbackRecovery(int $limit, int $graceSeconds): iterable;
 
     /**
-     * Runs whose rollback to Failed or Cancelled has stalled for the grace window
-     * (FlowRun::rollbackStalled()) whose repair window is open and attempts are not
-     * exhausted, oldest first, capped at $limit. Used by the doctor.
+     * Stalled rollbacks to Failed or Cancelled within the repair budget.
      *
      * @return iterable<int, FlowRun>
      */

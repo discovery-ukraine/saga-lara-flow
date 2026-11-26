@@ -13,17 +13,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
 /**
- * Executes a single compensation inside a Bus::batch level. It carries the
- * CompensationDefinition verbatim (closures via SerializableClosure), so it can
- * run in a separate worker/process. The job never throws: the compensation
- * outcome is recorded on the CompensationRun, and SagaRunner reads that status
- * after the batch to apply the Stop/Continue policy.
- *
- * $rollbackToken is the owner of the rollback that sent it, so a job of an owner the
- * rollback was taken from claims nothing. It is a plain declared property rather than a
- * promoted one: a payload queued before it existed is unserialized without the
- * constructor, and only a class-level default keeps it initialized — as null, which
- * claims for whoever owns the rollback.
+ * $rollbackToken is declared, not promoted: an older payload is unserialized without the
+ * constructor and claims, as null, for whoever owns the rollback.
  */
 class RunCompensationJob implements ShouldQueue
 {
@@ -59,11 +50,7 @@ class RunCompensationJob implements ShouldQueue
             return;
         }
 
-        // No status pre-check: the claim inside execute() is the single source of
-        // truth — a row already settled, or still Running within its reclaim window,
-        // fails the claim and nothing runs. A lost claim is quiet here because the
-        // batch's own ->finally(new AdvanceCompensation(...)) settles the level.
-
+        // A lost claim is quiet: the batch's finally callback settles the level.
         $tenancy->for(
             $flowRun,
             $flowRun->workflow_class,

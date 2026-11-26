@@ -16,12 +16,6 @@ use DiscoveryUkraine\SagaLaraFlow\Support\TenancyManager;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Throwable;
 
-/**
- * Schedules and executes action steps. In queued mode it persists a pending
- * ActionRun and dispatches a RunActionJob; in sync mode it runs the action
- * inline in the same process. Both paths persist identical ActionRun rows, so
- * the final database state is the same regardless of transport.
- */
 class ActionDispatcher
 {
     use ResolvesMethodDependencies;
@@ -32,8 +26,6 @@ class ActionDispatcher
     ) {}
 
     /**
-     * Queued mode: persist the pending step and dispatch its job.
-     *
      * @throws FlowSuspended
      * @throws Throwable
      */
@@ -54,11 +46,7 @@ class ActionDispatcher
     }
 
     /**
-     * Send a fresh RunActionJob for a step that is already persisted and has just
-     * been rewound to Pending by a signal-gated retry. The row — and therefore its
-     * (flow_run_id, sequence) ordinal, arguments and history — is reused as is. The
-     * job carries the cycle it belongs to, so a job left over from an earlier cycle
-     * recognises itself as stale and does nothing.
+     * The job carries its cycle, so one left over from an earlier cycle does nothing.
      *
      * @throws FlowSuspended
      * @throws Throwable
@@ -106,10 +94,6 @@ class ActionDispatcher
         throw $thrown;
     }
 
-    /**
-     * Put an action job on the run's own connection/queue, honouring the package's
-     * after_commit setting. Shared by the first dispatch and by every retry.
-     */
     private function route(PendingDispatch $job, FlowRun $flowRun): void
     {
         if ($flowRun->connection !== null) {
@@ -126,9 +110,6 @@ class ActionDispatcher
     }
 
     /**
-     * Sync mode: persist the pending step and execute it inline. Returns how far the
-     * step got, so the caller can tell a broken invariant from a lost race.
-     *
      * @throws Throwable
      */
     public function runInline(FlowRun $run, int $sequence, ActionSchedule $schedule): StepExecution
@@ -137,10 +118,7 @@ class ActionDispatcher
 
         $execution = $this->execute($actionRun, inline: true);
 
-        // A row created in this very call is not reachable by anyone else yet, so
-        // losing the claim is not a race but a broken invariant. Being superseded
-        // afterwards is a race, and a real one: the monitor and the doctor run in
-        // their own processes against the same rows a sync run creates.
+        // A row created in this call cannot be claimed by anyone else: losing it is a broken invariant.
         if ($execution === StepExecution::ClaimLost) {
             throw ActionClaimFailedException::forAction($schedule->actionClass, $sequence);
         }
@@ -149,14 +127,7 @@ class ActionDispatcher
     }
 
     /**
-     * Claim and run a persisted action step to completion. Shared by sync inline
-     * execution and the queued RunActionJob.
-     *
-     * The two non-Executed results are both "someone else is handling this row", never
-     * a failure of the step, but they are not interchangeable: ClaimLost means nothing
-     * ran, while Superseded means the work happened and only its outcome was dropped.
-     * A business failure marks the step Failed and is rethrown so the workflow can
-     * react on replay.
+     * ClaimLost means nothing ran; Superseded means the work happened and its outcome was dropped.
      *
      * @throws Throwable
      */
@@ -181,10 +152,7 @@ class ActionDispatcher
                 try {
                     $result = $this->callWithDependencies($instance, 'handle', $arguments);
                 } catch (Throwable $e) {
-                    // A rejected outcome means this executor was superseded while it
-                    // ran, so its failure settles nothing. Rethrowing would fail a job
-                    // whose work is already discarded, and RunActionJob::failed() would
-                    // then write queue bookkeeping into a row it no longer owns.
+                    // Superseded: rethrowing would let failed() write into a row this worker no longer owns.
                     if (! $this->recorder->failAction($actionRun, $e, $inline)) {
                         return StepExecution::Superseded;
                     }

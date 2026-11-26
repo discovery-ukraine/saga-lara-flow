@@ -19,17 +19,6 @@ use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Str;
 use Throwable;
 
-/**
- * Executes the compensation stack in reverse (LIFO). Action-level compensations
- * are singleton levels run sequentially; a saga() group asked to compensate in
- * parallel forms one level rolled back together (Bus::batch in queued mode, still
- * sequential in sync). Levels are always processed in reverse order.
- *
- * The Stop/Continue policy is read from each compensation row's continue_on_failure
- * flag after a level finishes: Stop halts the rollback, Continue carries on; either
- * way the run lands in its final state (Failed for an automatic failure, Cancelled
- * for a manual compensate) with the primary and compensation causes recorded.
- */
 class SagaRunner
 {
     use NormalizesExceptions;
@@ -66,9 +55,6 @@ class SagaRunner
     }
 
     /**
-     * Batch-completion continuation (queued mode): inspect the level that just ran,
-     * halt on a Stop-policy failure, otherwise dispatch the next level or finalize.
-     *
      * @param  list<list<CompensationEntry>>  $remainingLevels
      * @param  array<string, mixed>|null  $primary
      * @param  list<string>  $ranCompensationIds
@@ -101,9 +87,7 @@ class SagaRunner
 
             $this->dispatchLevel($flowRun, $remainingLevels, $primary, $finalState, $rollbackToken);
         } catch (ConcurrentFlowTransitionException) {
-            // Another actor finished the run while the compensations were in flight; what
-            // they ran is recorded either way. A batch callback is the one landing with no
-            // caller to tell, so it absorbs here rather than in finalize().
+            // A batch callback has no caller to tell, so a landing lost to another actor ends here.
         }
     }
 
@@ -136,10 +120,6 @@ class SagaRunner
         }
     }
 
-    /**
-     * Whether the row still names this instance as the owner of its rollback. A rollback
-     * that stalled long enough to be taken over is left to whoever took it.
-     */
     private function stillOwns(FlowRun $flowRun): bool
     {
         if ($flowRun->rollback_token === null) {
@@ -171,12 +151,8 @@ class SagaRunner
                 continue;
             }
 
-            // A row an earlier owner settled is not run again. Losing the claim on any
-            // other leaves the rest to the owner that took the rollback over, or stops it
-            // loudly with the run still in Cancelling: a worker that may still be running
-            // the undo holds the row, or the claim did not survive its own commit.
-            // Recovery carries the rollback on once the row can be claimed, instead of it
-            // landing over an undo that never ran.
+            // A lost claim leaves the rest to the new owner, or stops loudly in Cancelling for recovery
+            // rather than landing over an undo that never ran.
             if (! $this->stillOwns($flowRun)) {
                 return null;
             }
@@ -191,10 +167,8 @@ class SagaRunner
     }
 
     /**
-     * Send the next level that still has something to run. A level an earlier owner
-     * already settled is judged as it stands and passed over without a batch. A level
-     * with a row still held by a worker that may be alive is neither sent nor judged:
-     * the rollback stays where it is until that row settles, and is taken over again.
+     * A level with a row a live worker may still hold is neither sent nor judged: the rollback
+     * waits there to be taken over again.
      *
      * @param  list<list<CompensationEntry>>  $levels
      * @param  array<string, mixed>|null  $primary
@@ -239,8 +213,6 @@ class SagaRunner
     }
 
     /**
-     * Register one level and build a job for each row still to run.
-     *
      * @param  list<CompensationEntry>  $level
      * @return array{0: list<string>, 1: list<RunCompensationJob>, 2: bool} the level's row ids,
      *                                                                      its jobs, and whether a
@@ -294,9 +266,6 @@ class SagaRunner
         return in_array($compensation->status, [CompensationStatus::Completed, CompensationStatus::Failed], true);
     }
 
-    /**
-     * Running and not yet claimable again: the worker that took it may still be running it.
-     */
     private function held(CompensationRun $compensation): bool
     {
         return $compensation->status === CompensationStatus::Running
@@ -304,10 +273,7 @@ class SagaRunner
     }
 
     /**
-     * Land the run once the rollback is done.
-     *
-     * A refused landing is raised, not swallowed: only the caller knows whether losing
-     * the run matters. FlowHandle::compensate() is an operator who has to be told.
+     * A refused landing is raised: only the caller knows whether losing the run matters.
      *
      * @param  array<string, mixed>|null  $primary
      */
@@ -331,8 +297,6 @@ class SagaRunner
             $exception['compensation'] = $compensation;
         }
 
-        // A monitor-enforced expiration that rolled back lands in Expired, not Failed:
-        // same exception bookkeeping, but the run's own terminal status and event differ.
         if ($finalState === FlowStatus::Expired) {
             $flowRun->exception = $exception === [] ? null : $exception;
 
@@ -353,9 +317,8 @@ class SagaRunner
     }
 
     /**
-     * Cancel a run whose rollback has not finished. The owner token is replaced first, so the
-     * owner claims nothing more, and only then is what the rollback left undone read and
-     * recorded where a finished rollback records its failure.
+     * The owner token is replaced first, so the owner claims nothing more before what it left
+     * undone is read.
      */
     public function abandon(FlowRun $flowRun): void
     {
@@ -387,9 +350,7 @@ class SagaRunner
     }
 
     /**
-     * The first compensation that failed, or else the first that never settled: a run that
-     * did not fully unwind never looks like one that did, and a real failure carries its own
-     * cause. One read, so a row settling meanwhile is seen in one state or the other.
+     * The first compensation that failed, or else the first that never settled, in one read.
      *
      * @return array<string, mixed>|null
      */
@@ -413,9 +374,6 @@ class SagaRunner
     }
 
     /**
-     * Split the stack into reverse-ordered levels: consecutive entries sharing a
-     * parallelGroupId become one (parallel) level; everything else is a singleton.
-     *
      * @param  list<CompensationEntry>  $entries
      * @return list<list<CompensationEntry>>
      */
@@ -453,11 +411,7 @@ class SagaRunner
     }
 
     /**
-     * Whether a Stop-policy compensation on the level did not complete.
-     *
-     * Wider than "failed": a compensation still Pending or Running when its level
-     * finishes is one whose job was lost or whose worker died, and unwinding further
-     * on top of a step that may never have been undone is what Stop exists to prevent.
+     * Not completed, not just failed: a row still Pending or Running lost its job or its worker.
      *
      * @param  list<string>  $compensationIds
      */

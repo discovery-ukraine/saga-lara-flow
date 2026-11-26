@@ -78,18 +78,8 @@ class FlowRun extends Model
     }
 
     /**
-     * Constrain a flow_runs query to runs that have not finished. Three places read it —
-     * the two deadline sweeps, which must not settle work belonging to a finished run,
-     * and the fenced action writes, which must not move a settled row — and they have to
-     * agree, because a run counted live by one and finished by another is exactly the gap
-     * a leftover row survives in.
-     *
-     * A run mid-rollback is still live here: Cancelling is not terminal, and settling
-     * its rows is exactly what a rollback needs. Whether work may BEGIN is the other
-     * question — mayStartWork() below.
-     *
-     * Typed over any model because whereHas() hands its constraint the related query
-     * as Builder<Model>.
+     * Cancelling is live: settling its rows is what a rollback needs. Typed over any model because
+     * whereHas() hands its constraint the related query as Builder<Model>.
      *
      * @param  Builder<Model>  $query
      */
@@ -99,11 +89,7 @@ class FlowRun extends Model
     }
 
     /**
-     * Constrain a flow_runs query to runs that may still start new work: live(), minus
-     * the run that is rolling back. Asked wherever work BEGINS — the action claim, the
-     * two repair scans that send another job, and the signal-gated retry that spends a
-     * delivery to start a fresh cycle — and never where a row already started is being
-     * settled or written down.
+     * live() minus Cancelling: asked wherever work begins, never where started work is written down.
      *
      * @param  Builder<Model>  $query
      */
@@ -113,10 +99,8 @@ class FlowRun extends Model
     }
 
     /**
-     * Constrain a flow_runs query to rollbacks nobody is moving any more: Cancelling, the run
-     * untouched since $since, no compensation touched since then, and none held Running by a
-     * worker that may still be alive. A Pending row whose job was lost counts as stalled; one
-     * still inside its reclaim window does not.
+     * Cancelling, untouched since $since, and no compensation touched since or held Running by a
+     * worker that may still be alive.
      *
      * @param  Builder<FlowRun>  $query
      */
@@ -139,12 +123,8 @@ class FlowRun extends Model
     }
 
     /**
-     * Every relation below states the order its rows are meaningful in; without one the
-     * driver picks, and PostgreSQL picks physical order, which moves as rows are updated.
-     *
-     * Reading against it — a reverse order, or the id-cursor paging of chunkById() and
-     * friends, which keeps any order on another column and lets it outrank the cursor —
-     * needs reorder() first.
+     * Every relation below is ordered (PostgreSQL otherwise returns physical order); a reverse
+     * order or chunkById() needs reorder() first.
      */
     public function actions(): HasMany
     {
@@ -172,9 +152,7 @@ class FlowRun extends Model
     }
 
     /**
-     * By id as well: compensation_runs carries no unique on (flow_run_id, sequence), and
-     * the counter behind it reads before it writes, so two overlapping rollbacks of one
-     * run could number their rows alike.
+     * By id as well: (flow_run_id, sequence) is not unique on compensation_runs.
      */
     public function compensations(): HasMany
     {
@@ -221,8 +199,7 @@ class FlowRun extends Model
     }
 
     /**
-     * Set the rollback this run is about to be moved into Cancelling for. Written by the
-     * same conditional write as the move, so whoever moves the run owns its rollback.
+     * Written by the same conditional write as the move, so whoever moves the run owns its rollback.
      *
      * @param  array<string, mixed>|null  $cause
      * @param  ?string  $token  the owner's token, when the owner has to recognise it again later
@@ -241,9 +218,6 @@ class FlowRun extends Model
         return $this;
     }
 
-    /**
-     * The owner token a parent's fence leaves on this run for its close job to claim.
-     */
     public function parentFenceToken(): string
     {
         return (string) $this->getKey();

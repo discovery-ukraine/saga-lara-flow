@@ -2,14 +2,6 @@
 
 namespace DiscoveryUkraine\SagaLaraFlow\Runtime;
 
-/**
- * The outcome of one FlowDoctor::repair() pass: how many stuck actions were
- * re-dispatched, how many stuck flows were re-woken, how many stalled rollbacks were
- * resumed, and how many candidates were skipped because they no longer qualified once
- * re-checked, or could not be acted on.
- * A small structured report so callers (the command, future observability)
- * can read counts without parsing text.
- */
 final readonly class FlowRepairReport
 {
     public function __construct(

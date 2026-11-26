@@ -5,12 +5,6 @@ namespace DiscoveryUkraine\SagaLaraFlow\Console\Commands;
 use DiscoveryUkraine\SagaLaraFlow\Runtime\FlowDoctor;
 use Illuminate\Console\Command;
 
-/**
- * Runs one doctor repair pass: re-dispatch stuck sequential
- * Pending actions and re-wake stuck Waiting runs whose jobs were lost. Schedule
- * it (e.g. everyMinute()) independently of saga-flow:monitor. Opt-in via
- * saga-lara-flow.repair.enabled.
- */
 class FlowRepairCommand extends Command
 {
     protected $signature = 'saga-flow:repair';

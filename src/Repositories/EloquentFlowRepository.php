@@ -54,15 +54,11 @@ class EloquentFlowRepository implements FlowRepository
             ->whereIn('status', [FlowStatus::Running, FlowStatus::Waiting])
             ->whereNotNull('expires_at')
             ->where('expires_at', '<=', $now)
-            // A run the sweep could not expire steps aside for a while, so it stops
-            // holding its place at the head of the page.
             ->where(function (Builder $query) use ($now): void {
                 $query->whereNull('expiry_available_at')
                     ->orWhere('expiry_available_at', '<=', $now);
             })
-            // Oldest first means oldest of what can be acted on now, not oldest
-            // deadline: a run held off carries its retry time instead, so retries
-            // cannot queue ahead of a run that has been waiting longer than they have.
+            // A held-off run sorts by its retry time, so retries cannot queue ahead of older runs.
             ->orderByRaw('coalesce(expiry_available_at, expires_at) asc')
             ->limit($limit)
             ->get();
@@ -80,9 +76,6 @@ class EloquentFlowRepository implements FlowRepository
                 $query->whereNull('repair_available_at')
                     ->orWhere('repair_available_at', '<=', $now);
             })
-            // Positive evidence the run is stuck rather than legitimately parked:
-            // nothing is in flight to wake it (no Pending/Running action, no open
-            // signal wait), yet it is still Waiting — a lost resume.
             ->whereDoesntHave('actions', function (Builder $query): void {
                 $query->whereIn('status', [ActionStatus::Pending, ActionStatus::Running]);
             })
@@ -116,8 +109,7 @@ class EloquentFlowRepository implements FlowRepository
         $now = Carbon::now();
         $model = $this->flowRunClass();
 
-        // From the writer: the takeover asks nothing about compensations, so this read is
-        // the one that decides a rollback has stopped moving.
+        // From the writer: the takeover does not look at compensations again.
         return $model::query()
             ->useWritePdo()
             ->where(fn ($query) => $model::rollbackStalled($query, $now->copy()->subSeconds($graceSeconds)))

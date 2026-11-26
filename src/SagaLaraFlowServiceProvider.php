@@ -101,15 +101,10 @@ class SagaLaraFlowServiceProvider extends PackageServiceProvider
             }
         });
 
-        // Opt-in: drive the monitor off the queue worker's idle loop, throttled in
-        // FlowMonitor. Off by default — prefer Schedule::command('saga-flow:monitor').
         if (config('saga-lara-flow.monitor.queue_looping.enabled')) {
             Event::listen(Looping::class, [FlowMonitor::class, 'onQueueLooping']);
         }
 
-        // Opt-in: drive the doctor's repair pass off the queue worker's idle loop,
-        // throttled independently of the expiration sweep. Off by default — prefer
-        // Schedule::command('saga-flow:repair').
         if (config('saga-lara-flow.repair.queue_looping.enabled')) {
             Event::listen(Looping::class, [FlowDoctor::class, 'onQueueLooping']);
         }

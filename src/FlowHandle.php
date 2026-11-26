@@ -20,10 +20,6 @@ use DiscoveryUkraine\SagaLaraFlow\Runtime\SignalDispatcher;
 use Illuminate\Database\Eloquent\Collection;
 use Throwable;
 
-/**
- * Operations over a single flow run: read its state and history, deliver signals,
- * cancel it, or manually compensate it.
- */
 readonly class FlowHandle
 {
     public function __construct(
@@ -36,14 +32,11 @@ readonly class FlowHandle
     }
 
     /**
-     * Refuse a write to the run whose own retryOnSignal() predicate is running.
-     *
      * @throws RetryPolicyReentryException
      */
     private function rejectWhileDeciding(string $operation): void
     {
-        // Asked of the executor, not of the container: a pass is driven with a runtime
-        // the executor made for it, and one resolved here is bound to nothing.
+        // The executor owns the runtime of every pass; one resolved from the container is bound to nothing.
         if (app(FlowExecutor::class)->isDecidingRun($this->flowRun->id)) {
             throw RetryPolicyReentryException::for($operation);
         }
@@ -80,9 +73,7 @@ readonly class FlowHandle
     }
 
     /**
-     * Attach a queryable tag to this run, overwriting the value a previous write
-     * left under that key. A workflow that tags the same key in handle() rewrites
-     * it on every replay, so prefer keys the workflow does not write itself.
+     * A key the workflow also tags in handle() is rewritten on every replay.
      */
     public function tag(string $key, string|int|null $value = null): static
     {
@@ -90,8 +81,6 @@ readonly class FlowHandle
     }
 
     /**
-     * Attach several queryable tags at once, keyed by tag name.
-     *
      * @param  array<array-key, string|int|null>  $tags
      */
     public function withTags(array $tags): static
@@ -102,17 +91,13 @@ readonly class FlowHandle
             $this->flowRun->tags()->updateOrCreate(['key' => $key], ['value' => $value]);
         }
 
-        // tags() reads a lazily loaded relation, which would otherwise keep serving
-        // the collection it held before these writes.
+        // A loaded relation would keep serving the tags it held before these writes.
         $this->flowRun->unsetRelation('tags');
 
         return $this;
     }
 
     /**
-     * Deliver an external signal to this run and wake it. Throws unless the run can
-     * still consume one: a finished run and a run rolling back are both refused.
-     *
      * @param  array<int|string, mixed>  $payload
      *
      * @throws CannotSignalFlowException
@@ -128,11 +113,7 @@ readonly class FlowHandle
     }
 
     /**
-     * Safe variant of signal(): swallows the rejection and reports whether the signal
-     * was delivered. "IfRunning" means "unless the run is past taking one" — a signal
-     * reaches any run in Pending, Running or Waiting (e.g. one parked on
-     * awaitSignal()), not only a Running one — and a run pruned out from under the
-     * handle, which is past taking one for good.
+     * "IfRunning" means any run still taking signals: Pending, Running or Waiting.
      *
      * @param  array<int|string, mixed>  $payload
      */
@@ -148,9 +129,6 @@ readonly class FlowHandle
     }
 
     /**
-     * Deliver the signal this run's parked step or child waits on, without naming it, and
-     * wake the run. Given a $name, delivers that signal as signal() does.
-     *
      * @param  array<int|string, mixed>  $payload
      *
      * @throws CannotSignalFlowException
@@ -172,9 +150,7 @@ readonly class FlowHandle
     }
 
     /**
-     * Safe variant of signalRetry(): reports whether a signal was delivered, and answers
-     * false for a run signalRetry() refuses — one with nothing parked included. A call from
-     * the run's own retry predicate still throws, as it does for signalIfRunning().
+     * A call from the run's own retry predicate still throws.
      *
      * @param  array<int|string, mixed>  $payload
      */
@@ -190,15 +166,6 @@ readonly class FlowHandle
     }
 
     /**
-     * Cancel this run directly, without compensation (compensation-aware cancel is
-     * compensate()). The optional $reason is recorded on the flow.cancelled event
-     * and carried on the FlowCancelled event. Throws on a terminal run.
-     *
-     * A run still rolling back — found in Cancelling, or moved there before this call
-     * landed — is cancelled where its rollback stands: its owner runs no further
-     * compensation, and for a rollback that undoes steps its cause and what it left undone
-     * are recorded on the run.
-     *
      * @throws CannotCancelTerminalFlowException
      * @throws ConcurrentFlowTransitionException
      */
@@ -236,17 +203,6 @@ readonly class FlowHandle
     }
 
     /**
-     * Manually roll back this run's completed compensatable steps and cancel it.
-     * The compensation stack is reconstructed by a compensation-only replay (no
-     * business logic re-runs); the rollback executes synchronously (sync mode) and
-     * the run lands in Cancelled. A rollback taken over by the monitor or the doctor
-     * while one of its undos outlasted its reclaim window comes back still Cancelling,
-     * the rest carried on by the queue. Only valid for a non-terminal run.
-     *
-     * A run already rolling back — found in Cancelling, or moved there while this call
-     * planned — is left to that rollback and comes back Cancelling; it lands where its
-     * own owner intended.
-     *
      * @throws CannotCancelTerminalFlowException
      * @throws ConcurrentFlowTransitionException
      * @throws Throwable

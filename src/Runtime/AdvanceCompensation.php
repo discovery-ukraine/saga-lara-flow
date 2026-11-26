@@ -7,17 +7,8 @@ use Illuminate\Bus\Batch;
 use Throwable;
 
 /**
- * The queued rollback continuation, run as a Bus::batch finally-callback once a
- * level's compensations finish. It is a plain invokable object (not a Closure), so
- * the batch repository can serialize it; it simply hands the carried state back to
- * SagaRunner::advance() to evaluate the Stop policy and dispatch the next level or
- * finalize the run. The primary cause is carried as a normalized array (never a
- * Throwable, whose stack trace may hold unserializable closures).
- *
- * $rollbackToken is a plain declared property rather than a promoted one: a
- * continuation stored before it existed is unserialized without the constructor, and
- * only a class-level default keeps it initialized — as null, which advance() reads as
- * a rollback with no owner on record.
+ * An invokable object, not a Closure, so the batch repository can serialize it. $rollbackToken is
+ * declared, not promoted: an older continuation is unserialized without the constructor.
  */
 final class AdvanceCompensation
 {

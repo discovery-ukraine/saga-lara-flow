@@ -6,11 +6,7 @@ use DiscoveryUkraine\SagaLaraFlow\Contracts\FlowRepository;
 use Illuminate\Bus\Batch;
 
 /**
- * The queued parallel-join continuation, run as a Bus::batch finally-callback once
- * every step of a parallel() block has reached a terminal state (or the block was
- * cancelled by FailFast). It is a plain invokable object (not a Closure) so the
- * batch repository can serialize it; it wakes the run EXACTLY ONCE so the drive loop
- * replays once and the join resolves (returns results or fails).
+ * An invokable object, not a Closure, so the batch repository can serialize it.
  */
 final readonly class ResumeParallelBlock
 {
