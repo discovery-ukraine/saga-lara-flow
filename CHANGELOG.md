@@ -2,6 +2,112 @@
 
 All notable changes to `saga-lara-flow` will be documented in this file.
 
+## v1.4.0 - 2026-11-26
+
+> **⚠️ Run `php artisan migrate` immediately after upgrading.** One migration ships with this
+release — `add_rollback_ownership_columns` — and every rollback, every close of a `Cancel` or
+`Fail` child, the expiration sweep and the doctor use its columns from the moment the new code
+runs. It runs from the package; do **not** `vendor:publish` it.
+
+This release closes what 1.3.0 listed as still open, except three items that move to 1.5.0 (see
+**Still open**). Most of the fixes close ways a rollback could report a complete unwind over steps
+that stayed applied, or stop where nothing would carry it on.
+
+### Fixed: who owns a rollback (#73, #93, #90, #77)
+
+- **A step that completed while an empty plan was being drawn** was never compensated (#73). Every
+  expiring run now passes through `Cancelling`, one with nothing to undo included.
+- **A child that completed between its parent's plan and its close** was undone by neither (#93).
+  A parent's live `Cancel` and `Fail` children now move into `Cancelling` in the same transaction
+  as the parent, with the close they are owed recorded on them.
+- **A child already rolling itself back** was rolled back again when its parent closed (#90). The
+  close now leaves it to that rollback, and a compensation is registered once per step, so a
+  retried close or a rollback taken over does not run an undo that already settled.
+- **A child's close was lost with a failed close job** (#77). The close now stays recorded on the
+  child until it lands; the queue giving up on the job is journalled as `close_failed`, and the
+  doctor or a kick carries the close out.
+
+The move into `Cancelling` records where the rollback lands, so a rollback whose owner stopped is
+taken over once nothing has moved it for a grace window: an expiry by the sweep, any other by the
+doctor with `repair.enabled`, or by `saga-flow:kick`. `cancel()` on a run that is rolling back now
+stops the rollback, and `compensate()` on one runs nothing.
+[A rollback that stalls](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls)
+
+### Fixed: recovery gaps (#96, #94, #82, #98)
+
+- **A `Pending` run whose first job was lost** was never picked up (#96). With `repair.enabled`, the
+  doctor sends the run its `RunWorkflowJob` again after `repair.grace_seconds`, recorded as
+  `flow.rewoken` with reason `lost_start`.
+- **A step's retry parking was trusted without reading it back**, and announced before it
+  committed (#94). `ActionAwaitingRetry` now fires only for a park that is on record; one the
+  database discarded is journalled as `claim_not_committed`.
+- **An ordinary replay on a lagging replica** failed a `runSync()`, stranded a run or cut a queued
+  rollback short (#82). A run's history is read from the writer for the whole pass, and every job
+  reads its run from the writer.
+- **A failing member of a `parallel()` block on a `sync` connection** failed the run with the raw
+  exception (#98). The block now resolves as on any other queue: the completed members roll back
+  and the run fails with `ActionFailedException`.
+
+The planning replay still writes the workflow's own tags, because a workflow that branches on its
+own tag would otherwise plan a different stack (#50). That is now documented.
+[Tagging runs](https://sagalaraflow.dev/tags-and-querying#tagging-runs)
+
+### Fixed: the test suite on real databases (#99, #104)
+
+Queued tests no longer fail intermittently on MySQL when the host clock steps back (#99), and the
+suite can stage two database sessions against one run on MySQL and PostgreSQL (#104). That harness
+measures and pins what is still open under #54.
+
+### Added
+
+- **`monitor.expiration.rollback_grace_seconds`, `repair.redispatch_lost_starts` and
+  `repair.resume_stalled_rollbacks`.**
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
+- **`RollbackNotPlannedException`**, and the anomaly log reasons `rollback_resume_failed`,
+  `rollback_abandoned` and `close_failed`.
+  [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery#finding-these-races-in-your-logs)
+- **`rollbacks` in what `FlowMonitor::sweep()` returns, and `$resumedRollbacks` on
+  `FlowRepairReport`.**
+
+### Behaviour changes
+
+They are in
+[UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md). Three ask
+something of you:
+
+- **Let a rollback in flight finish before you upgrade.** Its compensation jobs carry no owner, so
+  they still run after a `cancel()`, and a rollback tried again can run an undo a second time.
+- **If you published the config file**, add `repair.redispatch_lost_starts` and
+  `repair.resume_stalled_rollbacks` to your `repair` array, or those doctor rules stay off.
+- **With the package on a dedicated `database.connection` and `repair.enabled`**, call `run()`
+  after your own transaction commits: the doctor now starts a run still `Pending` after the grace
+  window, whether your transaction committed or not.
+
+### Recommended
+
+- **Turn `repair.enabled` on in production.** Still off by default, and now also what starts a run
+  whose first job was lost and carries on a rollback that stalled outside an expiry.
+- **Keep `monitor.expiration.rollback_grace_seconds` and `repair.grace_seconds` above your queue's
+  longest wait**, so a rollback that is only queued is not taken over.
+
+### Still open
+
+Named so this release does not read wider than it is; each is on the
+[1.5.0 milestone](https://github.com/discovery-ukraine/saga-lara-flow/milestone/4) with its
+measurement:
+
+- **A conditional write cannot fence a cancellation still in flight** (#54). A step claimed while a
+  `cancel()` or a move into `Cancelling` is still committing — the run's own, or its parent's that
+  fences it — starts outside the rollback's plan, on PostgreSQL and on MySQL under
+  `READ COMMITTED`.
+- **Reclaim decides on time alone** (#32).
+- **Deadlines are enforced only by the sweep** (#19).
+
+A step a worker is already executing when its run enters `Cancelling` is in no plan either; it is
+documented as a limit under [Statuses](https://sagalaraflow.dev/statuses).
+
+**Full Changelog**: https://github.com/discovery-ukraine/saga-lara-flow/compare/v1.3.0...v1.4.0
+
 ## v1.3.0 - 2026-09-30
 
 > **⚠️ Run `php artisan migrate` immediately after upgrading.** One migration ships with this
@@ -166,6 +272,7 @@ engine writes their columns from the moment it starts.
 ```bash
 composer update discovery-ukraine/saga-lara-flow
 php artisan migrate
+
 
 
 
@@ -408,6 +515,7 @@ php artisan migrate
 
 
 
+
 ```
 Deploy the two together. See [UPGRADING.md](https://github.com/discovery-ukraine/saga-lara-flow/blob/main/UPGRADING.md).
 
@@ -428,6 +536,7 @@ $this->action(ChargeCard::class, $orderId)
         only: [InsufficientBalanceException::class],  // null = park on any exception
     )
     ->run();
+
 
 
 
@@ -463,6 +572,7 @@ $this->tags([
     'attempt'  => 2,      // int values are cast to string
     'orders'   => null,   // a tag with no value
 ]);
+
 
 
 
@@ -608,6 +718,7 @@ fails partway through, registered compensations roll back the completed work in 
 composer require discovery-ukraine/saga-lara-flow
 php artisan vendor:publish --tag="saga-lara-flow-migrations"
 php artisan migrate
+
 
 
 
