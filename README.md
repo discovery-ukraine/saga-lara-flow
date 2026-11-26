@@ -552,8 +552,8 @@ still in flight moves into `Cancelling` with its parent, before the parent plans
 cannot complete before its close reaches it. A child already rolling back on its own is left to that
 rollback and lands where it was headed. A close that fails or is lost once the child is fenced
 leaves it in `Cancelling` with that close recorded, for the doctor's stalled-rollback rule or a kick
-to carry out, and a child whose start commits after its parent has closed is closed at its first
-step.
+to carry out, and such a child whose start commits after its parent has closed is closed at its
+first step.
 
 A child is created from its class the way a root run is: its `#[Tag]`s, the name and version from
 `#[Flow]`, and a deadline from `#[FlowTimeout]`, else `monitor.expiration.defaults.run` — never the
@@ -673,17 +673,13 @@ the cap holds the automatic pass off rather than ending the run's recovery; a ro
 it takes over and carries on, as the doctor would. Each config key is
 documented in [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring).
 
-None of these drives the workflow of a run that is rolling back or finished; taking over a stalled
-rollback only plans its undo again. A pass begins only for a run that may still start work, so a
-deadline is enforced once and each compensation on its rollback runs once. A pass already replaying
-when the rollback commits starts nothing further either: its next step is refused at the claim, and
-a child workflow or side effect at an ordinal it has not reached before ends the pass instead. The
-plan that is unwound is drawn once the run is already rolling back, so a step whose owed attempt
-completed while an earlier plan was being drawn is compensated too, on a run with nothing else to
-undo included. A rollback whose owner stopped is taken over once nothing has moved it for a grace
-window — an expiry by the sweep, any other by the doctor — and carried to the status it was headed
-for, without running an undo a second time. A compensation whose worker died mid-undo is reached
-that way only with `sagas.reclaim.stale_running` enabled. See
+None of these drives the workflow of a run that is rolling back or finished, so a deadline is
+enforced once. The plan that is unwound is drawn once the run is already rolling back, so a step
+that completed meanwhile is compensated too. A rollback whose owner stopped is taken over once
+nothing has moved it for a grace window — an expiry by the sweep, any other by the doctor — and
+carried to the status it was headed for, without running an undo that already settled; a
+compensation whose worker died mid-undo is reached that way only with `sagas.reclaim.stale_running`
+enabled, and can then run twice, so keep compensations idempotent. See
 [Statuses](https://sagalaraflow.dev/statuses) and [A rollback that
 stalls](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls).
 

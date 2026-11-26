@@ -225,19 +225,21 @@ discarded (see [Events](./events.md#refused-outcome)):
 ],
 ```
 
-Fourteen reason codes exist; the eight raised on the paths this page covers are below. The other six
-are `transition_lost`, which belongs to [run transitions](./queues-locks-idempotency.md),
-`retry_policy_threw`, which belongs to [retry policies](./retry-on-signal.md), `replan_failed` and
-`replan_incomplete`, which belong to [planning a
-rollback](./sagas-and-compensation.md#while-a-rollback-runs), `rollback_abandoned`, which belongs to
-[cancelling a rollback](./sagas-and-compensation.md#cancelling-a-rollback) and carries the run id,
-its workflow class and the rollback's target, and `close_failed`, which belongs to [closing a
-child](./child-workflows.md#close-policies) — the queue gave up on a child's close job — and carries
-the child's run id, the status it was to land in and the throw. Most of the eight below carry the
-run id, row id, sequence and class. Three are about a run rather than a row: `expiry_failed` and
-`rollback_resume_failed` carry the run id, its workflow class and the throw, and
-`claim_not_committed` for a kick carries the run id, its workflow class, its status and the repair
-count the run holds:
+Fourteen reason codes exist. Six belong to other pages:
+
+- `transition_lost` — [run transitions](./queues-locks-idempotency.md);
+- `retry_policy_threw` — [retry policies](./retry-on-signal.md);
+- `replan_failed` and `replan_incomplete` —
+  [planning a rollback](./sagas-and-compensation.md#while-a-rollback-runs);
+- `rollback_abandoned` — [cancelling a rollback](./sagas-and-compensation.md#cancelling-a-rollback),
+  with the run id, its workflow class and the rollback's target;
+- `close_failed` — the queue gave up on a [child's close job](./child-workflows.md#close-policies),
+  with the child's run id, the status it was to land in and the throw.
+
+The other eight are raised on the paths this page covers. Most carry the run id, row id, sequence
+and class. `expiry_failed` and `rollback_resume_failed` carry the run id, its workflow class and the
+throw, and `claim_not_committed` for a kick the run id, its workflow class, its status and the
+repair count the run holds:
 
 - **`claim_lost`** — a worker found the row already owned and did not execute the step.
 - **`outcome_rejected`** — a worker finished, but the row had changed hands and its result was dropped. Listen for
@@ -246,8 +248,8 @@ count the run holds:
 - **`batch_finished_early`** — a parallel step completed after a duplicate delivery had closed its batch.
 - **`claim_not_committed`** — a write the engine reads back was gone once its transaction closed: a
   step's or a compensation's claim, a step's or a child's park, a child's start, a run's move into
-  `Cancelling` with the children it fences, or the repair budget a kick refills. For a claim the line carries both attempt counts, the claimed one and the
-  one the row actually holds.
+  `Cancelling` with the children it fences, or the repair budget a kick refills. For a claim the
+  line carries both attempt counts, the claimed one and the one the row actually holds.
 - **`expiry_failed`** — the sweep could not plan an overdue run's rollback, so it left the run alone and moved on to
   the next. The line carries the throw and how many times this run has failed that way. The run stays overdue and is
   tried again once its hold-off window opens.

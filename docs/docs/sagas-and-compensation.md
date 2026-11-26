@@ -118,7 +118,9 @@ is still expired, and the rollback's own compensations still run. See
 A compensation is registered once per step. A rollback taken up again — a child close job tried
 again, or a stalled rollback the monitor or the doctor
 [takes over](./expiration-and-monitoring.md#a-rollback-that-stalls) — reuses the row an earlier
-attempt left: an undo that already ran is not run a second time.
+attempt left: an undo that already settled is not run a second time. One still `Running` that
+[reclaim](./reclaim-and-recovery.md) hands to another worker can run twice — keep compensations
+idempotent.
 
 ## Manual compensation
 
@@ -147,12 +149,11 @@ The move also fences the run's children still in flight under `Cancel` or `Fail`
 `Cancelling` with it, so none of them completes between the plan and its close. See
 [close policies](./child-workflows.md#close-policies).
 
-A rollback it starts runs in the call, and the run comes back `Cancelled` — with one exception. With
+A rollback it starts runs in the call, and the run comes back `Cancelled`. With
 [reclaim](./reclaim-and-recovery.md) enabled, an undo that outlasts its reclaim window and the grace
-window can have the rollback
-[taken over](./expiration-and-monitoring.md#a-rollback-that-stalls) while it runs. The call then
-finishes the undo it is in, leaves the rest to the queue, and returns the run still `Cancelling`:
-read it again, or wait for a terminal status, before acting on the rollback being done.
+window can have the rollback [taken over](./expiration-and-monitoring.md#a-rollback-that-stalls)
+while it runs: the call then finishes that undo, leaves the rest to the queue and returns the run
+still `Cancelling`. Read it again before acting on the rollback being done.
 
 A run that is already rolling back — it failed, expired, or is being closed by its parent — is left
 to that rollback, and so is one whose rollback begins while `compensate()` is planning. The call
@@ -169,21 +170,21 @@ record while the undo work is already done — and leaves the run compensatable 
 ### Cancelling a rollback
 
 `cancel()` on a run that is rolling back stops the rollback where it stands, through a handle loaded
-before the rollback began as well. It first takes the rollback from its owner, so no further
-compensation is claimed: a job of that rollback still on the queue runs nothing. Only then does it
-read what was left and land the run `Cancelled` with it. A rollback that undoes nothing — a child
-closed without compensation — was headed for `Cancelled` anyway, and lands there with nothing to
-record. For any other, `exception` holds the rollback's cause, and `exception['compensation']` the
-first compensation that failed or never finished. When every compensation registered so far had
-completed, it holds a `CompensationUnfinishedException` saying the rollback was cut short: a level
-not registered yet never ran. A compensation a worker had already claimed may still finish after the
-run is `Cancelled`; it is reported as it stood. The cut is journalled as
-[`rollback_abandoned`](./reclaim-and-recovery.md#finding-these-races-in-your-logs). The steps it
-leaves are not undone, so treat it as a way out, not a way through. A `cancel()` that meets the
-rollback landing on its own loses to it: the run lands where the rollback was headed, with its
-owner's record, and `cancel()` throws `ConcurrentFlowTransitionException`. The run's children that
-were fenced when its rollback began are still rolled back by their closes, as recorded on them;
-cancel a child too to cut its own rollback short.
+before the rollback began as well. It takes the rollback from its owner first, so a compensation job
+still on the queue that carries that owner runs nothing, and then lands the run `Cancelled`:
+
+- A rollback that undoes nothing — a child closed without compensation — records nothing.
+- Any other: `exception` holds the rollback's cause, and `exception['compensation']` the first
+  compensation that failed or never finished — a `CompensationUnfinishedException` when every one
+  registered so far had completed, or none was registered yet — and the cut is journalled as
+  [`rollback_abandoned`](./reclaim-and-recovery.md#finding-these-races-in-your-logs).
+- A compensation a worker had already claimed may still finish after the run is `Cancelled`.
+- A `cancel()` that meets the rollback landing on its own loses to it and throws
+  `ConcurrentFlowTransitionException`.
+- Children fenced when the rollback began are still rolled back by their closes; cancel a child too
+  to cut its own rollback short.
+
+The steps it leaves are not undone, so treat it as a way out, not a way through.
 
 ## Postponing a rollback
 
