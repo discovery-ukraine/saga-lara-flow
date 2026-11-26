@@ -101,8 +101,8 @@ fence is stored unread, and a step a worker is already executing can still compl
 plan. Its close rolls it back as recorded, even if the parent's rollback is later cut short.
 
 A fenced child is a run rolling back like any other: `compensate()` leaves it to its close, and
-`cancel()` [cuts its rollback short](./sagas-and-compensation.md#cancelling-a-rollback). One the
-doctor or a kick finds stalled is taken over like any
+`cancel()` [cuts its rollback short](./sagas-and-compensation.md#cancelling-a-rollback). One that
+the doctor or a kick finds stalled is taken over like any
 [rollback that stalls](./expiration-and-monitoring.md#a-rollback-that-stalls) and carried to the
 close recorded on it, possibly before its parent's rollback ends. A child fenced without
 compensation, under a parent's `cancel()`, lands without a plan.
