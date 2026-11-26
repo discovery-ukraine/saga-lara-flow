@@ -81,7 +81,7 @@ batch is always filled with candidates a sweep can actually act on.
 
 A deadline is also enforced only once. The sweep moves a run it expires into `Cancelling`, and no pass is driven for a
 run there, so a job queued before the sweep — a resume owed to a wait it then expired — ends without re-entering
-expiration. The rollback the sweep planned is the only one, and each compensation on it runs once.
+expiration.
 
 ## A run the sweep cannot expire
 
@@ -138,21 +138,13 @@ its [reclaim](./reclaim-and-recovery.md) window. The sweep takes over a stalled 
 ],
 ```
 
-The takeover is a conditional write on the run that replaces the owner token the sweep read, so of
-two sweeps one takes it, and a run taken over or landed since it was read is left alone. The plan is
-drawn again under `Cancelling`, where no step can complete, and a compensation is registered once
-per step: the one the earlier owner already ran is reused rather than run again, and one it left
-`Pending` is sent a job. Every compensation job carries the owner that sent it, and its claim is
-refused once the rollback has another, so a late job of the earlier owner — one queued behind a
-backlog longer than the grace window — runs nothing, and an earlier owner that turns out to be alive
-stops at its next claim or level and leaves the rest to the one that took over. A level whose
-compensation a worker of the earlier owner claimed in the moment before the takeover is left as it
-is until that row settles, and the rollback is taken over again once nothing has moved it for the
-grace window.
-
-The claim and the takeover are separate writes on separate rows. On PostgreSQL a claim that starts
-in the same instant as a takeover can still read the earlier owner and run beside the one that took
-over; the claim lets only one of them run that undo, but the other one's level can then close early.
+Of two recoverers, one takes the rollback over. The plan is drawn again, and a compensation the
+earlier owner already settled is reused rather than run again; one it left `Running` can run again
+once [reclaim](./reclaim-and-recovery.md) hands it on, so keep compensations idempotent. A late job
+of the earlier owner claims nothing, and an earlier owner that turns out to be alive stops at its
+next claim. A compensation it claimed in the moment before the takeover holds its level until that
+row settles. On PostgreSQL a claim that starts in the same instant as a takeover can still run
+beside it: only one of them runs the undo, but the other's level can close early.
 
 A compensation `Running` with no reclaim deadline holds the rollback where it is for as long as the
 row stays that way — the worker may still be running it. With `sagas.reclaim.stale_running` enabled,
@@ -162,13 +154,12 @@ A stalled rollback whose plan cannot be drawn again stays in `Cancelling` under 
 journalled as `rollback_resume_failed`. One that undoes nothing — the close of a child without
 compensation, whose job was lost — is landed in its target with its cause, without a plan.
 
-Every takeover by the sweep, planned or not, holds the run off with the same window as an expiry it
-cannot plan, doubling each time (`backoff`, counted in `expiry_attempts`). The grace window judges by
-time alone, so a queue that keeps a job waiting longer than `rollback_grace_seconds` makes a healthy
-rollback look stalled: it is taken over, and the jobs already queued for it claim nothing. The
-growing window is what lets the latest owner's jobs through in the end. Set
-`rollback_grace_seconds` above the longest your queue makes a job wait. A run that went into `Cancelling` before its intent was
-written down carries none, and is left where it is.
+Every takeover by the sweep holds the run off by the same doubling window as an expiry it cannot
+plan (`backoff`, counted in `expiry_attempts`). The grace window judges by time alone, so a queue
+that keeps a job waiting longer than `rollback_grace_seconds` makes a healthy rollback look stalled,
+and the jobs already queued for it then claim nothing. Set it above the longest your queue makes a
+job wait. A run that went into `Cancelling` before its intent was written down carries none, and is
+left where it is.
 
 ## Repair (the doctor)
 
@@ -216,19 +207,14 @@ Every parameter:
   scope for it. See
   [Reclaim & recovery](./reclaim-and-recovery.md).
 - **`redispatch_lost_starts`** — enable R4: send the first job again for a run still `Pending` after
-  the grace window — a root run, a child, or a child started again by a retry signal whose
-  `RunWorkflowJob` never arrived. A run started with `runSync()` whose process died before it began
-  is started on the queue. The doctor judges by time alone, so a run that is merely queued behind a
-  backlog longer than `grace_seconds` gets a second job too. That job is a `RunWorkflowJob` like the
-  first, so while [locks](./queues-locks-idempotency.md#locks) are enabled it waits for an original
-  that is still being worked rather than driving the run beside it, and it drives the run only if it
-  is still `Pending` when it gets there. So a copy whose worker dies once it has started the run is
-  not driven again on redelivery: the run stays `Running`, where the doctor does not look, until
-  `saga-flow:kick`. A child whose parent has closed, or is closing, is not started by that job:
-  unless its policy is `Abandon`, it is [closed at its first
-  step](./child-workflows.md#close-policies). With the package on a [dedicated
-  connection](./queues-locks-idempotency.md#host-transactions) the rule cannot tell a lost job from
-  one your own open transaction still holds back.
+  the grace window — a root run, a child, a child retried on a signal, or a `runSync()` whose
+  process died before it began. The doctor judges by time alone, so a run queued behind a longer
+  backlog gets a second job too; while [locks](./queues-locks-idempotency.md#locks) are enabled it
+  waits for the original and drives the run only if it is still `Pending`. A copy whose worker dies
+  after starting the run leaves it `Running` until `saga-flow:kick`. A child whose parent has closed
+  is [closed at its first step](./child-workflows.md#close-policies) unless it is `Abandon`. With
+  the package on a [dedicated connection](./queues-locks-idempotency.md#host-transactions) the rule
+  cannot tell a lost job from one your own open transaction still holds back.
 - **`resume_stalled_rollbacks`** — enable R5: take over a rollback to `Failed` or `Cancelled` that
   nothing has moved for `grace_seconds`, and carry it to the end, as described in
   [A rollback that stalls](#a-rollback-that-stalls). A stalled expiry is the sweep's. Each takeover
@@ -237,10 +223,8 @@ Every parameter:
 - **`queue_looping`** — drive the repair pass off the queue worker's idle loop instead of cron (same idea as
   `monitor.queue_looping`). When `enabled`, the pass runs at most once per `throttle_seconds`.
 
-For a run going forwards the doctor only ever re-dispatches existing jobs or re-wakes flows — replay
-decides the rest, so it never creates duplicate work or mutates a business result. It sends no step
-of a run that is rolling back (`Cancelling`) a job: one would complete outside the stack that
-rollback already planned. See [statuses](./statuses.md).
+The doctor sends no step of a run that is rolling back (`Cancelling`) a job: it would complete
+outside the stack that rollback already planned. See [statuses](./statuses.md).
 
 :::tip Turn it on in production
 Any step whose job is committed and then dispatched can lose that job to a dying process — including a step restarted
@@ -261,18 +245,15 @@ SagaFlow::kick($runId);          // or:
 // php artisan saga-flow:kick {run}
 ```
 
-A kick re-drives a run that may still start work. A rollback that has stalled — nothing has moved it
-for `grace_seconds`, and no worker that may be alive holds one of its compensations — is taken over
-and carried on under its own target and cause, as R5 does, without its throttle, and its repair
-budget is refilled: the way on for a rollback the doctor gave up on, or one that stalled while the
-doctor is off. A rollback still moving is left to its owner, and a run that has finished is left
-exactly as it was; the command reports the status instead of claiming a re-drive. A compensation a
-worker of the earlier owner claims in the moment before the takeover holds the rollback where it is,
-as it does for R5. The command warns when it still sees that compensation held; a rollback that does
-not move after a kick needs another once nothing holds it.
+A kick re-drives a run that may still start work. A rollback that has stalled is taken over as R5
+does, without its throttle, and its repair budget refilled — the way on for a rollback the doctor
+gave up on, or one that stalled while the doctor is off. A rollback still moving is left to its
+owner, and a finished run is left as it was; the command reports the status instead. The command
+warns when a worker that may be alive still holds one of the rollback's compensations: kick it again
+once nothing holds it.
 
-A run that has not started yet gets its first job again, a `RunWorkflowJob` that drives it only from
-`Pending`, for the reason given under `redispatch_lost_starts`; any other run gets a resume.
+A run that has not started gets its first job again, as under `redispatch_lost_starts`; any other
+run gets a resume.
 
 It also refills the repair budget of the run and of every step it has not finished, and sends a fresh job for the
 sequential step the run is parked on — so a run stopped at a step the doctor gave up on moves again, rather than

@@ -9,6 +9,9 @@
 
 ### Action required
 
+- **If a rollback is in flight when you upgrade** *(medium)* — let it finish first. Its
+  compensation jobs carry no owner, so they still run after a `cancel()`, and its rows carry no
+  step, so a rollback tried again can run an undo a second time.
 - **If you call `ActionRecorder::awaitRetry()` yourself** *(low)* — it returns the
   `action.awaiting_retry` row it recorded, or `null` when the write was refused, instead of a
   `bool`, and no longer dispatches `ActionAwaitingRetry`: `publishAwaitingRetry()` does.
@@ -16,115 +19,73 @@
   at the top level, so add `repair.redispatch_lost_starts => true` and
   `repair.resume_stalled_rollbacks => true` to your `repair` array; without a key its rule stays
   off.
-- **If you bind your own `FlowRepository`** *(low)* — implement `dueForStartRepair()`,
-  `dueForRollbackRecovery()` and `dueForRollbackRepair()`, which the monitor and the doctor now
-  call.
-- **If you read the array `FlowMonitor::sweep()` returns** *(low)* — it carries a fourth key,
-  `rollbacks`.
+- **If you bind your own `FlowRepository`** *(low)* — implement `findOnWriter()`, which reads the
+  run from the write connection, and `dueForStartRepair()`, `dueForRollbackRecovery()` and
+  `dueForRollbackRepair()`, which the monitor and the doctor now call.
+- **If you read the array `FlowMonitor::sweep()` or `FlowRepairReport::toArray()` returns** *(low)*
+  — each carries a fourth key, `rollbacks` and `resumed_rollbacks`; `FlowRepairReport` has a
+  matching `$resumedRollbacks`.
 
 ### Behaviour changed
 
 Nothing below asks anything of you.
 
-- **`ActionAwaitingRetry` fires only for a park that is on record.** The park is read back from the
-  write connection after its transaction closes. A park the database discarded is journalled as
-  `claim_not_committed` instead of announced, and the step is parked again when the doctor or a
-  delivery of the signal wakes the run.
-  [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery#finding-these-races-in-your-logs)
-- **A step that fails inline is recorded with `queue_attempts_exhausted` set**, under `runSync()`
-  as on a retried attempt run inline. A later replay from the queue parks it or gives up on it
-  instead of waiting for queue attempts no job will make.
-- **The doctor starts a run whose first job was lost.** With `repair.enabled`, a run still
-  `Pending` after `repair.grace_seconds` — a root run, a child, or a child retried on a signal —
-  gets its `RunWorkflowJob` again under the same budget and backoff as a re-woken run, recorded as
-  `flow.rewoken` with reason `lost_start` and counted among the re-woken flows. A child whose parent
-  has closed, or is closing, is closed at its first step instead, unless it is `Abandon`. With the
-  package on a dedicated `database.connection`, a `run()` inside your own transaction that rolls
-  back, or stays open past the grace window, leaves a `Pending` run the doctor now starts: call
-  `run()` after you commit, or turn the rule off with `repair.redispatch_lost_starts`.
-  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
-- **A `parallel()` block on a `sync` queue connection resolves as it does on any other queue.** Its
-  members are sent one at a time rather than as a batch, so a block with a failed member falls back
-  on an optional one, rolls back the members that completed and fails the run with
-  `ActionFailedException`, instead of failing with the member's own exception and leaving every
-  member `Cancelled`. No batch is stored for it in `job_batches`.
-  [Queues, locks & idempotency](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)
-- **A run's history is read from the write connection.** With a `read` / `write` split on the
-  package's connection, a pass that drives a run reads from the writer for its whole length, reads
-  your steps make on that connection while they run inline included, and every job reads the run,
-  step or compensation it was sent for, and the run it belongs to, from the writer. A replica that
-  has not caught up no longer fails a `runSync()` with `UniqueConstraintViolationException` or
-  leaves a run `Pending` or `Waiting` with nothing to wake it, nor stops a queued rollback after its
-  first level, and `'sticky' => true` is not needed for that.
-  [Read replicas](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
-- **Every expiring run passes through `Cancelling`**, one with nothing to undo included, on its way
-  to `Expired`. A step that completes while its empty plan is drawn is undone before the run lands.
-  A listener on status changes sees the extra move.
-  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
 - **A rollback that stalls is carried to the end.** The move into `Cancelling` records where the
-  rollback lands. Once nothing has moved it for a grace window — its process died, or a
-  compensation's job was lost — the sweep takes over an expiry
+  rollback lands. Once nothing has moved it for a grace window, the sweep takes over an expiry
   (`monitor.expiration.rollback_grace_seconds`) and, with `repair.enabled`, the doctor any other
-  rollback, and lands the run where it was headed. Each takeover by the sweep holds the next one
-  off by `monitor.expiration.backoff`: keep the grace window above your queue's longest wait, or a
-  healthy rollback on a lagging queue is taken over and slowed down. A compensation a worker
-  claimed and then died with stays `Running` and holds its rollback where it is unless
-  `sagas.reclaim.stale_running` gives it a deadline. A run already in `Cancelling` when you upgrade carries no such record and is left
-  as it was.
-  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls)
-- **`compensate()` can return a run still `Cancelling`.** On a run that is already rolling back, or
-  whose rollback begins while the call plans, it runs nothing and leaves the run to that rollback,
-  which lands it where it was headed — `Expired` or `Failed` with its own cause — instead of rolling
-  it back again into `Cancelled`. With reclaim enabled, an undo that outlasts its reclaim window and
-  the grace window can also have the rollback taken over while it runs; the call finishes that
-  undo, leaves the rest to the queue and returns. Read the run again before acting on the rollback
-  being done.
-  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#manual-compensation)
-- **`cancel()` on a run that is rolling back stops the rollback and says so.** It takes the rollback
-  from its owner before it lands the run `Cancelled`, so a compensation job still queued for it runs
-  nothing. For a rollback that undoes steps, the run's `exception` holds the rollback's cause and,
-  under `compensation`, what it left undone (`CompensationUnfinishedException`), and the cut is
-  journalled as `rollback_abandoned`. A handle loaded before the rollback began takes the same path;
-  a `cancel()` that meets the rollback landing on its own loses to it and throws.
-  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#cancelling-a-rollback)
-- **A child already rolling back when its parent closes is left to that rollback.** It lands where
-  its own rollback was headed — a child that failed lands `Failed` with its own exception — instead
-  of being rolled back a second time by the close and landing as the parent's close policy says.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
-- **A parent's live `Cancel` and `Fail` children move into `Cancelling` with it.** In the
-  transaction that moves the parent into `Cancelling`, or that lands it, each such child in flight,
-  and its own such children, is fenced with the close it is owed recorded on it. A child signalled
-  in that gap now raises `CannotSignalCancellingFlowException` and is rolled back by its close,
-  instead of completing and staying applied under a parent that reports a finished rollback; under
-  `cancel()` a `Cancel` child lands `Cancelled` instead of `Completed`. Its close rolls it back as
-  recorded even if the parent's rollback is later cut short with `cancel()`, and the doctor or a
-  kick may take a fenced child that rolls back over as a stalled rollback before its parent's
-  rollback ends. A child whose rollback cannot be planned now waits in `Cancelling` for that
-  recovery instead of staying where its close found it. `Abandon` children are unchanged.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
-- **A child's close outlives the job that carries it.** A close job that reaches a child nothing
-  fenced fences it before entering the child's tenant and planning its rollback, so a close that
-  fails — a tenant that cannot be entered, a plan the child's replay cannot draw, a worker that
-  dies — or is lost leaves the child in `Cancelling` with its close recorded, instead of live and
-  free to complete. The doctor's stalled-rollback rule or a kick carries that close out, one without
-  compensation included, which lands without a plan; the queue giving up on the job is journalled as
-  `close_failed`; one that fails before the child is fenced leaves it as it was, and the job sent
-  again with `queue:retry` closes it. A child whose start commits after its parent has closed, begun
-  rolling back or been pruned is closed at its first step instead of running unclosed.
-  [Child workflows](https://sagalaraflow.dev/child-workflows#close-policies)
-- **`saga-flow:kick` takes over a rollback that has stalled** and carries it on under its own
-  target and cause, refilling its repair budget, instead of leaving it as it was — whether the
-  doctor gave up on it or is off. A rollback still moving is still left alone. One whose
-  compensation a worker claims at that moment waits for it: kick it again if it does not move.
-  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
-- **A compensation is registered once per step.** A child close job tried again, or a rollback taken
-  over, reuses the row an earlier attempt left instead of running the undo a second time. A row
-  written before the upgrade carries no step and is not matched, so a rollback in flight across the
-  upgrade can still run an undo again, as it could before: let rollbacks finish before upgrading.
-  [Sagas & compensations](https://sagalaraflow.dev/sagas-and-compensation#while-a-rollback-runs)
-- **`saga-flow:kick` sends a run that has not started a `RunWorkflowJob`**, not a
-  `ResumeWorkflowJob`, so while locks are enabled it waits for an original job that is still being
-  worked, and it drives the run only if it is still `Pending` when it gets there.
+  rollback. Keep the grace window above your queue's longest wait. A run already in `Cancelling`
+  when you upgrade is left as it was.
+  [A rollback that stalls](https://sagalaraflow.dev/expiration-and-monitoring#a-rollback-that-stalls)
+- **The doctor starts a run whose first job was lost.** With `repair.enabled`, a run still `Pending`
+  after `repair.grace_seconds` gets its `RunWorkflowJob` again, recorded as `flow.rewoken` with
+  reason `lost_start`. With the package on a dedicated `database.connection`, a `run()` inside your
+  own transaction that rolls back or stays open past the grace window is now started: call `run()`
+  after you commit. [Repair](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
+- **`saga-flow:kick` takes over a rollback that has stalled**, under its own target and cause, and
+  sends a run that has not started a `RunWorkflowJob` rather than a `ResumeWorkflowJob`.
+  [Repair](https://sagalaraflow.dev/expiration-and-monitoring#repair-the-doctor)
+- **Every expiring run passes through `Cancelling`**, one with nothing to undo included, so a
+  listener on status changes sees the extra move.
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
+- **`compensate()` on a run already rolling back runs nothing** and returns it still `Cancelling`;
+  that rollback lands where it was headed. Read the run again before relying on the rollback being
+  done. [Manual compensation](https://sagalaraflow.dev/sagas-and-compensation#manual-compensation)
+- **`cancel()` on a run that is rolling back stops the rollback.** For one that undoes steps, the
+  run's `exception` records what was left undone and the cut is journalled as `rollback_abandoned`.
+  [Cancelling a rollback](https://sagalaraflow.dev/sagas-and-compensation#cancelling-a-rollback)
+- **A parent's live `Cancel` and `Fail` children move into `Cancelling` with it**, the close they
+  are owed recorded on them. Signalling one then raises `CannotSignalCancellingFlowException`, and
+  under `cancel()` a `Cancel` child lands `Cancelled` rather than `Completed`. A child already
+  rolling back on its own is left to that rollback.
+  [Close policies](https://sagalaraflow.dev/child-workflows#close-policies)
+- **A child's close outlives the job that carries it.** A close that fails or is lost once the child
+  is fenced leaves it in `Cancelling`, where the doctor or a kick carries it out; the queue giving
+  up on the job is journalled as `close_failed`. A `Cancel` or `Fail` child whose start commits
+  after its parent has closed is closed at its first step.
+  [Close policies](https://sagalaraflow.dev/child-workflows#close-policies)
+- **A compensation is registered once per step**, so a retried close or a rollback taken over does
+  not run an undo that already settled.
+  [While a rollback runs](https://sagalaraflow.dev/sagas-and-compensation#while-a-rollback-runs)
+- **A run's history is read from the write connection** for the whole pass, and every job reads its
+  run from the writer, so a lagging replica no longer fails a `runSync()`, strands a run or cuts a
+  queued rollback short. `'sticky' => true` is not needed for that.
+  [Read replicas](https://sagalaraflow.dev/queues-locks-idempotency#read-replicas)
+- **A `parallel()` block on a `sync` connection resolves as on any other queue**: a failed member
+  rolls back the completed ones and fails the run with `ActionFailedException`.
+  [On a sync connection](https://sagalaraflow.dev/queues-locks-idempotency#sync-connection)
+- **`ActionAwaitingRetry` fires only for a park that is on record**; one the database discarded is
+  journalled as `claim_not_committed`.
+- **A step that fails inline is recorded with `queue_attempts_exhausted` set**, so a later replay
+  from the queue does not wait for attempts no job will make.
+
+### Additions
+
+- **Config:** `monitor.expiration.rollback_grace_seconds`, `repair.redispatch_lost_starts` (R4) and
+  `repair.resume_stalled_rollbacks` (R5).
+  [Expiration & monitoring](https://sagalaraflow.dev/expiration-and-monitoring)
+- **`RollbackNotPlannedException`** and the anomaly log reasons `rollback_resume_failed`,
+  `rollback_abandoned` and `close_failed`.
+  [Reclaim & recovery](https://sagalaraflow.dev/reclaim-and-recovery#finding-these-races-in-your-logs)
 
 ## From 1.2.x to 1.3.0
 
