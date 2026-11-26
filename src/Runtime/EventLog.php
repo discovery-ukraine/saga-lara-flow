@@ -7,10 +7,6 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 
-/**
- * The single writer of the flow_events log. Every recorder appends history
- * through here, so the event-sourcing append path lives in exactly one place.
- */
 final readonly class EventLog
 {
     /**

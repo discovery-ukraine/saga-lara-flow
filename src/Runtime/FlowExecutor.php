@@ -29,14 +29,8 @@ use ReflectionProperty;
 use Throwable;
 
 /**
- * The drive loop — the heart of the engine. It runs the workflow's handle()
- * method and interprets the control-flow exceptions it throws: replay on inline
- * resolution (sync), suspend on a genuine wait (queued), fail on a business
- * error. Completed steps are skipped on replay because they resolve from stored
- * history by their (flow_run_id, sequence) identity.
- *
- * Invariant: catch (Throwable) sits AFTER catch (InternalFlowControl), so an
- * internal control signal is never mistaken for a business failure.
+ * catch (Throwable) sits after catch (InternalFlowControl), so a control signal is never taken
+ * for a business failure.
  */
 class FlowExecutor
 {
@@ -44,16 +38,11 @@ class FlowExecutor
     use ResolvesMethodDependencies;
 
     /**
-     * The runtimes of the passes in flight, innermost last. A pass driven inside
-     * another gets one of its own.
-     *
      * @var list<FlowRuntime>
      */
     private array $runtimes = [];
 
     /**
-     * The passes reading from the writer, outermost first.
-     *
      * @var list<array{name: ?string, joined: list<Connection>}>
      */
     private array $writerPasses = [];
@@ -68,8 +57,6 @@ class FlowExecutor
     ) {}
 
     /**
-     * Run a pass on a runtime of its own, restoring the caller's when it leaves.
-     *
      * @template TPass
      *
      * @param  callable(FlowRuntime): TPass  $pass
@@ -89,10 +76,8 @@ class FlowExecutor
     }
 
     /**
-     * Whether the run currently deciding a retryOnSignal() predicate is this one.
-     * The executor answers because it owns the runtime each pass is driven with — for
-     * every pass in flight, since an inner one is no reason to let a write into a run
-     * an outer one is deciding for.
+     * Asks every pass in flight: an inner one is no reason to let a write into a run an outer one
+     * is deciding for.
      */
     public function isDecidingRun(string $flowRunId): bool
     {
@@ -103,8 +88,7 @@ class FlowExecutor
     }
 
     /**
-     * Turn a wake for a run this process is driving into a replay of that pass: a job to
-     * resume it would only meet the pass still holding the run.
+     * A job to resume a run this process is driving would only meet the pass still holding it.
      */
     public function replayIfDriving(string $flowRunId): bool
     {
@@ -120,9 +104,6 @@ class FlowExecutor
     }
 
     /**
-     * A retryOnSignal() predicate may read any run it likes, but it may not drive
-     * one — not even somebody else's. See RetryPolicyReentryException for why.
-     *
      * @throws RetryPolicyReentryException
      */
     private function rejectWhileDeciding(): void
@@ -158,17 +139,15 @@ class FlowExecutor
                 ),
             ));
         } catch (ConcurrentFlowTransitionException) {
-            // Somebody else owns this run now. Returning it rather than throwing lets
-            // every caller do the right thing without knowing about the race: a job ends
-            // cleanly, runSync() returns the run as the winner left it, and a parent
-            // awaiting it as a child reads its status and resolves accordingly.
+            // Returned, not thrown: a job ends cleanly and a caller reads the run as the winner
+            // left it.
             return $this->reread($flowRun);
         }
     }
 
     /**
-     * Asked before the run's tenant is entered, so a tenant that cannot be restored does not
-     * keep a child its parent has closed from being fenced.
+     * Before the tenant is entered, so a tenant that cannot be restored does not keep the child
+     * from being fenced.
      */
     private function closedBeforeStart(FlowRun $flowRun): bool
     {
@@ -182,11 +161,9 @@ class FlowExecutor
     }
 
     /**
-     * The deadline is weighed after this check, never before: a run already rolling back
-     * would otherwise be expired a second time, and a second plan runs every
-     * compensation on it twice. The check rereads the run; the pass goes on with the
-     * caller's snapshot, which is the value every transition below is fenced on, and a
-     * second driver holding a stale one must not match it.
+     * The deadline is weighed after the status check: a run already rolling back would otherwise be
+     * expired twice. The pass goes on with the caller's snapshot, the value its transitions fence
+     * on.
      *
      * @throws Throwable
      */
@@ -212,8 +189,6 @@ class FlowExecutor
     }
 
     /**
-     * Replay handle() until the pass ends, interpreting what it throws.
-     *
      * @throws Throwable
      */
     private function replay(FlowRuntime $runtime, FlowRun $flowRun, RunMode $mode): FlowRun
@@ -245,9 +220,6 @@ class FlowExecutor
     }
 
     /**
-     * Run the workflow's handle(). The runtime is unbound however the call leaves, so it
-     * is already unbound by the time the caller reads the throw that ended the pass.
-     *
      * @throws Throwable
      */
     private function callHandle(FlowRuntime $runtime, FlowRun $flowRun): mixed
@@ -265,17 +237,8 @@ class FlowExecutor
     }
 
     /**
-     * Rebuild the compensation stack for a run: replay handle() in collecting mode
-     * so completed steps register their compensations and the replay stops at the
-     * live frontier. Every seam is guarded, so the pass starts no work and settles
-     * no step; a workflow's own tag() calls still rewrite their rows, as they do on
-     * every replay. The history is read from the writer, whatever the connection's
-     * routing. Planned from three places — compensate(), the expiration sweep and
-     * a parent closing a child — so a throw no seam of its own raised is a fault, not a
-     * frontier: it leaves rather than shortening the stack behind the caller's back.
-     * Where it lands is then the caller's to answer. The sweep and compensate() plan twice —
-     * once before taking control of the run and once after, through replanCompensations();
-     * a child close plans once, with the child already fenced.
+     * A throw no seam of this run raised is a fault, not a frontier: it leaves rather than
+     * shortening the stack behind the caller's back.
      *
      * @return list<CompensationEntry>
      *
@@ -296,17 +259,8 @@ class FlowExecutor
     }
 
     /**
-     * The plan a rollback acts on, made with the run already fenced: one drawn before
-     * the transition is older than the run it describes, and a step whose owed attempt
-     * landed in between belongs in the stack.
-     *
-     * The later plan is not always the longer one. An attempt that claimed a failed step
-     * in the same gap leaves it Running, and a compensation the first plan held for it
-     * — compensateStepOnSelfFailure() registers one — is not there to be read again. A
-     * parallel block can lose an ordinal that way and gain another in the same pass, so
-     * an ordinal missing from the later plan is restored from the earlier one rather
-     * than the whole plan being taken from it. Only a replay that throws falls back
-     * wholesale, having left nothing to merge.
+     * The plan drawn under Cancelling is not always the longer one: a step claimed in the gap is
+     * Running again, so an ordinal missing from it is restored from the earlier plan.
      *
      * @param  list<CompensationEntry>  $planned
      * @return list<CompensationEntry>
@@ -352,9 +306,6 @@ class FlowExecutor
     }
 
     /**
-     * Both plans list their ordinals ascending, which is the order the stack is unwound
-     * in reverse and the order a parallel block's members sit adjacent in, so keying by
-     * ordinal and sorting restores a stack either one on its own would have produced.
      * The later reading of an ordinal wins: it is the one taken under the fence.
      *
      * @param  list<CompensationEntry>  $planned
@@ -394,26 +345,21 @@ class FlowExecutor
         $runtime->reset();
         $runtime->beginCollecting();
 
-        // Every exit unbinds, including the ones that leave by throwing, so nothing
-        // that escapes this pass can be read as though a run were still bound.
         try {
-            // Only the throws below end the pass. Swallowing any other hands back a stack
-            // truncated at that point, for compensate() to unwind and report as a complete
-            // rollback. It leaves here instead, before the run has been touched, so the
-            // operator sees the cause and still has a run to retry the rollback on.
             try {
                 $workflow = app()->make($flowRun->workflow_class, ['runtime' => $runtime]);
 
                 /** @var array<int, mixed> $arguments */
                 $arguments = (array) $this->serializer->deserialize($flowRun->arguments ?? []);
 
+                // Any other throw leaves: swallowed, it would hand back a cut-short stack that the
+                // caller unwinds and reports as a complete rollback.
                 $this->callWithDependencies($workflow, 'handle', $arguments);
             } catch (InternalFlowControl) {
                 // The frontier: a seam that cannot be resolved from history yet.
             } catch (ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowExpiredException|ChildWorkflowCancelledException $ending) {
-                // Each of these ends the pass only when one of its own seams raised it
-                // off this run's history. All six are public classes a workflow can
-                // build, so the class alone says nothing about who raised it.
+                // All six are public classes a workflow can throw itself; only this run's seams end
+                // the pass.
                 if (! $runtime->raised($ending)) {
                     throw $ending;
                 }
@@ -427,9 +373,6 @@ class FlowExecutor
     }
 
     /**
-     * A child that ended before Waiting was on record found this run awake, so the pass goes
-     * on.
-     *
      * @throws Throwable
      */
     private function suspendOn(FlowSuspended $suspended, FlowRuntime $runtime, FlowRun $flowRun, RunMode $mode): FlowRun
@@ -447,9 +390,6 @@ class FlowExecutor
     }
 
     /**
-     * Run a pass with the package's connection reading from the writer, then hand it back
-     * reading as it did.
-     *
      * @template TPass
      *
      * @param  callable(): TPass  $pass
@@ -518,10 +458,6 @@ class FlowExecutor
     }
 
     /**
-     * Business failure: roll back the compensation stack gathered by the failing
-     * pass (LIFO), then land in Failed. An empty stack — or a history-contract
-     * mismatch, which must bypass compensation — fails directly.
-     *
      * @throws Throwable
      */
     private function failAndCompensate(
@@ -530,6 +466,7 @@ class FlowExecutor
         Throwable $exception,
         RunMode $mode
     ): FlowRun {
+        // The history no longer matches the code, so a stack built from it cannot be trusted.
         if ($exception instanceof HistoryContractMismatchException) {
             return $this->failFlow($flowRun, $exception);
         }
@@ -567,16 +504,8 @@ class FlowExecutor
     }
 
     /**
-     * Expire an overdue run. Mirrors FlowHandle::compensate() but lands in Expired:
-     * rebuild the compensation stack by a compensation-only replay, move the run into
-     * Cancelling, plan again and roll that plan back (queued) before finalizing as
-     * Expired. A run with nothing to undo takes the same road, so a step that completes
-     * while its empty plan is drawn is in the plan that is acted on.
-     * Shared by the monitor's sweep (FlowMonitor::expireRun) and the lazy drive check.
-     *
-     * Guarded separately from drive(), because the sweep reaches it directly: one run
-     * claimed by someone else in the meantime must not end the whole pass. The re-entry
-     * refusal is raised here rather than left to the planning replay below, whose own
+     * Guarded apart from drive(): the sweep calls it directly, and one run taken by someone else
+     * must not end the whole sweep. The re-entry refusal is raised here: the planning replay's own
      * wrapper would hand a predicate a planning fault to read as an ordinary failure.
      *
      * @throws Throwable
@@ -593,11 +522,8 @@ class FlowExecutor
     }
 
     /**
-     * Read the run as the writer holds it. Every caller of this decides something on the
-     * answer — whether a pass may begin, or how a parent resolves this run as a child —
-     * and a lagging replica would answer with the state the read exists to replace. A
-     * pruned row has no answer to give, so the caller's snapshot stands in; nothing acts
-     * on it that a fenced write would not refuse anyway.
+     * A pruned row falls back to the caller's snapshot; a fenced write refuses anything acted on
+     * it.
      */
     private function reread(FlowRun $flowRun): FlowRun
     {
@@ -611,9 +537,7 @@ class FlowExecutor
     {
         $primary = $this->exceptionToArray(FlowExpiredException::forFlowRun($flowRun));
 
-        // Named, because what the sweep does about a failure depends entirely on
-        // whether it happened here. The run has not been moved yet, so one whose
-        // rollback cannot be planned keeps the status it was found in.
+        // Named: the sweep treats a plan that fails before the move apart from every other failure.
         try {
             $entries = $this->collectCompensations($flowRun);
         } catch (Throwable $planning) {
@@ -630,18 +554,9 @@ class FlowExecutor
     }
 
     /**
-     * Carry a stalled rollback to the end its intent names, as the owner it is taken from
-     * would have. The caller found it stalled (FlowRun::rollbackStalled()); the takeover
-     * is a conditional write on the run row alone that replaces the owner token the caller
-     * read, so of two recoverers one wins, and a run taken over or landed since it was
-     * read is left alone. Compensation rows are not read under that write: a claim carries the owner it
-     * was sent by and is refused once the token has changed, which is what keeps the
-     * earlier owner's late jobs from running.
-     * The plan is drawn again under Cancelling, where nothing can complete another step,
-     * and every compensation the earlier owner settled is reused rather than run again. A
-     * rollback that undoes nothing lands without a plan.
-     *
-     * Returns whether this call took the rollback over.
+     * The takeover replaces the owner token the caller read, so of two recoverers one wins; the
+     * earlier owner's late compensation claims are refused on the token. Returns whether it took
+     * over.
      *
      * @throws RollbackNotPlannedException the rollback was taken over but could not be planned
      * @throws Throwable
@@ -685,9 +600,6 @@ class FlowExecutor
         return true;
     }
 
-    /**
-     * A run is overdue when expiration is enabled and its deadline has passed.
-     */
     private function isExpired(FlowRun $flowRun): bool
     {
         return (bool) config('saga-lara-flow.monitor.expiration.enabled')

@@ -12,11 +12,8 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Runs a single compensation to its terminal state. Shared by sync inline
- * rollback (SagaRunner) and the queued RunCompensationJob. A compensation that
- * throws is recorded as Failed and the throwable is swallowed — rollback policy
- * (Stop vs Continue) is decided by SagaRunner from the recorded status, never by
- * letting the job itself fail.
+ * A compensation that throws is recorded as Failed and swallowed: the rollback policy reads the
+ * row.
  */
 class CompensationExecutor
 {
@@ -27,10 +24,7 @@ class CompensationExecutor
     ) {}
 
     /**
-     * Mirrors ActionDispatcher::execute(): anything but Executed means someone else is
-     * handling this row, never that the compensation failed. ClaimLost is the row
-     * being unavailable before anything ran; Superseded is the undo having run with
-     * its outcome dropped.
+     * @see ActionDispatcher::execute()
      *
      * @throws Throwable
      */

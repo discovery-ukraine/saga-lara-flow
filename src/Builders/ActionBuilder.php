@@ -45,15 +45,8 @@ use InvalidArgumentException;
 use Throwable;
 
 /**
- * Fluent builder for a single action step. run() is the replay seam: it identifies the
- * step by its (flow_run_id, sequence) ordinal and either returns the stored result,
- * rethrows the stored failure, or schedules the step — executing it inline in sync mode —
- * and suspends the flow.
- * compensateWith() registers a compensation pushed onto the saga stack when the step
- * resolves Completed; the step's OWN failure does not trigger it unless
- * compensateStepOnSelfFailure() opts in. That and onCompensationFailure() resolve with
- * precedence action > group (saga()) > config. Constructed by the engine, and reachable
- * for subclassing only by overriding Workflow::action(): its signatures are internal.
+ * Constructed by the engine and reachable for subclassing only through Workflow::action(): its
+ * signatures are internal.
  */
 class ActionBuilder
 {
@@ -95,9 +88,7 @@ class ActionBuilder
     ) {}
 
     /**
-     * Register the compensation for this step: either a class (recommended for
-     * durability) or a closure (serialized via SerializableClosure). For a class the
-     * variadic arguments are passed to its handle(); a closure captures its own.
+     * A class receives the variadic arguments in its handle(); a closure captures its own.
      */
     public function compensateWith(string|Closure $compensation, mixed ...$arguments): static
     {
@@ -116,9 +107,7 @@ class ActionBuilder
     }
 
     /**
-     * Same idea as reclaimStaleAfter(), but for this step's registered compensation
-     * (sagas.reclaim.stale_running): allow a compensation row still Running to be
-     * reclaimed once it has sat this many seconds since started_at.
+     * reclaimStaleAfter() for this step's compensation.
      */
     public function reclaimCompensationStaleAfter(int $seconds): static
     {
@@ -134,9 +123,7 @@ class ActionBuilder
     }
 
     /**
-     * Force this step's compensation stale-Running reclaim on or off, independently
-     * of sagas.reclaim.stale_running.enabled. See enableStaleReclaim() for the same
-     * idea applied to the step's own execution.
+     * enableStaleReclaim() for this step's compensation.
      */
     public function enableCompensationStaleReclaim(bool $enabled = true): static
     {
@@ -146,9 +133,7 @@ class ActionBuilder
     }
 
     /**
-     * Make this an optional step: its failure does not fail the flow. The action
-     * still respects its $tries; once retries are exhausted, it lands OptionalFailed
-     * (an action.optional_failed event is recorded) and run() returns the fallback.
+     * Once its $tries are spent the step lands OptionalFailed and run() returns the fallback.
      */
     public function continueOnFailure(bool $continue = true): static
     {
@@ -157,9 +142,6 @@ class ActionBuilder
         return $this;
     }
 
-    /**
-     * Value returned by run() when an optional step gives up (defaults to null).
-     */
     public function fallbackValueOnFail(mixed $value): static
     {
         $this->fallbackValueOnFail = $value;
@@ -167,11 +149,6 @@ class ActionBuilder
         return $this;
     }
 
-    /**
-     * Set a wall-clock deadline for this step. If the monitor finds it still
-     * pending/running past this instant it marks it Expired; on replay an
-     * expired non-optional step fails the flow, an optional one returns its fallback.
-     */
     public function expiresAt(?DateTimeInterface $expiresAt): static
     {
         $this->expiresAt = $expiresAt;
@@ -180,11 +157,7 @@ class ActionBuilder
     }
 
     /**
-     * Allow this step's own claim to reclaim a row still Running once it has sat
-     * this many seconds since started_at — recognizing a worker that died
-     * mid-execution. Also enables the mechanism for this step regardless of
-     * actions.reclaim.stale_running.enabled. See enableStaleReclaim() to toggle the
-     * mechanism without changing (or without knowing) the threshold.
+     * Reclaim a row still Running this many seconds after started_at; enables the mechanism too.
      */
     public function reclaimStaleAfter(int $seconds): static
     {
@@ -200,11 +173,7 @@ class ActionBuilder
     }
 
     /**
-     * Force this step's stale-Running reclaim on or off, independently of
-     * actions.reclaim.stale_running.enabled — in either direction: turn it on for one
-     * step while it stays off globally, or off for one step while it is on globally.
-     * With $enabled = true and no threshold set via reclaimStaleAfter(), the step
-     * uses config's after_seconds.
+     * Overrides actions.reclaim.stale_running.enabled in either direction for this step.
      */
     public function enableStaleReclaim(bool $enabled = true): static
     {
@@ -214,13 +183,8 @@ class ActionBuilder
     }
 
     /**
-     * Wait for a named signal instead of failing this step. When the step gives up (its queue
-     * $tries are spent) the flow parks: the step lands AwaitingRetry, a wait-signal is
-     * recorded, and the run goes Waiting. Delivering $signal re-runs THIS step alone, at the
-     * same ordinal with the same arguments, so replay stays deterministic. $maxRetries caps
-     * the cycles, $waitSeconds bounds ONE wait, $only restricts the policy to exception
-     * classes and $when has the final say; once any refuses, the step fails as it would have
-     * without a policy. A RetryPolicy passed as $signal carries all four instead.
+     * Park the step on $signal instead of failing it; a RetryPolicy passed as $signal carries the
+     * rest.
      *
      * @param  list<class-string<Throwable>>|null  $only
      * @param  ?Closure(RetryContext): bool  $when
@@ -238,10 +202,7 @@ class ActionBuilder
     }
 
     /**
-     * Also compensate this step if the step itself fails (not only when a later step
-     * fails). For non-atomic actions that may leave partial effects. The compensation
-     * must be idempotent and tolerate "the step did nothing". Overrides the group and
-     * config defaults.
+     * The compensation must tolerate a step that did nothing.
      */
     public function compensateStepOnSelfFailure(bool $compensate = true): static
     {
@@ -251,8 +212,7 @@ class ActionBuilder
     }
 
     /**
-     * Internal: attach saga() group context to this step (called by SagaStepBuilder).
-     * The step's own compensation/policy is set via the public methods above.
+     * @internal
      */
     public function withSagaGroup(
         ?CompensationFailurePolicy $groupCompensationFailurePolicy,
@@ -267,8 +227,6 @@ class ActionBuilder
     }
 
     /**
-     * Resolve this step against stored history, or schedule/run it and suspend.
-     *
      * @throws HistoryContractMismatchException
      * @throws Throwable
      */
@@ -303,10 +261,6 @@ class ActionBuilder
         $suspender->suspend('action', $sequence);
     }
 
-    /**
-     * Everything this builder has resolved about the step, in the shape the dispatcher
-     * and the recorder consume. Both transports schedule from the same description.
-     */
     private function schedule(): ActionSchedule
     {
         return new ActionSchedule(
@@ -317,10 +271,8 @@ class ActionBuilder
             expiresAt: $this->resolvedExpiresAt(),
             actionName: $this->resolvedActionName(),
             retrySignal: $this->retry?->signal,
-            // Only a step that carries the policy gets a ceiling written. Storing the
-            // global default on every action would leave an unrelated number in the
-            // column, and awaitRetry()'s ??= would then keep it instead of the ceiling
-            // the seam actually parked on when a later deploy adds retryOnSignal().
+            // Only with a policy: awaitRetry()'s ??= would otherwise keep an unrelated global
+            // default.
             retrySignalMaxAttempts: $this->retry?->resolvedMaxRetries(),
             reclaimStaleAfterSeconds: $this->reclaimStaleAfterSeconds,
             reclaimStaleEnabled: $this->reclaimStaleEnabled,
@@ -328,9 +280,6 @@ class ActionBuilder
     }
 
     /**
-     * Sync mode: run the step in this process, then replay. Never returns — every path
-     * out either suspends or rethrows.
-     *
      * @throws FlowSuspended
      * @throws Throwable
      */
@@ -341,13 +290,9 @@ class ActionBuilder
         int $sequence,
     ): never {
         try {
-            // The result needs no branching: a step that ran and one that was
-            // superseded mid-run both resolve on the replay below, from whatever the
-            // row ended up holding.
             $dispatcher->runInline($flowRun, $sequence, $schedule);
         } catch (ActionClaimFailedException $exception) {
-            // A broken invariant, not a retryable business failure — nothing was
-            // recorded on the row for the checks below to make sense of.
+            // A broken invariant, not a business failure: nothing is on the row to resolve.
             throw $exception;
         } catch (Throwable $exception) {
             $this->settleInlineFailure($exception, $schedule, $flowRun, $sequence);
@@ -357,9 +302,6 @@ class ActionBuilder
     }
 
     /**
-     * Decide what an inline throw means, in the order the outcomes exclude each other.
-     * Never returns: it either suspends so replay resolves the step, or rethrows.
-     *
      * @throws FlowSuspended
      * @throws Throwable
      */
@@ -371,18 +313,12 @@ class ActionBuilder
     ): never {
         $suspender = app(FlowSuspender::class);
 
-        // A step with a retry policy is resolved solely on replay: only the seam knows
-        // the only-filter and the budget. Replay so it sees the Failed row and decides
-        // whether to park or to give up — but only when the row really did fail. A
-        // throw from before that (a listener, an observer, an action class that will
-        // not resolve) leaves nothing for the seam to read, and replaying would suspend
-        // a sync run on a job that does not exist.
+        // Only a recorded failure goes to the seam: a throw from before it (a listener, an action
+        // class that will not resolve) would suspend a sync run on a job that does not exist.
         if ($this->retry !== null && $this->recordedFailure($flowRun->id, $sequence)) {
             $suspender->suspendInline('action', $sequence);
         }
 
-        // Optional step: no retries inline, so give up now — mark it OptionalFailed and
-        // replay so the seam resolves the fallback.
         if ($schedule->continueOnFailure) {
             $this->markOptionalFailed($flowRun->id, $sequence);
 
@@ -406,14 +342,10 @@ class ActionBuilder
             case ActionStatus::AwaitingRetry:
                 return $this->resolveAwaitingRetry($step, $sequence);
             case ActionStatus::OptionalFailed:
-                // Terminal, even when the workflow now carries a policy, the row was
-                // scheduled without: the give-up hook has already published
-                // action.optional_failed. A row that carries the policy never lands
-                // here until the seam itself ends the retries.
+                // Terminal even if a later deploy added a policy: action.optional_failed is
+                // published.
                 return $this->resolveOptionalFailed($step, $sequence);
             case ActionStatus::Expired:
-                // Monitor-enforced expiry. An optional step gives up gracefully
-                // (fallback); a required one surfaces the expiry as a business error.
                 if ($this->resolvedContinueOnFailure()) {
                     return $this->resolveOptionalFailed($step, $sequence);
                 }
@@ -421,9 +353,8 @@ class ActionBuilder
                 $this->resolveExpired($step, $sequence);
                 // no break — resolveExpired never returns.
             case ActionStatus::Failed:
-                // The queue still owes this step attempts of its own: let them play
-                // out before a retry cycle is spent on what may be transient. Without
-                // this a signal could park — and re-run — a step still in flight.
+                // The queue's own attempts play out first, or a signal could re-run a step in
+                // flight.
                 if ($this->carriesRetryPolicy($step) && $this->queueRetriesRemain($step)) {
                     app(FlowSuspender::class)->suspend('action', $sequence);
                 }
@@ -433,10 +364,8 @@ class ActionBuilder
                         $this->parkForRetry($step, $sequence);
                     }
                 } catch (RetryPolicyReentryException $reentry) {
-                    // The predicate is broken, but the step under it really did fail,
-                    // and the rollback is built from this pass alone — so without this
-                    // the one thing the run forgets is the compensation the caller
-                    // asked for on this very step.
+                    // A broken predicate still leaves a failed step, and the rollback is built from
+                    // this pass.
                     if ($this->shouldCompensateFailedStep()) {
                         $this->pushCompensation($step->id, $sequence);
                     }
@@ -444,16 +373,12 @@ class ActionBuilder
                     throw $reentry;
                 }
 
-                // An optional step still has retries left: it is not yet
-                // OptionalFailed, so wait rather than surface a business error.
                 if ($this->resolvedContinueOnFailure()) {
                     if ($this->retry !== null) {
                         return $this->giveUpAfterRetry($step, $sequence);
                     }
 
-                    // The hook leaves a step carrying a policy for the seam to
-                    // settle. If a deploy removed retryOnSignal() before the queue ran
-                    // out, nothing will write OptionalFailed and no job is left.
+                    // A deploy removed retryOnSignal() after the hook left the step to the seam.
                     if ($step->retry_signal !== null && $step->queue_attempts_exhausted) {
                         return $this->giveUpAfterRetry($step, $sequence);
                     }
@@ -462,16 +387,11 @@ class ActionBuilder
                 }
 
                 $this->resolveFailed($step, $sequence);
-                // Still in flight (queued job not finished): suspend until resumed.
             default:
                 app(FlowSuspender::class)->suspend('action', $sequence);
         }
     }
 
-    /**
-     * Replay a completed step: register its compensation (now known to have
-     * succeeded) and return the stored result.
-     */
     private function resolveCompleted(ActionRun $step, int $sequence): mixed
     {
         $this->pushCompensation($step->id, $sequence);
@@ -480,9 +400,6 @@ class ActionBuilder
     }
 
     /**
-     * Replay a failed step: optionally register its compensation (opt-in, for
-     * non-atomic steps) then surface the failure as a business error.
-     *
      * @throws Throwable
      */
     private function resolveFailed(ActionRun $step, int $sequence): never
@@ -497,10 +414,6 @@ class ActionBuilder
     }
 
     /**
-     * Replay a required step the monitor expired: optionally register its
-     * compensation (opt-in, for non-atomic steps) then surface the expiry as a
-     * business error so the flow fails and rolls back.
-     *
      * @throws Throwable
      */
     private function resolveExpired(ActionRun $step, int $sequence): never
@@ -512,11 +425,6 @@ class ActionBuilder
         throw $this->runtime->raising(FlowExpiredException::forAction($this->actionClass, $sequence));
     }
 
-    /**
-     * Replay an optional step that gave up: register its compensation if opted in
-     * (the step may have left partial effects), then return the fallback so the
-     * workflow carries on as if the step had not happened.
-     */
     private function resolveOptionalFailed(ActionRun $step, int $sequence): mixed
     {
         if ($this->shouldCompensateFailedStep()) {
@@ -527,9 +435,6 @@ class ActionBuilder
     }
 
     /**
-     * Replay a step parked on its retry signal: retry it when the signal landed,
-     * give up when the wait timed out, keep waiting otherwise.
-     *
      * @throws FlowSuspended
      * @throws Throwable
      */
@@ -537,8 +442,7 @@ class ActionBuilder
     {
         $suspender = app(FlowSuspender::class);
 
-        // Compensation-only planning never restarts work and never mutates the parked
-        // step: it is the live frontier, so stop here.
+        // The parked step is the frontier.
         if ($this->runtime->isCollecting()) {
             $suspender->suspend('action', $sequence);
         }
@@ -546,38 +450,27 @@ class ActionBuilder
         $signal = app(SignalRepository::class)
             ->latestForSequence($this->runtime->run()->id, $sequence);
 
-        // No wait-signal to resolve (history repaired or pruned): keep waiting
-        // rather than invent a retry the operator never asked for.
+        // History repaired or pruned: keep waiting rather than invent a retry.
         if ($signal === null) {
             $suspender->suspend('action', $sequence);
         }
 
-        // The monitor timed the wait out: fail the way this step would have failed
-        // if it had never carried a retry policy.
         if ($signal->status === SignalStatus::TimedOut) {
             return $this->giveUpAfterRetry($step, $sequence);
         }
 
-        // Delivered while we were parked: bind it to this ordinal and retry.
         if ($signal->status === SignalStatus::Received) {
             $this->consumeAndRetry($signal, $step, $sequence);
         }
 
-        // Bound by a pass that died before the retry landed: the wait is over.
         if ($signal->status === SignalStatus::Consumed) {
             $this->retryNow($step, $sequence);
         }
 
-        // Still Waiting — but a signal delivered while this seam was looking for one
-        // lands as a floating row that deliver() never matched against the wait-signal.
-        // Take it here so the very first signal is not swallowed.
+        // A delivery that raced the parking floats instead of matching the wait-signal.
         $delivered = app(SignalRepository::class)
             ->earliestPendingSince($this->runtime->run()->id, $signal->name, $step->finished_at);
 
-        // Close the spent wait-signal, bind the floating row to this ordinal so no later
-        // await consumes the same signal twice, and spend the cycle it pays for — all
-        // three together. A lost claim means a delivery landed in the wait-signal itself,
-        // which the next replay resolves.
         if ($delivered !== null
             && $this->handOverAndRetry($signal, $delivered, $step, $sequence)
             && $this->retrySurvivedCommit($step)) {
@@ -590,10 +483,6 @@ class ActionBuilder
     }
 
     /**
-     * Park a failed step on its retry signal and suspend the flow. Never returns: either
-     * the retry starts immediately (a signal was already delivered) or the flow goes
-     * Waiting until one is.
-     *
      * @throws FlowSuspended
      * @throws Throwable
      */
@@ -613,9 +502,7 @@ class ActionBuilder
 
         $flowRun = $this->runtime->run();
 
-        // The signal may have been delivered in the window between this attempt's
-        // failure being written and this replay parking. Take it only if it arrived
-        // after the attempt finished — an older floating signal belongs elsewhere.
+        // A floating signal older than the failed attempt belongs to something else.
         $delivered = app(SignalRepository::class)
             ->earliestPendingSince($flowRun->id, $signal, $step->finished_at);
 
@@ -623,14 +510,11 @@ class ActionBuilder
             $this->consumeAndRetry($delivered, $step, $sequence);
         }
 
-        // Adopt a signal an earlier pass left open here instead of recording a second
-        // one: delivery fulfils the OLDEST open row for a name while
-        // resolveAwaitingRetry() reads the NEWEST, so two would strand the run.
+        // Adopted, not recorded twice: delivery fills the oldest open row, resolution reads the
+        // newest.
         $abandoned = app(SignalRepository::class)->latestForSequence($flowRun->id, $sequence);
 
         if ($abandoned !== null && $abandoned->name === $signal) {
-            // Delivered into that row before this replay reached it: acknowledged,
-            // and it belongs to this park, so spend it rather than lose it.
             if ($abandoned->status === SignalStatus::Received) {
                 $this->consumeAndRetry($abandoned, $step, $sequence);
             }
@@ -644,15 +528,7 @@ class ActionBuilder
     }
 
     /**
-     * Write the parking — the wait-signal at this ordinal and the step's transition to
-     * AwaitingRetry — in one transaction, so a process that dies mid-parking leaves either all
-     * of it or none. Suspending stays outside: it throws, and a throw inside would roll the
-     * parking back. $record is false when an open signal from an earlier pass was adopted.
-     *
-     * A parking that loses its fence writes neither row, fires no ActionAwaitingRetry, and
-     * suspends like a won one: whatever moved the row wrote where the step really is, and the
-     * suspension leaves no wait behind because none was recorded. So does a parking its
-     * transaction discarded, which leaves the step Failed for the next replay to park again.
+     * Suspending stays outside the transaction: it throws, and would roll the parking back.
      *
      * @throws FlowSuspended
      * @throws Throwable
@@ -670,16 +546,12 @@ class ActionBuilder
                     );
                 }
 
-                // The wait-signal must go back with the transition it was recorded for:
-                // left standing, it is the newest open wait for its name, so a delivery
-                // would be swallowed by a park that never happened.
+                // A refused park takes its wait-signal back: left standing, it would be the newest
+                // open wait for its name and swallow the next delivery.
                 return app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step))
                     ?? throw new FencedWriteLost;
             });
         } catch (FencedWriteLost) {
-            // Nothing was written, and there is nothing left to resolve from: whatever
-            // moved the row recorded where the step really is, and a run that ended has
-            // no next step to take. Wait, and read it on the following replay.
             app(FlowSuspender::class)->suspend('action', $sequence);
         }
 
@@ -691,11 +563,7 @@ class ActionBuilder
     }
 
     /**
-     * Whether the parking is on record now its transaction has closed, for the reason
-     * retrySurvivedCommit() reads back a rewind. The witness is the parking's own history
-     * row: written in the same transaction and never changed after, so a delivery or a
-     * cancellation that moves the step on in between does not read as a lost parking. It is
-     * read past the model's scopes, which decide what a host sees, not what was written.
+     * The witness is the parking's own history row, never changed after, read past model scopes.
      */
     private function parkSurvivedCommit(ActionRun $step, Model $parking): bool
     {
@@ -719,11 +587,7 @@ class ActionBuilder
     }
 
     /**
-     * Close a spent wait-signal, claim the floating delivery that ended its wait, and
-     * spend the cycle it pays for — one transition, so a delivery is never consumed
-     * without the retry it bought. Returns false when nothing was written: the wait
-     * received a delivery of its own, or the step moved on under this pass; either way
-     * the next replay resolves it from the row as it stands.
+     * One transaction, so a delivery is never consumed without the retry it bought.
      *
      * @throws Throwable
      */
@@ -761,13 +625,7 @@ class ActionBuilder
     }
 
     /**
-     * Whether the cycle this pass spent is on record now its transaction has closed. A
-     * commit reporting success is not proof: the rewind records a flow_events row inside
-     * that transaction, so a host observer on it runs there too, and on PostgreSQL a
-     * failing statement it swallows turns the commit into a rollback while still
-     * reporting success — the trap ActionRecorder::claimSurvivedCommit() exists for.
-     * Starting the step on a rewind that was undone claims a row still parked, and that
-     * failure reaches the drive loop as a business one.
+     * On PostgreSQL a host observer swallowing a failure turns the commit into a rollback.
      */
     private function retrySurvivedCommit(ActionRun $step): bool
     {
@@ -786,10 +644,6 @@ class ActionBuilder
     private function consumeAndRetry(FlowSignal $signal, ActionRun $step, int $sequence): never
     {
         try {
-            // Spending the signal and spending the cycle it pays for are one transition:
-            // a crash between them would leave the signal Consumed and the step Failed,
-            // and the next replay — which only looks for an unconsumed signal — would park
-            // again for a delivery nobody owes. Starting the step stays outside.
             $this->connection()->transaction(function () use ($signal, $step, $sequence): void {
                 app(SignalRecorder::class)->consumeSignal($this->runtime->run(), $signal, $sequence);
 
@@ -798,15 +652,11 @@ class ActionBuilder
                     $this->resolvedExpiresAt(),
                     publish: false,
                 )) {
-                    // The row moved on under this pass. Rolling back is what keeps the
-                    // delivery: a consumed signal with no cycle behind it would pay for
-                    // a retry nobody ran, and no later pass looks for it again.
+                    // Rolling back keeps the delivery for the pass that did move the row.
                     throw new FencedWriteLost;
                 }
             });
         } catch (FencedWriteLost) {
-            // Nothing was written, so the row still says what it says. Wait for the pass
-            // that did move it, and resolve from the row as it stands next time.
             app(FlowSuspender::class)->suspend('action', $sequence);
         }
 
@@ -819,20 +669,12 @@ class ActionBuilder
         $this->startRetriedStep($step, $sequence);
     }
 
-    /**
-     * The package's own connection, for the writes of the retry protocol that have to
-     * land together or not at all.
-     */
     private function connection(): ConnectionInterface
     {
         return DB::connection(config('saga-lara-flow.database.connection') ?: null);
     }
 
     /**
-     * Spend one retry cycle and run the step again at its own ordinal: rewind the row
-     * to Pending, then start it. Used where the signal that pays for the cycle was
-     * already consumed by an earlier pass.
-     *
      * @throws FlowSuspended
      */
     private function retryNow(ActionRun $step, int $sequence): never
@@ -846,10 +688,6 @@ class ActionBuilder
     }
 
     /**
-     * Run a step the seam has just rewound to Pending: inline (sync) or as a fresh
-     * job (queued). Either way the flow replays from the top afterwards, so the next
-     * pass decides what the new outcome means.
-     *
      * @throws FlowSuspended
      */
     private function startRetriedStep(ActionRun $step, int $sequence): never
@@ -859,19 +697,13 @@ class ActionBuilder
 
         if ($this->runtime->mode() === RunMode::Sync) {
             try {
-                // retryAction() rewound this exact row to Pending in the same call
-                // chain, so nothing else can have taken it before we did: losing the
-                // claim here is a broken invariant. Being superseded afterwards is not
-                // — the monitor and the doctor act on this row from their own
-                // processes — and the replay below resolves whatever they left.
+                // Rewound in this call chain, so a lost claim is a broken invariant.
                 if ($dispatcher->execute($step, inline: true) === StepExecution::ClaimLost) {
                     throw ActionClaimFailedException::forAction($step->action_class, $sequence);
                 }
             } catch (ActionClaimFailedException $exception) {
                 throw $exception;
             } catch (Throwable) {
-                // The failure is already persisted on the row; the replay below is
-                // what decides whether to park again or to give up.
             }
 
             $suspender->suspendInline('action', $sequence);
@@ -882,25 +714,13 @@ class ActionBuilder
         $suspender->suspend('action', $sequence);
     }
 
-    /**
-     * The retry policy is over (budget spent, wait timed out, or the failure fell
-     * outside only): resolve the step exactly as it would have resolved without the
-     * policy. An optional step is marked OptionalFailed here — the queued give-up
-     * hook deliberately leaves that to the seam for a step with a retry signal —
-     * unless this pass is only collecting compensations, which settles no step.
-     */
     private function giveUpAfterRetry(ActionRun $step, int $sequence): mixed
     {
-        // Suspending here instead would be the obvious guard and the wrong one: the
-        // replay would stop at this step, and every compensation after it — the whole
-        // point of collecting — would be missing from the rollback. So the give-up is
-        // resolved from the row as it stands and written by the next ordinary replay.
+        // Not a suspend: the plan needs every compensation after this step. A later replay writes
+        // it.
         $collecting = $this->runtime->isCollecting();
 
         if (! $this->resolvedContinueOnFailure()) {
-            // A timed-out wait arrives here on an AwaitingRetry row (the other ways
-            // in are already Failed); leaving it would show a compensated run still
-            // holding a step that claims to be waiting.
             if (! $collecting) {
                 app(ActionRecorder::class)->settleAwaitingRetry($step);
             }
@@ -910,10 +730,7 @@ class ActionBuilder
 
         if (! $collecting && $step->status !== ActionStatus::OptionalFailed) {
             if (! app(ActionRecorder::class)->optionalFail($step)) {
-                // The give-up did not happen, so the fallback that stands for it is not
-                // this pass's to hand back: returning it would carry the replay past a
-                // step nothing resolved and — when what refused the write was the run
-                // ending — into work no settlement will ever close.
+                // The give-up did not land, so its fallback is not this pass's to return.
                 app(FlowSuspender::class)->suspend('action', $sequence);
             }
         }
@@ -922,10 +739,6 @@ class ActionBuilder
     }
 
     /**
-     * Whether this replay pass should park the failed step for a signal-gated retry.
-     * The seam decides alone: the only-filter is never persisted, and the budget and
-     * the wait are read from the row.
-     *
      * @throws InternalFlowControl
      */
     private function shouldRetryOnSignal(ActionRun $step): bool
@@ -940,9 +753,7 @@ class ActionBuilder
             return false;
         }
 
-        // A wait that timed out ends the policy, budget or no budget: the deadline
-        // bounds the waiting, not one wait out of many. Without this a step whose
-        // signal never comes would be handed a fresh wait on every replay.
+        // A timed-out wait ends the policy whatever the budget left.
         if ($this->waitTimedOut($step)) {
             return false;
         }
@@ -955,8 +766,7 @@ class ActionBuilder
     }
 
     /**
-     * The last gate, and the only one that runs the caller's own code — hence last,
-     * after three structural checks that cost a column read.
+     * Last: the only gate that runs the caller's code.
      *
      * @throws InternalFlowControl
      */
@@ -964,8 +774,7 @@ class ActionBuilder
     {
         $flowRun = $this->runtime->run();
 
-        // Built before the caller's code runs: reading our own row is not a defect in
-        // the predicate, and a throw here is ours and should surface.
+        // Built before the caller's code runs: a throw here is the engine's, not the predicate's.
         $context = new RetryContext(
             runId: $flowRun->id,
             workflowClass: $flowRun->workflow_class,
@@ -982,10 +791,7 @@ class ActionBuilder
     }
 
     /**
-     * Whether a retry policy applies at all — the one the workflow asks for now, or
-     * the one the row was scheduled with. The row has to count, or removing
-     * retryOnSignal() would let an early replay finally fail a step the queue is
-     * still retrying.
+     * The row's policy counts too: removing retryOnSignal() must not fail a step the queue retries.
      */
     private function carriesRetryPolicy(ActionRun $step): bool
     {
@@ -993,11 +799,7 @@ class ActionBuilder
     }
 
     /**
-     * The budget this step is held to. The row carries the cap resolved when it was
-     * scheduled, and that is what the events and saga-flow:show report, so that is
-     * what replay enforces — otherwise a config change would silently move a cap the
-     * operator is still being shown. A row with no policy yet falls back to the
-     * resolved value.
+     * The row's cap, the one saga-flow:show reports, wins over a changed config.
      */
     private function budgetFor(ActionRun $step): ?int
     {
@@ -1006,11 +808,6 @@ class ActionBuilder
             : $step->retry_signal_max_attempts;
     }
 
-    /**
-     * Whether the wait at this step's ordinal has run out of time. The newest row
-     * there is the current wait: a spent cycle leaves it Consumed, and only the
-     * monitor writes TimedOut.
-     */
     private function waitTimedOut(ActionRun $step): bool
     {
         $signal = app(SignalRepository::class)
@@ -1019,12 +816,6 @@ class ActionBuilder
         return $signal?->status === SignalStatus::TimedOut;
     }
 
-    /**
-     * Whether Laravel's own queue retries are still outstanding. Read off the row,
-     * where the queue's failure hook wrote it, rather than re-derived from the
-     * action's $tries: that value lives in code and can change under a job already in
-     * flight. Sync mode has no queue behind it.
-     */
     private function queueRetriesRemain(ActionRun $step): bool
     {
         if ($this->runtime->mode() === RunMode::Sync) {
@@ -1034,15 +825,6 @@ class ActionBuilder
         return ! $step->queue_attempts_exhausted;
     }
 
-    /**
-     * Sync path: an optional inline action threw. Mark its just-persisted Failed row
-     * (looked up by its (flow_run_id, sequence) identity) as OptionalFailed so the
-     * replay resolves the fallback instead of a business error.
-     */
-    /**
-     * Whether the step at this ordinal is recorded as Failed — the state the seam
-     * needs to decide anything. A missing row counts as no failure.
-     */
     private function recordedFailure(string $flowRunId, int $sequence): bool
     {
         return app(ActionRunRepository::class)->find($flowRunId, $sequence)?->status === ActionStatus::Failed;
@@ -1057,10 +839,6 @@ class ActionBuilder
         }
     }
 
-    /**
-     * Sync path: the inline action threw. Register its compensation if opted in,
-     * looking the just-persisted Failed row up by its (flow_run_id, sequence) identity.
-     */
     private function registerFailedStepCompensation(string $flowRunId, int $sequence): void
     {
         if (! $this->shouldCompensateFailedStep()) {
@@ -1099,11 +877,6 @@ class ActionBuilder
             ?? (bool) config('saga-lara-flow.sagas.compensate_failed_step');
     }
 
-    /**
-     * Resolve whether this is an optional step: an explicit ->continueOnFailure()
-     * wins; otherwise fall back to the action's #[ContinueOnFailure] attribute,
-     * then to required (precedence: explicit call > attribute).
-     */
     private function resolvedContinueOnFailure(): bool
     {
         return $this->continueOnFailure
@@ -1111,12 +884,6 @@ class ActionBuilder
             ?? false;
     }
 
-    /**
-     * Resolve the step's wall-clock deadline: an explicit ->expiresAt() wins;
-     * otherwise the action's #[ActionTimeout] seconds from now (precedence:
-     * explicit call > attribute). The recorder still applies the config default
-     * when this is null.
-     */
     private function resolvedExpiresAt(): ?DateTimeInterface
     {
         if ($this->expiresAt !== null) {
@@ -1128,10 +895,6 @@ class ActionBuilder
         return $seconds === null ? null : now()->addSeconds($seconds);
     }
 
-    /**
-     * Resolve the step's display name from its #[ActionName] attribute (null when
-     * absent — the row then falls back to the class basename for display).
-     */
     private function resolvedActionName(): ?string
     {
         return app(AttributeReader::class)->action($this->actionClass)->name;

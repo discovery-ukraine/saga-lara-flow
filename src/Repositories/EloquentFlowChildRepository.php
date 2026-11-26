@@ -19,9 +19,6 @@ class EloquentFlowChildRepository implements FlowChildRepository
 
     public function active(string $parentFlowRunId): Collection
     {
-        // Filtered inline rather than via a model scope: the model is resolved
-        // dynamically (config), so its query is a generic Builder<FlowChild> on which
-        // static analysis cannot attach scope methods.
         $terminal = array_filter(ChildStatus::cases(), fn (ChildStatus $status) => $status->isTerminal())
                 |> (fn ($x) => array_map(fn (ChildStatus $status) => $status->value, $x))
                 |> array_values(...);

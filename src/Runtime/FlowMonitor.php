@@ -21,16 +21,8 @@ use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 /**
- * The opt-in expiration sweep — the package has no durable timers, so a
- * scheduled command (saga-flow:monitor) or an optional throttled queue-looping
- * listener calls sweep() periodically. One pass expires overdue runs, times out
- * stuck signal waits, and expires overdue action steps, each capped at the
- * configured batch size, and carries an expiry whose rollback stalled to the end.
- *
- * Every write the sweep performs moves the entity out of what its scan filters on (a
- * run leaves Running/Waiting, a wait-signal Waiting→TimedOut, an action
- * Pending/Running→Expired, a stalled rollback gets a new owner and a fresh updated_at),
- * so re-running sweep() is idempotent.
+ * Every write moves the entity out of what its scan filters on, so re-running sweep() is
+ * idempotent.
  */
 final readonly class FlowMonitor
 {
@@ -46,8 +38,6 @@ final readonly class FlowMonitor
     ) {}
 
     /**
-     * Run one expiration pass. Returns the number of entities acted on per category.
-     *
      * @return array{runs: int, signals: int, actions: int, rollbacks: int}
      *
      * @throws Throwable
@@ -60,8 +50,8 @@ final readonly class FlowMonitor
 
         $limit = (int) config('saga-lara-flow.monitor.expiration.batch_size', 100);
 
-        // Runs first: a run expired here leaves Waiting, so its own signals/actions
-        // are skipped by the two passes below (we never wake a run mid-rollback).
+        // Runs first: an expired run leaves Waiting, so the passes below skip its signals and
+        // steps.
         return [
             'runs' => $this->expireRuns($limit),
             'signals' => $this->timeoutSignals($limit),
@@ -71,9 +61,7 @@ final readonly class FlowMonitor
     }
 
     /**
-     * Throttled queue-worker hook (opt-in via config). Acquires a cache lock with a
-     * TTL equal to the throttle window and never releases it, so at most one sweep
-     * runs per window regardless of how many workers fire the Looping event.
+     * The lock is never released: its TTL is the throttle window.
      *
      * @throws Throwable
      */
@@ -108,19 +96,8 @@ final readonly class FlowMonitor
     }
 
     /**
-     * Expire an overdue run. The mechanism (rebuild the compensation stack, roll it
-     * back queued, finalize as Expired) lives on FlowExecutor — the owner of every
-     * run-terminal transition — and is shared with the lazy drive() deadline check.
-     *
-     * A run whose rollback the sweep could not plan is journalled, held off, and
-     * stepped over. Letting that throw out would cost far more than the run it came
-     * from: the same run would come back every sweep and the signal and action passes
-     * below would never run at all. The lazy check inside drive() has one run to answer
-     * for and still surfaces it.
-     *
-     * Only that failure, and it says so by its type. Everything else happened after
-     * the run had already been moved — by this pass or by whoever else was holding it
-     * — and swallowing it would hide a rollback that started and did not finish.
+     * Only a plan that fails before the move is stepped over: thrown, it would come back every
+     * sweep and starve the passes below. Anything later would hide a rollback that started.
      */
     private function expireRun(FlowRun $run): bool
     {
@@ -163,15 +140,8 @@ final readonly class FlowMonitor
     }
 
     /**
-     * Carry an expiry whose rollback stalled to the end — a process that died after
-     * moving the run into Cancelling, or a level whose job was lost. One that cannot be
-     * planned is held off and journalled like an expiry that could not be, for the same
-     * reasons.
-     *
-     * A takeover is held off too. The earlier owner's jobs claim nothing once it happens,
-     * so on a queue running further behind than the grace window, taking over again on
-     * every pass would leave each new owner's jobs stale by the time a worker reached
-     * them; the growing window lets the latest one's through.
+     * A takeover is held off too: on a queue further behind than the grace window, taking over on
+     * every pass would leave each new owner's jobs stale before a worker reached them.
      *
      * @throws Throwable
      */
@@ -202,20 +172,8 @@ final readonly class FlowMonitor
     }
 
     /**
-     * Step a run that could not be planned aside for a while, so the page moves on to
-     * the ones behind it and the journal stops repeating itself every pass. Unlike the
-     * doctor's throttle it never gives up: a planning failure can be temporary, and the
-     * growing window is what bounds one that is not.
-     *
-     * Written as a plain statement rather than through the model, for three reasons a
-     * save() got wrong: it raises no Eloquent events, so a host observer can neither
-     * cancel the hold-off nor throw out of a branch that must not throw; it leaves
-     * updated_at alone, which is the doctor's staleness clock; and it reads the count
-     * from the writer, so a stale replica read cannot roll an hour's window back to a
-     * minute. The write states back that the window is still open, so a second sweep on
-     * the same run cannot stack a hold-off on top of one that just happened — and since
-     * this is the only writer of either column, the count moves with the window and
-     * needs no separate check. Losing it means that sweep already did this.
+     * A plain statement: no Eloquent events, updated_at (the doctor's clock) untouched. Fenced on
+     * the window still being open, so two sweeps cannot stack a hold-off.
      */
     private function holdOff(FlowRun $run): void
     {
@@ -234,8 +192,7 @@ final readonly class FlowMonitor
                 'expiry_available_at' => $now->copy()->addSeconds($this->backoff($attempts)),
             ]);
 
-        // Refused: the sweep that got there first holds the count this run is now on,
-        // and the journal line below has to name that one rather than the stale read.
+        // Refused: the journal names the count the sweep that got there first wrote.
         $run->expiry_attempts = $written === 1 ? $attempts : $this->recordedAttempts($run);
     }
 
@@ -275,8 +232,7 @@ final readonly class FlowMonitor
             return false;
         }
 
-        // Lost to a delivery that landed since the batch was read: the wait is over
-        // on its own terms, and the replay the delivery already scheduled resolves it.
+        // Lost to a delivery since the read: its own replay resolves the wait.
         if (! $this->signalRecorder->timeoutSignal($signal)) {
             return false;
         }
@@ -307,9 +263,6 @@ final readonly class FlowMonitor
             return false;
         }
 
-        // A worker can settle the step between this sweep's select and its write, and
-        // the expiry refuses to overwrite that. Nothing was expired then, so there is
-        // nothing to count and no marker for a woken replay to resolve.
         $expired = $this->actionRecorder->expireAction(
             $action,
             $this->exceptionToArray(FlowExpiredException::forAction($action->action_class, $action->sequence)),
@@ -324,11 +277,6 @@ final readonly class FlowMonitor
         return true;
     }
 
-    /**
-     * Resume a still-waiting run so it replays and resolves the just-changed marker
-     * (a timed-out signal throws, an expired action fails or returns its fallback).
-     * A run mid-rollback (Cancelling) or otherwise not parked is left untouched.
-     */
     private function wake(FlowRun $run): void
     {
         if ($run->status !== FlowStatus::Waiting) {

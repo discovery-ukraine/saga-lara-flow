@@ -5,9 +5,7 @@ namespace DiscoveryUkraine\SagaLaraFlow\Exceptions;
 use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 
 /**
- * Recorded as the cause when a child workflow is forcibly failed because its
- * parent became terminal under the Fail close policy. Distinguishes a parent-driven
- * shutdown from the child's own business failure.
+ * The cause of a child failed by its parent's close under the Fail policy.
  */
 class ParentClosedException extends FlowException
 {

@@ -14,16 +14,8 @@ use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
 /**
- * Executes a single scheduled action step, then resumes its workflow so the
- * drive loop can replay and move on. Carries the action's native $tries/$timeout
- * so Laravel's queue retry semantics apply. On final failure it still resumes
- * the workflow, so the failure surfaces as a business error on replay.
- *
- * $retryGeneration is the signal-gated retry cycle this job was sent for, so a job
- * from an earlier cycle can recognise itself as stale. A payload written before the
- * field existed carries null and is read as cycle 0. It is a plain declared property
- * rather than a promoted one on purpose: such a payload is unserialized without the
- * constructor, and only a class-level default keeps the typed property initialized.
+ * $retryGeneration is a declared, not promoted, property: an older payload is unserialized without
+ * the constructor, and only a class-level default keeps it initialized (read as cycle 0).
  */
 class RunActionJob implements ShouldQueue
 {
@@ -59,11 +51,7 @@ class RunActionJob implements ShouldQueue
             return;
         }
 
-        // The claim inside execute() is the single source of truth for whether this job
-        // may run the step: it folds the row's status and this job's own retry cycle
-        // into one atomic write, so no pre-check is needed here. A lost claim is quiet,
-        // and the workflow is resumed either way — this job may be the only wake left
-        // if whatever rewound the row died before sending the live one.
+        // Resumed either way: this job may be the only wake left if whatever rewound the row died.
         $dispatcher->execute($action, $this->retryGeneration ?? 0);
 
         $this->resumeWorkflow($action);
@@ -77,22 +65,16 @@ class RunActionJob implements ShouldQueue
             return;
         }
 
-        // An earlier cycle's outcome says nothing about the cycle the row is on now,
-        // so it must not settle anything — but resume for the same reason as handle().
         if ($action->retry_signal_attempts !== ($this->retryGeneration ?? 0)) {
             $this->resumeWorkflow($action);
 
             return;
         }
 
-        // Record the queue giving up authoritatively, so the retry seam never has to
-        // guess it from the action's current $tries.
         app(ActionRecorder::class)->markQueueAttemptsExhausted($action);
 
-        // Optional step exhausted its retries: record it as OptionalFailed so the
-        // workflow resolves the fallback instead of failing on replay. A step with a
-        // retry policy is exempt: only the seam knows its only-filter and its budget,
-        // so it decides on replay whether this failure is final at all.
+        // A step with a retry policy is left to the seam: only it knows the only-filter and the
+        // budget.
         if ($action->retry_signal === null
             && $action->continue_on_failure
             && $action->status === ActionStatus::Failed) {

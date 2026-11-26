@@ -22,27 +22,8 @@ use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
- * The opt-in repair pass — the "doctor". Distinct from the expiration monitor
- * (FlowMonitor): it recovers progress lost to a *dropped job*, not a passed deadline. R1–R4 only
- * ever re-dispatch an existing job or re-wake a run, so they write no step and no outcome of their
- * own and cannot duplicate an ordinal — the run carries on normally from there, scheduling whatever
- * comes next. R3 can still start a second execution of one step, since a reclaim window expiring
- * does not prove the first worker is dead. R5 resumes a rollback as its owner would have, reusing
- * every compensation that owner registered.
- *
- *   R1  a stuck sequential Pending action (its RunActionJob was lost) → re-dispatch.
- *   R2  a stuck Waiting run with nothing in flight (its resume was lost) → re-wake.
- *   R3  a stuck sequential Running action past its own reclaim window → re-dispatch.
- *   R4  a stuck Pending run (its RunWorkflowJob was lost) → re-dispatch.
- *   R5  a rollback to Failed or Cancelled that stalled → take it over and carry it to the end
- *       (FlowExecutor::resumeRollback()). An expiry is the monitor's to resume.
- *
- * repair_attempts + repair_available_at throttle a pass per entity and give up after max_attempts.
- * saga-flow:kick is the manual answer to R1–R4: it refills that budget for the run and its
- * unfinished steps and sends the sequential step its own job back. A rollback that stalled
- * it takes over as R5 would, unthrottled, and refills the budget. Batch-bound work (parallel
- * actions, compensations) is out of scope even for R3 and for a kick: adding a job back into a
- * Bus::batch needs an id this package does not store.
+ * Batch-bound work (parallel actions, compensations) is out of reach even for R3 and a kick: adding
+ * a job back into a Bus::batch needs an id this package does not store.
  */
 final readonly class FlowDoctor
 {
@@ -57,8 +38,6 @@ final readonly class FlowDoctor
     ) {}
 
     /**
-     * Run one repair pass. Returns counts per category.
-     *
      * @throws Throwable
      */
     public function repair(): FlowRepairReport
@@ -110,9 +89,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Run one repair rule if its config switch is on, returning [repaired, skipped].
-     * Candidates come from a closure so a disabled rule never queries for them.
-     *
      * @template TEntity of ActionRun|FlowRun
      *
      * @param  Closure(): iterable<TEntity>  $candidates
@@ -136,10 +112,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * R1: re-dispatch a lost RunActionJob for a stuck sequential Pending action.
-     * Re-verifies the candidate under a row lock, bumps the throttle, records the
-     * intervention, then dispatches the fresh job after the transaction commits.
-     *
      * @throws Throwable
      */
     private function redispatchAction(ActionRun $action, int $maxAttempts): bool
@@ -177,13 +149,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * R3: re-dispatch a fresh RunActionJob for a stuck sequential Running action past
-     * its own reclaim window (actions.reclaim.stale_running). Re-verifies staleness
-     * under a row lock — the row may have been reclaimed and restarted since the
-     * candidate was read — bumps the throttle, records the intervention, then
-     * dispatches after the transaction commits. Like R1 it only sends a job: the fresh
-     * job's own claim decides whether it wins the row.
-     *
      * @throws Throwable
      */
     private function redispatchStaleRunningAction(ActionRun $action, int $maxAttempts): bool
@@ -223,10 +188,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * R2 (a Waiting run whose resume was lost) and R4 (a Pending run whose first job was
-     * lost). Re-verifies the status under a row lock, bumps the throttle, records the
-     * re-wake, then dispatches the run's job after commit so replay decides what happens next.
-     *
      * @throws Throwable
      */
     private function rewake(FlowRun $run, FlowStatus $stuckIn, string $reason, int $maxAttempts): bool
@@ -256,9 +217,7 @@ final readonly class FlowDoctor
     }
 
     /**
-     * R5. The scan decides the rollback stalled; the takeover inside resumeRollback() makes
-     * sure one recoverer acts on it. The budget is spent only by a takeover, so a run that
-     * keeps losing the jobs of its rollback is given up on after max_attempts.
+     * The budget is spent only by a takeover.
      *
      * @throws Throwable
      */
@@ -288,10 +247,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Take a stalled rollback over as R5 would, without its throttle, and refill the run's
-     * repair budget. One moved into Cancelling before its intent was recorded is left as it
-     * is, as R5 and the sweep leave it. Returns whether this call took it over.
-     *
      * @throws Throwable
      */
     public function takeOverStalledRollback(FlowRun $run): bool
@@ -313,10 +268,7 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Counted in the database rather than from the scanned model, and the next window is
-     * set from the count read back: the replay behind a takeover can outlast the grace
-     * window, and a second takeover counted meanwhile must neither be written over nor
-     * shorten the backoff.
+     * Counted in the database: a second takeover during a long replay must not be written over.
      */
     private function spendRollbackBudget(FlowRun $run): void
     {
@@ -330,21 +282,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Manually re-drive a specific run (saga-flow:kick / the repair endpoint). Unlike
-     * the automatic pass, this is unthrottled and ignores positive-evidence — a human
-     * decided the run is stuck. Works for Pending/Waiting/Running (a same-state
-     * Running transition is an idempotent no-op and the run lock serializes against
-     * any live job). A rollback that stalled is taken over under its own intent, as R5
-     * takes it; one still moving is left to its owner. Any other run that may not start
-     * work is left untouched.
-     *
-     * The resume alone cannot move a run parked on a recorded step: the replay it
-     * triggers meets that row and parks on it exactly as the pass that recorded it did.
-     *
-     * Decided on the writer, and the run it decided on is what comes back: a lagging
-     * replica would answer with the status this read exists to replace, and an operator
-     * would be told a run was re-driven while it was rolling back.
-     *
      * @throws Throwable
      */
     public function kick(FlowRun $run): FlowRun
@@ -371,8 +308,7 @@ final readonly class FlowDoctor
 
             $step = $this->openSequentialStep($locked);
 
-            // Last of all: the re-wake event runs host listeners, and one that swallows
-            // a failing query leaves the connection unable to answer anything more.
+            // Last: a host listener that swallows a failing query leaves the connection unusable.
             $this->lifecycle->flowRewoken($locked, 'manual');
 
             return [$locked, $step];
@@ -389,8 +325,7 @@ final readonly class FlowDoctor
         $this->dispatchDrive($kickedRun, start: $locked->status === FlowStatus::Pending);
 
         if ($step !== null) {
-            // The writer already answered with this run; lazy-loading the relation
-            // would ask a replica which connection and queue the recovery lands on.
+            // Lazy-loading would ask a replica which connection and queue the recovery lands on.
             $step->setRelation('flowRun', $kickedRun);
 
             $this->dispatchActionJob($step);
@@ -400,11 +335,7 @@ final readonly class FlowDoctor
     }
 
     /**
-     * The run as the writer holds it once the kick's transaction has closed. Mirrors
-     * ActionRecorder::claimSurvivedCommit(): a commit reporting success is not proof,
-     * and the re-wake event runs host listeners inside this one. Both jobs are sent
-     * either way — neither reads what it wrote — but a caller handed a model claiming a
-     * budget the database never took would read the run as reachable again.
+     * Read back after the commit: the re-wake event runs host listeners inside the transaction.
      */
     private function budgetSurvivedCommit(FlowRun $run): FlowRun
     {
@@ -426,15 +357,8 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Refill the budget the automatic pass spent on this run and on the steps it has
-     * not finished. A kick is somebody watching, which is what max_attempts stands in
-     * for while nobody is.
-     *
-     * The refill carries the same hold ActionRecorder::retryAction() gives a rewound
-     * row, and for the same reason: the doctor holds a fresh row off by comparing
-     * created_at, which these passed long ago, so without one it would read the job
-     * this kick is about to send as lost and send a second — and the generation token
-     * cannot tell two jobs of one cycle apart.
+     * With the hold retryAction() gives a rewound row: otherwise the doctor would read the job this
+     * kick sends as lost and send a second.
      */
     private function clearRepairBudget(FlowRun $run): void
     {
@@ -455,12 +379,8 @@ final readonly class FlowDoctor
     }
 
     /**
-     * The step a kick can put back on the queue itself: the rows R1 and R3 read, without
-     * their throttle.
-     *
-     * A Running row still inside its reclaim window is skipped rather than left to lose
-     * the claim: a second job for a row a live worker holds waits on that worker's lock,
-     * and the queue giving up on the wait is recorded against the row it is running.
+     * A Running row inside its reclaim window is skipped: a second job would wait on the live
+     * worker's lock, and the queue giving up would be recorded against the row.
      */
     private function openSequentialStep(FlowRun $run): ?ActionRun
     {
@@ -487,9 +407,6 @@ final readonly class FlowDoctor
     }
 
     /**
-     * Throttled queue-worker hook (opt-in via repair.queue_looping). Uses a
-     * lock separate from the expiration sweep so repair loops independently.
-     *
      * @throws Throwable
      */
     public function onQueueLooping(Looping $event): void
@@ -507,9 +424,7 @@ final readonly class FlowDoctor
     }
 
     /**
-     * The package's configured database connection (matching UsesSagaFlowConnection),
-     * so the repair transaction and its row lock target the right database even when
-     * the package lives on a dedicated connection.
+     * The package's connection, so the repair transaction and its row lock reach a dedicated one.
      */
     private function connection(): ConnectionInterface
     {
@@ -545,10 +460,6 @@ final readonly class FlowDoctor
         return $availableAt === null || $availableAt <= now();
     }
 
-    /**
-     * Record one repair attempt and schedule the next one with exponential backoff,
-     * so a re-dispatch/re-wake is not retried every pass.
-     */
     private function bumpThrottle(ActionRun|FlowRun $entity): void
     {
         $attempts = $entity->repair_attempts + 1;

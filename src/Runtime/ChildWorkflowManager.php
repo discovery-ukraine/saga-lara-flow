@@ -34,17 +34,6 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Throwable;
 
-/**
- * The child()->run() seam and the parent/child lifecycle wiring. await() resolves
- * a child workflow by the parent's deterministic (flow_run_id, sequence) ordinal —
- * replaying a finished child, parking the parent while it runs, or starting it and
- * suspending — exactly like SignalWaiter does for signals.
- *
- * A child is a normal FlowRun with parent_id; it is driven by its own jobs. When a
- * run finalizes, onFlowFinalized() both notifies its parent (so the parent resumes
- * and replays the child()->run() seam) and applies its own children's close policy
- * when the run did not complete cleanly.
- */
 readonly class ChildWorkflowManager
 {
     public function __construct(
@@ -64,9 +53,6 @@ readonly class ChildWorkflowManager
     ) {}
 
     /**
-     * Resolve a child workflow for the current run: replay it, park on it, or start
-     * and suspend.
-     *
      * @throws HistoryContractMismatchException
      * @throws FlowSuspended
      * @throws ChildWorkflowFailedException
@@ -93,17 +79,14 @@ readonly class ChildWorkflowManager
             $this->suspender->suspend('child', $sequence);
         }
 
-        // First encounter: create and start the child, then suspend the parent.
         $child = $this->startChild($parent, $schedule, $sequence);
 
         $this->launch($runtime, $child, $sequence);
     }
 
     /**
-     * Close a child about to take its first step under a parent that has landed or is rolling
-     * back, as its parent's close would have: its start can commit after that close read the
-     * parent's links. It has run nothing, so there is nothing of its own to roll back. A parent
-     * pruned since was closed too: only finished runs are pruned.
+     * A child's start can commit after its parent's close read the links. A pruned parent counts
+     * as closed: only finished runs are pruned.
      */
     public function closedBeforeStart(FlowRun $child): bool
     {
@@ -134,11 +117,6 @@ readonly class ChildWorkflowManager
         return true;
     }
 
-    /**
-     * Called whenever a run lands in a terminal state. Notifies the run's parent (so
-     * it can resume) and, if the run did not complete cleanly, applies its children's
-     * close policy. $withCompensation controls whether closed children roll back.
-     */
     public function onFlowFinalized(FlowRun $run, bool $withCompensation): void
     {
         if ($run->parent_id !== null) {
@@ -151,11 +129,7 @@ readonly class ChildWorkflowManager
     }
 
     /**
-     * Resolve a child already recorded against this ordinal. A terminal child has an
-     * answer either way — a result, a failure or expiry the parent may be told to survive
-     * or to retry, or a cancellation it cannot — and only one still in flight is a wait.
-     * The compensation pass runs through here too, where a suspension would end the stack
-     * short.
+     * The compensation pass runs through here too, where a suspension would end the stack short.
      *
      * @throws FlowSuspended
      * @throws ChildWorkflowFailedException
@@ -388,10 +362,6 @@ readonly class ChildWorkflowManager
         $this->suspender->suspend('child', $sequence);
     }
 
-    /**
-     * Whether the parking is on record now its transaction has closed, for the reason
-     * requireStartSurvivedCommit() reads back a start.
-     */
     private function parkSurvivedCommit(FlowRun $parent, FlowRun $child, int $sequence): bool
     {
         /** @var class-string<FlowChild> $model */
@@ -568,9 +538,8 @@ readonly class ChildWorkflowManager
     }
 
     /**
-     * The parent is asked inside the same transaction as the two writes, so a check lost to
-     * a rollback takes both down rather than leaving a FlowRun nobody owns. The host hears
-     * about the child, and its job goes out, only once that transaction is on record.
+     * The parent is asked inside the transaction of the two writes; the host hears of the child,
+     * and its job goes out, only once that transaction is on record.
      *
      * @throws FlowSuspended
      * @throws Throwable
@@ -601,15 +570,7 @@ readonly class ChildWorkflowManager
     }
 
     /**
-     * Whether the link is on record now the transaction that wrote it has closed. Mirrors
-     * ActionRecorder::claimSurvivedCommit(): a commit reporting success is not proof, since
-     * a model observer on either row can run a failing query and swallow it, which on
-     * PostgreSQL turns the eventual COMMIT into a rollback.
-     *
-     * Neither row survives such a rollback, so nothing is half-written and no child is
-     * announced or driven that the writes did not keep. The ordinal is simply not reached
-     * and the parent parks on one it comes back to — which without this read it would do
-     * with nothing anywhere to say why.
+     * On PostgreSQL a failure swallowed inside the transaction turns its COMMIT into a rollback.
      *
      * @throws FlowSuspended
      */
@@ -660,8 +621,8 @@ readonly class ChildWorkflowManager
     }
 
     /**
-     * Update this run's link in its parent and wake the parent: by replay when this process
-     * is driving it, otherwise once it is Waiting. childHasEnded() is the other half.
+     * Wakes the parent by replay when this process drives it, otherwise once it is Waiting;
+     * childHasEnded() is the other half.
      */
     private function notifyParent(FlowRun $run): void
     {
@@ -690,10 +651,6 @@ readonly class ChildWorkflowManager
         }
     }
 
-    /**
-     * The parent's half of the wake in notifyParent(), once it has written Waiting on a
-     * child it last saw in flight.
-     */
     public function childHasEnded(FlowRun $parent, string $childRunId): bool
     {
         /** @var ?FlowStatus $status */
@@ -727,9 +684,6 @@ readonly class ChildWorkflowManager
         }
     }
 
-    /**
-     * This run's link in its parent, looked up by the (parent, child) pair.
-     */
     private function linkFor(FlowRun $run): ?FlowChild
     {
         /** @var class-string<FlowChild> $model */

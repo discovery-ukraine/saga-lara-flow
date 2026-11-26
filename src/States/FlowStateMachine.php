@@ -21,9 +21,7 @@ class FlowStateMachine implements StateMachine
     {
         $from = $run->status;
 
-        // A same-state transition is legal by definition, but must not return early:
-        // an instance whose stale status happens to equal the target is exactly the one
-        // that would slip past the write's guard unchecked.
+        // No early return on a same-state move: a stale instance would slip past the write's guard.
         if ($from !== $to && ! $this->canTransition($from, $to)) {
             throw InvalidTransitionException::between($from, $to);
         }
@@ -38,10 +36,7 @@ class FlowStateMachine implements StateMachine
             $run->started_at = $now;
         }
 
-        // Both are written once and never again. A same-state terminal transition is a
-        // legal no-op that at-least-once delivery does reach — a duplicated batch
-        // callback lands a run that is already Cancelled — and rewriting the marks there
-        // would move the moment the run actually ended to whenever the duplicate arrived.
+        // Written once: a duplicated landing must not move the moment the run ended.
         if ($to === FlowStatus::Cancelled && $run->cancelled_at === null) {
             $run->cancelled_at = $now;
         }
@@ -50,9 +45,8 @@ class FlowStateMachine implements StateMachine
             $run->finished_at = $now;
         }
 
-        // Set here rather than left to the builder, which fills the column in the SQL
-        // without telling the model. Otherwise the instance — and every lifecycle event
-        // raised off it a moment later — keeps the timestamp of the previous write.
+        // On the model too: the builder sets it in the SQL only, and lifecycle events read the
+        // model.
         $run->updated_at = $now;
 
         try {
@@ -73,12 +67,7 @@ class FlowStateMachine implements StateMachine
     }
 
     /**
-     * Capture the instance as the caller left it — attributes and the original snapshot
-     * they are measured against — and return the closure that puts it back.
-     *
-     * The instance is mutated before the row confirms anything, so an exit that leaves
-     * the row untouched has to leave the instance untouched too: a caller reading a
-     * terminal status the database rejected would find cancel() refusing their retry.
+     * An exit that leaves the row untouched leaves the instance untouched too.
      *
      * @return Closure(): void
      */
@@ -94,15 +83,7 @@ class FlowStateMachine implements StateMachine
     }
 
     /**
-     * Persist the transition, but only if the row still holds the status this instance
-     * read before deciding on it. Nothing serialises an operator's cancel against a
-     * worker driving the run: each holds its own FlowRun instance, and the queue's
-     * per-run lock covers jobs, not the CLI or the monitor's inline sweep. The
-     * conditional UPDATE is the same shape the action writes use, and for the same
-     * reason — it is the only form every supported driver enforces atomically.
-     *
-     * `status` is always part of the SET, even when unchanged: getDirty() can come back
-     * empty, and update([]) writes nothing and reports zero rows.
+     * `status` is always in the SET: getDirty() can be empty, and update([]) reports zero rows.
      */
     private function write(FlowRun $run, FlowStatus $from, FlowStatus $to): void
     {
@@ -117,21 +98,14 @@ class FlowStateMachine implements StateMachine
             return;
         }
 
-        // Read from the writer. This read decides whether the write counts and names the
-        // winner in the log and the exception; a lagging replica would answer with the
-        // very status the guard was fencing against.
         /** @var ?FlowStatus $actual */
         $actual = $run->newQuery()
             ->useWritePdo()
             ->whereKey($run->getKey())
             ->value('status');
 
-        // Zero rows is not proof the guard failed: MySQL counts rows it changed, not
-        // rows it matched, so an update whose every value already equals what is stored
-        // reports zero there and one on SQLite and PostgreSQL. Only a same-state
-        // transition with nothing of its own to write can land in that shape — status is
-        // what it already is, and updated_at, stored to the second, is rewritten inside
-        // that same second.
+        // MySQL reports zero for a same-state write that changes nothing (updated_at in the same
+        // second).
         $ambiguous = $from === $to && Arr::except($dirty, $run->getUpdatedAtColumn()) === [];
 
         if ($ambiguous && $actual === $from) {
@@ -141,10 +115,6 @@ class FlowStateMachine implements StateMachine
         $this->refuse($run, $from, $to, $actual);
     }
 
-    /**
-     * Report a transition the row refused. The status actually there goes into both the
-     * log line and the exception: without it an operator knows only that they lost.
-     */
     private function refuse(FlowRun $run, FlowStatus $from, FlowStatus $to, ?FlowStatus $actual): never
     {
         app(AnomalyLog::class)->log(AnomalyLog::REASON_TRANSITION_LOST, [
@@ -159,17 +129,8 @@ class FlowStateMachine implements StateMachine
     }
 
     /**
-     * Land a run in a terminal state and close the work it leaves behind in one
-     * transaction: steps that never reached an outcome of their own, and wait-signals
-     * nothing will resolve. Every terminal transition passes through here, so no
-     * cancellation, expiry or child-close can mark a run finished while leaving its
-     * steps looking live.
-     *
-     * The run row is written inside the transaction rather than before it, so a failed
-     * settle rolls the run back for the caller to try again instead of leaving it
-     * finished but unsettled, with nothing left to notice. The transaction is opened on
-     * the run's own connection, so it still covers all three writes when the package
-     * lives on a dedicated one.
+     * The run is written inside the transaction, so a failed settle rolls the landing back for the
+     * caller to try again; it is the run's own connection, which the package may keep apart.
      */
     private function finish(FlowRun $run, FlowStatus $from, FlowStatus $to): void
     {
@@ -196,8 +157,7 @@ class FlowStateMachine implements StateMachine
     }
 
     /**
-     * Move a run into Cancelling and fence its live children in one transaction, so none of
-     * them can finish between the plan of this rollback and its close.
+     * One transaction, so no child can finish between the plan of this rollback and its close.
      */
     private function rollBack(FlowRun $run, FlowStatus $from, FlowStatus $to): void
     {

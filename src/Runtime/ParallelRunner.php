@@ -16,18 +16,6 @@ use DiscoveryUkraine\SagaLaraFlow\Models\FlowRun;
 use Illuminate\Support\Facades\Bus;
 use Throwable;
 
-/**
- * Runs a parallel() block under the same replay model as a single action: it
- * assigns each step a deterministic (flow_run_id, sequence) ordinal, dispatches
- * them all together (a Bus::batch of RunParallelActionJob in queued mode, one job
- * after another on a sync connection, inline in sync), then joins — suspending until
- * every step is terminal, then returning the ordered results or surfacing the first
- * hard failure.
- *
- * The whole block shares one parallel group id (written to action_runs.parallel_group
- * and carried on each CompensationEntry), so completed steps roll back together as a
- * single level via SagaRunner::levels().
- */
 final readonly class ParallelRunner
 {
     public function __construct(
@@ -54,8 +42,6 @@ final readonly class ParallelRunner
         $flowRun = $runtime->run();
         $groupId = $runtime->nextSagaGroupId();
 
-        // Assign every step its deterministic sequence and resolve its recorded row.
-        // expectAction enforces the history contract for the step's slot.
         $slots = [];
 
         foreach ($steps as $step) {
@@ -67,11 +53,8 @@ final readonly class ParallelRunner
 
         $anyScheduled = array_any($slots, fn (array $slot): bool => $slot['row'] !== null);
 
-        // First encounter (nothing recorded yet): dispatch the whole block, then suspend.
         if (! $anyScheduled) {
             // Compensation-only planning never starts new work: stop at the frontier.
-            // Without this the block writes a row per step and dispatches its batch —
-            // live jobs started by the one pass whose whole purpose is to read.
             if ($runtime->isCollecting()) {
                 $this->suspender->suspend('parallel', $slots[0]['sequence']);
             }
@@ -87,9 +70,7 @@ final readonly class ParallelRunner
     }
 
     /**
-     * Sync mode: run each step inline. FailFast stops launching after the first hard
-     * failure; WaitAllThenFail runs them all. We never throw here — suspendInline
-     * replays so the join pushes completed steps' compensations before failing.
+     * Never throws: the replay's join pushes completed steps' compensations before failing.
      *
      * @param  list<array{step: ParallelStepBuilder, sequence: int, row: ?ActionRun}>  $slots
      * @return list<mixed>
@@ -112,7 +93,6 @@ final readonly class ParallelRunner
                     $this->scheduleFor($step, $groupId),
                 );
             } catch (Throwable $exception) {
-                // Optional inline failure (no retries inline): give up now and keep going.
                 if ($step->isOptional()) {
                     $this->markOptionalFailed($flowRun->id, $slot['sequence']);
 
@@ -129,9 +109,6 @@ final readonly class ParallelRunner
     }
 
     /**
-     * Queued mode: persist every step (pending) and dispatch them as one Bus::batch;
-     * the finally callback resumes the workflow once exactly. Then suspend.
-     *
      * @param  list<array{step: ParallelStepBuilder, sequence: int, row: ?ActionRun}>  $slots
      * @return list<mixed>
      *
@@ -237,10 +214,6 @@ final readonly class ParallelRunner
         return config("queue.connections.{$connection}.driver") === 'sync';
     }
 
-    /**
-     * The outcome RunParallelActionJob::failed() leaves a member with, or null when the
-     * failure is not on record.
-     */
     private function recordedFailure(string $actionRunId): ?ActionStatus
     {
         /** @var class-string<ActionRun> $model */
@@ -256,11 +229,6 @@ final readonly class ParallelRunner
     }
 
     /**
-     * Resolve every step from its recorded row (shared by the sync replay and the
-     * queued resume): collect results, push completed steps' compensations, and
-     * decide — wait if any step is still in flight, fail on the first hard failure,
-     * otherwise return the ordered results.
-     *
      * @param  list<array{step: ParallelStepBuilder, sequence: int, row: ?ActionRun}>  $slots
      * @return list<mixed>
      *
@@ -280,8 +248,7 @@ final readonly class ParallelRunner
             $row = $slot['row'];
 
             if ($row === null) {
-                // Not started (a FailFast sync break skipped it); the failure below
-                // is what terminates the block, so this slot is irrelevant.
+                // Skipped by a FailFast break; the failure below ends the block.
                 $pending = true;
 
                 continue;
@@ -307,8 +274,6 @@ final readonly class ParallelRunner
                         $this->pushCompensation($runtime, $step, $row, $sequence, $groupId);
                     }
 
-                    // An expired (or failed) optional step gives up gracefully with its
-                    // fallback; a required one becomes the block's hard failure.
                     if ($row->status === ActionStatus::Expired && $step->isOptional()) {
                         $results[$index] = $step->fallbackResult();
 
@@ -323,7 +288,6 @@ final readonly class ParallelRunner
 
                     break;
                 default:
-                    // Pending / Running: still in flight.
                     $pending = true;
             }
         }
@@ -374,10 +338,6 @@ final readonly class ParallelRunner
             ?? (bool) config('saga-lara-flow.sagas.compensate_failed_step');
     }
 
-    /**
-     * A parallel step carries no retry-on-signal policy and no reclaim override; both
-     * paths of the block schedule it the same way, differing only in transport.
-     */
     private function scheduleFor(ParallelStepBuilder $step, int $groupId): ActionSchedule
     {
         return new ActionSchedule(
