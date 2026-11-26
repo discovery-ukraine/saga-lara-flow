@@ -62,8 +62,8 @@ return [
         'workflow_ttl_seconds' => 900,
         'action_ttl_seconds' => 900,
 
-        // Missing or zero falls back to action_ttl_seconds, never to zero: on Redis zero means no
-        // expiry, and a lock a killed worker never releases would wedge the row.
+        // Missing falls back to action_ttl_seconds. Zero never means no expiry, which on Redis would
+        // let a killed worker's lock wedge the row: it is replaced by a long default.
         'compensation_ttl_seconds' => 900,
 
         'block_seconds' => 5,
@@ -151,8 +151,9 @@ return [
         'redispatch_lost_actions' => true,
         // R2: re-wake flows stuck in the Waiting status after a resume that never fired.
         'wake_stuck_flows' => true,
-        // R3: re-dispatch stuck sequential Running actions past actions.reclaim.stale_running (no
-        // effect while that is off, its default). Parallel actions and compensations are out of reach.
+        // R3: re-dispatch stuck sequential Running actions past their reclaim deadline, set by
+        // actions.reclaim.stale_running or by a step's own reclaimStaleAfter() / enableStaleReclaim().
+        // With neither, no row has one. Parallel actions and compensations are out of reach.
         'redispatch_stale_running_actions' => true,
         // R4: send the first job again for a Pending run whose RunWorkflowJob was lost.
         'redispatch_lost_starts' => true,
