@@ -12,7 +12,8 @@ use RuntimeException;
 use Throwable;
 
 /**
- * A compensation that throws is recorded as Failed and swallowed: the rollback policy reads the row.
+ * A compensation that throws is recorded as Failed and swallowed: the rollback policy reads the
+ * row.
  */
 class CompensationExecutor
 {

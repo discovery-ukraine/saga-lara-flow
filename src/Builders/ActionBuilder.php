@@ -183,7 +183,8 @@ class ActionBuilder
     }
 
     /**
-     * Park the step on $signal instead of failing it; a RetryPolicy passed as $signal carries the rest.
+     * Park the step on $signal instead of failing it; a RetryPolicy passed as $signal carries the
+     * rest.
      *
      * @param  list<class-string<Throwable>>|null  $only
      * @param  ?Closure(RetryContext): bool  $when
@@ -270,7 +271,8 @@ class ActionBuilder
             expiresAt: $this->resolvedExpiresAt(),
             actionName: $this->resolvedActionName(),
             retrySignal: $this->retry?->signal,
-            // Only with a policy: awaitRetry()'s ??= would otherwise keep an unrelated global default.
+            // Only with a policy: awaitRetry()'s ??= would otherwise keep an unrelated global
+            // default.
             retrySignalMaxAttempts: $this->retry?->resolvedMaxRetries(),
             reclaimStaleAfterSeconds: $this->reclaimStaleAfterSeconds,
             reclaimStaleEnabled: $this->reclaimStaleEnabled,
@@ -340,7 +342,8 @@ class ActionBuilder
             case ActionStatus::AwaitingRetry:
                 return $this->resolveAwaitingRetry($step, $sequence);
             case ActionStatus::OptionalFailed:
-                // Terminal even if a later deploy added a policy: action.optional_failed is published.
+                // Terminal even if a later deploy added a policy: action.optional_failed is
+                // published.
                 return $this->resolveOptionalFailed($step, $sequence);
             case ActionStatus::Expired:
                 if ($this->resolvedContinueOnFailure()) {
@@ -350,7 +353,8 @@ class ActionBuilder
                 $this->resolveExpired($step, $sequence);
                 // no break — resolveExpired never returns.
             case ActionStatus::Failed:
-                // The queue's own attempts play out first, or a signal could re-run a step in flight.
+                // The queue's own attempts play out first, or a signal could re-run a step in
+                // flight.
                 if ($this->carriesRetryPolicy($step) && $this->queueRetriesRemain($step)) {
                     app(FlowSuspender::class)->suspend('action', $sequence);
                 }
@@ -360,7 +364,8 @@ class ActionBuilder
                         $this->parkForRetry($step, $sequence);
                     }
                 } catch (RetryPolicyReentryException $reentry) {
-                    // A broken predicate still leaves a failed step, and the rollback is built from this pass.
+                    // A broken predicate still leaves a failed step, and the rollback is built from
+                    // this pass.
                     if ($this->shouldCompensateFailedStep()) {
                         $this->pushCompensation($step->id, $sequence);
                     }
@@ -505,7 +510,8 @@ class ActionBuilder
             $this->consumeAndRetry($delivered, $step, $sequence);
         }
 
-        // Adopted, not recorded twice: delivery fills the oldest open row, resolution reads the newest.
+        // Adopted, not recorded twice: delivery fills the oldest open row, resolution reads the
+        // newest.
         $abandoned = app(SignalRepository::class)->latestForSequence($flowRun->id, $sequence);
 
         if ($abandoned !== null && $abandoned->name === $signal) {
@@ -540,8 +546,8 @@ class ActionBuilder
                     );
                 }
 
-                // A refused park takes its wait-signal back: left standing, it would be the newest open
-                // wait for its name and swallow the next delivery.
+                // A refused park takes its wait-signal back: left standing, it would be the newest
+                // open wait for its name and swallow the next delivery.
                 return app(ActionRecorder::class)->awaitRetry($step, $signal, $this->budgetFor($step))
                     ?? throw new FencedWriteLost;
             });
@@ -710,7 +716,8 @@ class ActionBuilder
 
     private function giveUpAfterRetry(ActionRun $step, int $sequence): mixed
     {
-        // Not a suspend: the plan needs every compensation after this step. A later replay writes it.
+        // Not a suspend: the plan needs every compensation after this step. A later replay writes
+        // it.
         $collecting = $this->runtime->isCollecting();
 
         if (! $this->resolvedContinueOnFailure()) {

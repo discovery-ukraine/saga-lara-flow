@@ -36,7 +36,8 @@ readonly class FlowHandle
      */
     private function rejectWhileDeciding(string $operation): void
     {
-        // The executor owns the runtime of every pass; one resolved from the container is bound to nothing.
+        // The executor owns the runtime of every pass; one resolved from the container is bound to
+        // nothing.
         if (app(FlowExecutor::class)->isDecidingRun($this->flowRun->id)) {
             throw RetryPolicyReentryException::for($operation);
         }

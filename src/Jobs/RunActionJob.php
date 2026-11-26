@@ -73,7 +73,8 @@ class RunActionJob implements ShouldQueue
 
         app(ActionRecorder::class)->markQueueAttemptsExhausted($action);
 
-        // A step with a retry policy is left to the seam: only it knows the only-filter and the budget.
+        // A step with a retry policy is left to the seam: only it knows the only-filter and the
+        // budget.
         if ($action->retry_signal === null
             && $action->continue_on_failure
             && $action->status === ActionStatus::Failed) {

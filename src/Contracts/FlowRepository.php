@@ -31,7 +31,8 @@ interface FlowRepository
     public function findOrFail(string $id): FlowRun;
 
     /**
-     * Running or Waiting runs past their deadline with the hold-off window open, by the later of the two.
+     * Running or Waiting runs past their deadline with the hold-off window open, by the later of
+     * the two.
      *
      * @return iterable<int, FlowRun>
      */

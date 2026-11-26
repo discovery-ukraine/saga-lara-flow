@@ -70,7 +70,8 @@ class CancelChildWorkflowJob implements ShouldQueue
         try {
             $this->close($executor, $sagaRunner, $repository, $stateMachine, $lifecycle, $tenancy, $child);
         } catch (ConcurrentFlowTransitionException $lost) {
-            // Quiet only for a child that is closed or rolling back: a live one is still owed this close.
+            // Quiet only for a child that is closed or rolling back: a live one is still owed this
+            // close.
             $current = $repository->findOnWriter($this->childFlowRunId);
 
             if ($current !== null && ! $current->isTerminal() && $current->status !== FlowStatus::Cancelling) {

@@ -21,7 +21,8 @@ use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 /**
- * Every write moves the entity out of what its scan filters on, so re-running sweep() is idempotent.
+ * Every write moves the entity out of what its scan filters on, so re-running sweep() is
+ * idempotent.
  */
 final readonly class FlowMonitor
 {
@@ -49,7 +50,8 @@ final readonly class FlowMonitor
 
         $limit = (int) config('saga-lara-flow.monitor.expiration.batch_size', 100);
 
-        // Runs first: an expired run leaves Waiting, so the passes below skip its signals and steps.
+        // Runs first: an expired run leaves Waiting, so the passes below skip its signals and
+        // steps.
         return [
             'runs' => $this->expireRuns($limit),
             'signals' => $this->timeoutSignals($limit),
@@ -94,8 +96,8 @@ final readonly class FlowMonitor
     }
 
     /**
-     * Only a plan that fails before the move is stepped over: thrown, it would come back every sweep
-     * and starve the passes below. Anything later would hide a rollback that started.
+     * Only a plan that fails before the move is stepped over: thrown, it would come back every
+     * sweep and starve the passes below. Anything later would hide a rollback that started.
      */
     private function expireRun(FlowRun $run): bool
     {
@@ -170,8 +172,8 @@ final readonly class FlowMonitor
     }
 
     /**
-     * A plain statement: no Eloquent events, updated_at (the doctor's clock) untouched. Fenced on the
-     * window still being open, so two sweeps cannot stack a hold-off.
+     * A plain statement: no Eloquent events, updated_at (the doctor's clock) untouched. Fenced on
+     * the window still being open, so two sweeps cannot stack a hold-off.
      */
     private function holdOff(FlowRun $run): void
     {

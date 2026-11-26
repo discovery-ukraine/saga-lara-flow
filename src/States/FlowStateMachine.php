@@ -45,7 +45,8 @@ class FlowStateMachine implements StateMachine
             $run->finished_at = $now;
         }
 
-        // On the model too: the builder sets it in the SQL only, and lifecycle events read the model.
+        // On the model too: the builder sets it in the SQL only, and lifecycle events read the
+        // model.
         $run->updated_at = $now;
 
         try {
@@ -103,7 +104,8 @@ class FlowStateMachine implements StateMachine
             ->whereKey($run->getKey())
             ->value('status');
 
-        // MySQL reports zero for a same-state write that changes nothing (updated_at in the same second).
+        // MySQL reports zero for a same-state write that changes nothing (updated_at in the same
+        // second).
         $ambiguous = $from === $to && Arr::except($dirty, $run->getUpdatedAtColumn()) === [];
 
         if ($ambiguous && $actual === $from) {

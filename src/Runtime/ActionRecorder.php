@@ -131,7 +131,8 @@ final readonly class ActionRecorder
             function () use ($actionRun, $expectedRetryGeneration): bool {
                 $now = Carbon::now();
 
-                // Fixed at schedule time; the deadline derived from it moves, so it is compared in SQL.
+                // Fixed at schedule time; the deadline derived from it moves, so it is compared in
+                // SQL.
                 $staleAfter = $actionRun->reclaim_stale_after_seconds;
 
                 $claimed = $actionRun->newQuery()
@@ -190,8 +191,9 @@ final readonly class ActionRecorder
     }
 
     /**
-     * On PostgreSQL a failure swallowed inside the transaction turns its COMMIT into a rollback. The
-     * row answers, not a token, so a claim lost to a second worker after commit is only narrowed.
+     * On PostgreSQL a failure swallowed inside the transaction turns its COMMIT into a rollback.
+     * The row answers, not a token, so a claim lost to a second worker after commit is only
+     * narrowed.
      */
     private function claimSurvivedCommit(ActionRun $actionRun): bool
     {
@@ -311,7 +313,8 @@ final readonly class ActionRecorder
                 'claimed_attempts' => $claimedAttempts,
             ]);
 
-            // The log line carries no payload: the default channel was not chosen for business data.
+            // The log line carries no payload: the default channel was not chosen for business
+            // data.
             $actionRun->discardChanges();
 
             $this->announceRejection(
@@ -442,7 +445,8 @@ final readonly class ActionRecorder
 
         return $this->writeFenced($actionRun, [
             'queue_attempts_exhausted' => false,
-            // A claim does not move the cycle, so the status tells a spent Failed view from a live attempt.
+            // A claim does not move the cycle, so the status tells a spent Failed view from a live
+            // attempt.
             'status' => $actionRun->getOriginal('status'),
             'retry_signal_attempts' => $actionRun->getOriginal('retry_signal_attempts'),
         ], 'queue_attempts_exhausted');
@@ -546,8 +550,8 @@ final readonly class ActionRecorder
 
         $actionRun->queue_attempts_exhausted = false;
 
-        // The doctor reads a reused row's created_at as long past, so the hold keeps it off this job;
-        // the count restarts so a budget spent on earlier cycles does not deny this one.
+        // The doctor reads a reused row's created_at as long past, so the hold keeps it off this
+        // job; the count restarts so a budget spent on earlier cycles does not deny this one.
         $actionRun->repair_attempts = 0;
         $actionRun->repair_available_at = Carbon::now()->addSeconds($this->repairGrace());
 

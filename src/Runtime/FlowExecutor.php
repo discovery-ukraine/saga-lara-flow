@@ -139,7 +139,8 @@ class FlowExecutor
                 ),
             ));
         } catch (ConcurrentFlowTransitionException) {
-            // Returned, not thrown: a job ends cleanly and a caller reads the run as the winner left it.
+            // Returned, not thrown: a job ends cleanly and a caller reads the run as the winner
+            // left it.
             return $this->reread($flowRun);
         }
     }
@@ -161,7 +162,8 @@ class FlowExecutor
 
     /**
      * The deadline is weighed after the status check: a run already rolling back would otherwise be
-     * expired twice. The pass goes on with the caller's snapshot, the value its transitions fence on.
+     * expired twice. The pass goes on with the caller's snapshot, the value its transitions fence
+     * on.
      *
      * @throws Throwable
      */
@@ -356,7 +358,8 @@ class FlowExecutor
             } catch (InternalFlowControl) {
                 // The frontier: a seam that cannot be resolved from history yet.
             } catch (ActionFailedException|FlowExpiredException|AwaitSignalTimeoutException|ChildWorkflowFailedException|ChildWorkflowExpiredException|ChildWorkflowCancelledException $ending) {
-                // All six are public classes a workflow can throw itself; only this run's seams end the pass.
+                // All six are public classes a workflow can throw itself; only this run's seams end
+                // the pass.
                 if (! $runtime->raised($ending)) {
                     throw $ending;
                 }
@@ -519,7 +522,8 @@ class FlowExecutor
     }
 
     /**
-     * A pruned row falls back to the caller's snapshot; a fenced write refuses anything acted on it.
+     * A pruned row falls back to the caller's snapshot; a fenced write refuses anything acted on
+     * it.
      */
     private function reread(FlowRun $flowRun): FlowRun
     {
@@ -551,7 +555,8 @@ class FlowExecutor
 
     /**
      * The takeover replaces the owner token the caller read, so of two recoverers one wins; the
-     * earlier owner's late compensation claims are refused on the token. Returns whether it took over.
+     * earlier owner's late compensation claims are refused on the token. Returns whether it took
+     * over.
      *
      * @throws RollbackNotPlannedException the rollback was taken over but could not be planned
      * @throws Throwable

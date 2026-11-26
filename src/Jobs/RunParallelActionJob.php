@@ -60,8 +60,9 @@ class RunParallelActionJob implements ShouldQueue
     }
 
     /**
-     * A batch finished while this job is still in handle() means a duplicate delivery drove the count
-     * to zero early: the finally callback already fired, before this step settled, and will not again.
+     * A batch finished while this job is still in handle() means a duplicate delivery drove the
+     * count to zero early: the finally callback already fired, before this step settled, and will
+     * not again.
      */
     private function wakeIfTheBatchClosedWithoutUs(ActionRun $action): void
     {

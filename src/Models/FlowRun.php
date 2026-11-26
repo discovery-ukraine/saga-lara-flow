@@ -89,7 +89,8 @@ class FlowRun extends Model
     }
 
     /**
-     * live() minus Cancelling: asked wherever work begins, never where started work is written down.
+     * live() minus Cancelling: asked wherever work begins, never where started work is written
+     * down.
      *
      * @param  Builder<Model>  $query
      */
@@ -199,7 +200,8 @@ class FlowRun extends Model
     }
 
     /**
-     * Written by the same conditional write as the move, so whoever moves the run owns its rollback.
+     * Written by the same conditional write as the move, so whoever moves the run owns its
+     * rollback.
      *
      * @param  array<string, mixed>|null  $cause
      * @param  ?string  $token  the owner's token, when the owner has to recognise it again later

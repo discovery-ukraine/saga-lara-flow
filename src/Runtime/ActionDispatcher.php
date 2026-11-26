@@ -118,7 +118,8 @@ class ActionDispatcher
 
         $execution = $this->execute($actionRun, inline: true);
 
-        // A row created in this call cannot be claimed by anyone else: losing it is a broken invariant.
+        // A row created in this call cannot be claimed by anyone else: losing it is a broken
+        // invariant.
         if ($execution === StepExecution::ClaimLost) {
             throw ActionClaimFailedException::forAction($schedule->actionClass, $sequence);
         }
@@ -152,7 +153,8 @@ class ActionDispatcher
                 try {
                     $result = $this->callWithDependencies($instance, 'handle', $arguments);
                 } catch (Throwable $e) {
-                    // Superseded: rethrowing would let failed() write into a row this worker no longer owns.
+                    // Superseded: rethrowing would let failed() write into a row this worker no
+                    // longer owns.
                     if (! $this->recorder->failAction($actionRun, $e, $inline)) {
                         return StepExecution::Superseded;
                     }

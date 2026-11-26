@@ -78,8 +78,8 @@ return new class extends Migration
     }
 
     /**
-     * PostgreSQL truncates an identifier past 63 bytes; only that truncation, over the same columns,
-     * stands in for the full name.
+     * PostgreSQL truncates an identifier past 63 bytes; only that truncation, over the same
+     * columns, stands in for the full name.
      */
     private function existingUnique(): ?string
     {
@@ -105,7 +105,8 @@ return new class extends Migration
     }
 
     /**
-     * Named, or the migrator's transaction opens on the default connection rather than the package's.
+     * Named, or the migrator's transaction opens on the default connection rather than the
+     * package's.
      */
     public function getConnection(): ?string
     {

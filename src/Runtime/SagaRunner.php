@@ -151,8 +151,8 @@ class SagaRunner
                 continue;
             }
 
-            // A lost claim leaves the rest to the new owner, or stops loudly in Cancelling for recovery
-            // rather than landing over an undo that never ran.
+            // A lost claim leaves the rest to the new owner, or stops loudly in Cancelling for
+            // recovery rather than landing over an undo that never ran.
             if (! $this->stillOwns($flowRun)) {
                 return null;
             }
