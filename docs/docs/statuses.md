@@ -38,6 +38,13 @@ replay reads a running step as the place to stop, so no plan holds its compensat
 while the rollback is still going, it is recorded and stays applied; if the run has landed by then,
 its outcome is refused and journalled as `outcome_rejected`, and the side effect it had stays too.
 
+A second gap is the move itself. The run's move into `Cancelling` commits together with the fence
+of its children, and a child's fence with its parent's landing or move. Until that commits, a claim
+on another connection reads the run as it was: on PostgreSQL, and on MySQL under `READ COMMITTED`, a
+step claimed in that moment starts and lands outside the plan like the one above. MySQL's default
+`REPEATABLE READ` makes the claim wait for the commit and refuse it. A `cancel()` still committing
+leaves the same gap for a step that failed and is waiting for its next queue attempt.
+
 The plan it unwinds is made once the run is here, which is what makes "afterwards" mean afterwards:
 a step whose owed queue attempt completed while an earlier plan was being drawn is in it. That
 earlier plan is drawn before the run is moved, so a run whose rollback cannot be planned at all
