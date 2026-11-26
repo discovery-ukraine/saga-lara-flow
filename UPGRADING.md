@@ -4,8 +4,9 @@
 
 > ### ⚠️ Run `php artisan migrate` immediately after upgrading
 >
-> `add_rollback_ownership_columns` ships with this release, and the engine writes its columns from
-> the moment it starts. It runs from the package — do **not** `vendor:publish` it.
+> `add_rollback_ownership_columns` ships with this release, and every rollback, every close of a
+> `Cancel` or `Fail` child, the expiration sweep and the doctor use its columns from the moment the
+> new code runs. It runs from the package — do **not** `vendor:publish` it.
 
 ### Action required
 
@@ -25,6 +26,9 @@
 - **If you read the array `FlowMonitor::sweep()` or `FlowRepairReport::toArray()` returns** *(low)*
   — each carries a fourth key, `rollbacks` and `resumed_rollbacks`; `FlowRepairReport` has a
   matching `$resumedRollbacks`.
+- **If you extend `ActionDispatcher` or `CompensationExecutor`** *(low)* — an override of
+  `execute()` must take the new trailing parameter: `bool $inline = false` on the first,
+  `?string $rollbackToken = null` on the second.
 
 ### Behaviour changed
 

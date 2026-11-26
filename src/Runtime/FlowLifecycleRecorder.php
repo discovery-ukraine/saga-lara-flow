@@ -90,10 +90,7 @@ final readonly class FlowLifecycleRecorder
     }
 
     /**
-     * Record the doctor re-waking a flow: an automatic re-wake of a
-     * stuck Waiting run (reason "lost_resume") or a manual saga-flow:kick (reason
-     * "manual"). The run is only re-driven, never mutated here, so this is a marker
-     * event that makes the intervention visible in history.
+     * The run is only re-driven, never mutated here: a marker that makes the intervention visible.
      */
     public function flowRewoken(FlowRun $flowRun, string $reason): void
     {
